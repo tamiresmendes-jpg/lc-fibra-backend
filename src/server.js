@@ -62,7 +62,8 @@ app.use('/api/fluxos', require('./routes/fluxos'));
 app.use('/api/checklists', require('./routes/checklists'));
 app.use('/api/escalas', require('./routes/escalas'));
 app.use('/api/upload', require('./routes/upload'));
-app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
+const UPLOADS_PATH = process.env.VERCEL ? '/tmp/uploads' : require('path').join(__dirname, '../uploads');
+app.use('/uploads', express.static(UPLOADS_PATH));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));
 
