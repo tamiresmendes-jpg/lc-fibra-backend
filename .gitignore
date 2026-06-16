@@ -7,3 +7,5 @@ uploads/
 *.db-wal
 *.log
 *.err
+
+.vercel

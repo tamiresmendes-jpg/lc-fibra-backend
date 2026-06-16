@@ -8,7 +8,7 @@ const router = express.Router();
 router.use(autenticar);
 
 // Garante que a pasta uploads existe
-const UPLOAD_DIR = process.env.VERCEL ? '/tmp/uploads' : path.join(__dirname, '../../uploads');
+const UPLOAD_DIR = path.join(__dirname, '../../uploads');
 try { if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true }); } catch (_) {}
 
 const storage = multer.diskStorage({

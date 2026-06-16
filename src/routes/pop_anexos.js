@@ -9,7 +9,7 @@ const { autenticar } = require('../middleware/auth');
 const router = express.Router();
 router.use(autenticar);
 
-const UPLOADS_DIR = process.env.VERCEL ? '/tmp/uploads' : path.join(__dirname, '../../uploads');
+const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (_) {}
 
 const storage = multer.diskStorage({
