@@ -20,6 +20,22 @@ function normalizarData(raw) {
   return null;
 }
 
+// Determina ativo/inativo a partir da planilha.
+// Prioridade: coluna explícita (situação/status) → Número da Folha → mantém o atual.
+// Retorna null quando a planilha não traz nenhum sinal (não mexe no status salvo).
+function statusDaPlanilha(u) {
+  const s = (u.situacao || u.status || u.ativo || '').toString().trim().toLowerCase();
+  if (s) {
+    if (/(inativ|demit|deslig|afast|f[ée]rias|^n[aã]o$|^n$|^0$|false)/.test(s)) return 0;
+    if (/(ativ|^sim$|^s$|^1$|true)/.test(s)) return 1;
+  }
+  // Convenção existente: tem "Número da Folha" preenchido = ativo
+  if (u.folha !== undefined) {
+    return (u.folha !== null && u.folha.toString().trim() !== '') ? 1 : 0;
+  }
+  return null; // sem sinal → não altera
+}
+
 // Listar usuários da empresa
 router.get('/', async (req, res) => {
   try {
@@ -27,7 +43,7 @@ router.get('/', async (req, res) => {
     let sql = `
     SELECT u.id, u.nome, u.email, u.perfil, u.avatar, u.ativo, u.created_at,
            u.departamento_id, u.cargo_id, u.gestor_id, u.setor_id, u.funcao, u.bloqueado, u.sort_order, u.cor, u.nivel,
-           u.data_nascimento, u.matricula, u.permissoes_modulos,
+           u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos,
            d.nome as departamento_nome, c.nome as cargo_nome,
            g.nome as gestor_nome, s.nome as setor_nome
     FROM usuarios u
@@ -202,15 +218,26 @@ router.post('/importar', async (req, res) => {
         if (!u.senha) u.senha = 'Mudar@123';
       }
       // Busca por email OU por nome (para arquivos sem email)
-      let existe = await get('SELECT id, perfil FROM usuarios WHERE email = ? AND empresa_id = ?', [u.email.trim(), req.usuario.empresa_id]);
+      let existe = await get('SELECT id, perfil, ativo FROM usuarios WHERE email = ? AND empresa_id = ?', [u.email.trim(), req.usuario.empresa_id]);
       if (!existe && u.nome) {
-        existe = await get('SELECT id, perfil FROM usuarios WHERE empresa_id = ? AND LOWER(nome) = LOWER(?)', [req.usuario.empresa_id, u.nome.trim()]);
+        existe = await get('SELECT id, perfil, ativo FROM usuarios WHERE empresa_id = ? AND LOWER(nome) = LOWER(?)', [req.usuario.empresa_id, u.nome.trim()]);
       }
       if (existe) {
-        // Atualiza dados sem alterar perfil/nível de acesso
+        // NÃO sobrescreve dados já salvos: COALESCE(coluna, ?) só preenche o que está vazio.
+        // O perfil/nível de acesso não é tocado. Apenas o status (ativo/inativo) acompanha a planilha.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
-        await run(`UPDATE usuarios SET data_nascimento = COALESCE(?, data_nascimento), matricula = COALESCE(?, matricula) WHERE id = ?`, [dataNorm || null, u.matricula || null, existe.id]);
-        resultados.push({ email: u.email, status: 'atualizado', nome: u.nome, ativo: 1 });
+        const sinalStatus = statusDaPlanilha(u);
+        const ativoFinal = sinalStatus === null ? existe.ativo : sinalStatus;
+        await run(
+          `UPDATE usuarios SET
+             data_nascimento = COALESCE(data_nascimento, ?),
+             matricula       = COALESCE(matricula, ?),
+             cidade          = COALESCE(cidade, ?),
+             ativo           = ?
+           WHERE id = ?`,
+          [dataNorm || null, u.matricula || null, u.cidade || null, ativoFinal, existe.id]
+        );
+        resultados.push({ email: u.email, status: 'atualizado', nome: u.nome, ativo: ativoFinal });
         continue;
       }
       try {
@@ -266,16 +293,17 @@ router.post('/importar', async (req, res) => {
         const perfisValidos = ['admin', 'gestor', 'colaborador'];
         const perfil = perfisValidos.includes(u.perfil) ? u.perfil : 'colaborador';
 
-        // Ativo = tem "Número da Folha" preenchido (campo folha). Vazio = ex-funcionário (inativo)
-        const ativo = (u.folha !== undefined && u.folha !== null && u.folha.toString().trim() !== '') ? 1 : 0;
+        // Status conforme a planilha (situação/status ou Número da Folha). Sem sinal → ativo por padrão.
+        const sinalStatus = statusDaPlanilha(u);
+        const ativo = sinalStatus === null ? 1 : sinalStatus;
 
         const data_nascimento = normalizarData(u.data_nascimento || u.aniversario || u.aniversário);
 
         await run(`
-        INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, ativo, matricula, data_nascimento)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, ativo, matricula, data_nascimento, cidade)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [id, req.usuario.empresa_id, u.nome.trim(), u.email.trim(), senhaHash, perfil,
-               departamento_id, cargo_id, gestor_id, setor_id, u.funcao || null, ativo, u.matricula || null, data_nascimento]);
+               departamento_id, cargo_id, gestor_id, setor_id, u.funcao || null, ativo, u.matricula || null, data_nascimento, u.cidade || null]);
 
         resultados.push({ email: u.email, status: 'ok', nome: u.nome, ativo });
       } catch (err) {
@@ -356,6 +384,9 @@ router.post('/importar-por-nome', async (req, res) => {
           if (u.matricula) {
             await run(`UPDATE usuarios SET matricula=? WHERE id=?`, [u.matricula, existente.id]);
           }
+          if (u.cidade) {
+            await run(`UPDATE usuarios SET cidade=? WHERE id=?`, [u.cidade, existente.id]);
+          }
           if (departamento_id) {
             await run(`UPDATE usuarios SET departamento_id=? WHERE id=?`, [departamento_id, existente.id]);
           }
@@ -373,10 +404,10 @@ router.post('/importar-por-nome', async (req, res) => {
           const senhaHash = bcrypt.hashSync('Mudar@123', 10);
           const dataNasc = normalizarData(u.data_nascimento || u.aniversario || u.aniversário);
           await run(`
-          INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, data_nascimento, matricula)
-          VALUES (?,?,?,?,?,'colaborador',?,?,?,?)
+          INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, data_nascimento, matricula, cidade)
+          VALUES (?,?,?,?,?,'colaborador',?,?,?,?,?)
         `, [id, req.usuario.empresa_id, u.nome.trim(), emailGerado, senhaHash,
-                 departamento_id, cargo_id, dataNasc, u.matricula || null]);
+                 departamento_id, cargo_id, dataNasc, u.matricula || null, u.cidade || null]);
           resultados.push({ nome: u.nome, status: 'criado', email: emailGerado });
         }
       } catch (err) {

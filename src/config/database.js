@@ -79,6 +79,7 @@ async function initSchema() {
       cor TEXT,
       data_nascimento TEXT,
       matricula TEXT,
+      cidade TEXT,
       permissoes_modulos TEXT,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
@@ -702,6 +703,9 @@ async function initSchema() {
       UNIQUE(escala_id, usuario_id, dia)
     );
   `);
+
+  // Garante colunas adicionadas após a criação inicial (tabelas já existentes)
+  await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cidade TEXT`);
 }
 
 async function seedAdmin() {
