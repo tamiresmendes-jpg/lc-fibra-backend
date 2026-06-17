@@ -759,6 +759,20 @@ async function initSchema() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_ceps_cidade ON ceps(cidade)`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS feriados (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      data TEXT NOT NULL,
+      tipo TEXT DEFAULT 'nacional',
+      recorrente INTEGER DEFAULT 1,
+      observacao TEXT,
+      ativo INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
 }
 
 async function seedAdmin() {
