@@ -195,11 +195,12 @@ router.patch('/:id/senha', async (req, res) => {
 // Importar usuários em lote (CSV)
 router.post('/importar', async (req, res) => {
   try {
-    const { usuarios } = req.body;
+    const { usuarios, inativarForaDaLista } = req.body;
     if (!Array.isArray(usuarios) || usuarios.length === 0)
       return res.status(400).json({ erro: 'Nenhum usuário enviado' });
 
     const resultados = [];
+    const idsNaPlanilha = new Set(); // ids dos usuários presentes nesta planilha
 
     for (const u of usuarios) {
       // Ignora linhas sem nome real ou que parecem ser integrações/sistemas
@@ -223,11 +224,13 @@ router.post('/importar', async (req, res) => {
         existe = await get('SELECT id, perfil, ativo FROM usuarios WHERE empresa_id = ? AND LOWER(nome) = LOWER(?)', [req.usuario.empresa_id, u.nome.trim()]);
       }
       if (existe) {
+        idsNaPlanilha.add(existe.id);
         // NÃO sobrescreve dados já salvos: COALESCE(coluna, ?) só preenche o que está vazio.
-        // O perfil/nível de acesso não é tocado. Apenas o status (ativo/inativo) acompanha a planilha.
+        // O perfil/nível de acesso não é tocado. Quem está na planilha é considerado ativo,
+        // a não ser que a própria planilha marque explicitamente como inativo.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
         const sinalStatus = statusDaPlanilha(u);
-        const ativoFinal = sinalStatus === null ? existe.ativo : sinalStatus;
+        const ativoFinal = sinalStatus === null ? 1 : sinalStatus;
         await run(
           `UPDATE usuarios SET
              data_nascimento = COALESCE(data_nascimento, ?),
@@ -305,10 +308,26 @@ router.post('/importar', async (req, res) => {
       `, [id, req.usuario.empresa_id, u.nome.trim(), u.email.trim(), senhaHash, perfil,
                departamento_id, cargo_id, gestor_id, setor_id, u.funcao || null, ativo, u.matricula || null, data_nascimento, u.cidade || null]);
 
+        idsNaPlanilha.add(id);
         resultados.push({ email: u.email, status: 'ok', nome: u.nome, ativo });
       } catch (err) {
         resultados.push({ email: u.email, status: 'erro', motivo: err.message });
       }
+    }
+
+    // Inativa quem NÃO está na planilha (lista só de ativos), preservando contas admin
+    // e o próprio usuário logado, para evitar travar o acesso ao sistema.
+    let inativadosForaLista = 0;
+    if (inativarForaDaLista && idsNaPlanilha.size > 0) {
+      const ids = [...idsNaPlanilha];
+      const placeholders = ids.map(() => '?').join(',');
+      const r = await run(
+        `UPDATE usuarios SET ativo = 0
+         WHERE empresa_id = ? AND ativo = 1 AND perfil <> 'admin'
+           AND id <> ? AND id NOT IN (${placeholders})`,
+        [req.usuario.empresa_id, req.usuario.id, ...ids]
+      );
+      inativadosForaLista = r.changes || 0;
     }
 
     const importados  = resultados.filter(r => r.status === 'ok').length;
@@ -325,7 +344,7 @@ router.post('/importar', async (req, res) => {
     const totalCargos = totalCargosRow.t;
     const totalSetores = totalSetoresRow.t;
 
-    res.json({ importados, atualizados, ativos, inativos, erros, resultados, totalDepts, totalCargos, totalSetores });
+    res.json({ importados, atualizados, ativos, inativos, erros, resultados, totalDepts, totalCargos, totalSetores, inativadosForaLista });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }
