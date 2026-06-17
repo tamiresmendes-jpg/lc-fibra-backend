@@ -36,12 +36,12 @@ function statusDaPlanilha(u) {
   return null; // sem sinal → não altera
 }
 
-// Listar usuários da empresa
+// Listar usuários da empresa — sem avatar para não travar o sistema
 router.get('/', async (req, res) => {
   try {
     const { departamento_id, ativo } = req.query;
     let sql = `
-    SELECT u.id, u.nome, u.email, u.perfil, u.avatar, u.ativo, u.created_at,
+    SELECT u.id, u.nome, u.email, u.perfil, u.ativo, u.created_at,
            u.departamento_id, u.cargo_id, u.gestor_id, u.setor_id, u.funcao, u.bloqueado, u.sort_order, u.cor, u.nivel,
            u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos,
            d.nome as departamento_nome, c.nome as cargo_nome,
@@ -57,6 +57,16 @@ router.get('/', async (req, res) => {
     if (ativo !== undefined) { sql += ' AND u.ativo = ?'; params.push(ativo === 'true' ? 1 : 0); }
     sql += ' ORDER BY u.sort_order ASC, u.nome ASC';
     res.json(await all(sql, params));
+  } catch(err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// Avatar de um usuário específico — carregado sob demanda
+router.get('/:id/avatar', async (req, res) => {
+  try {
+    const row = await get('SELECT avatar FROM usuarios WHERE id = ? AND empresa_id = ?', [req.params.id, req.usuario.empresa_id]);
+    res.json({ avatar: row?.avatar || null });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }
