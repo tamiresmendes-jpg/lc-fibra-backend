@@ -12,7 +12,9 @@ router.get('/', async (req, res) => {
     const unidades = await all(`
       SELECT * FROM unidades
       WHERE empresa_id = $1 AND ativo = 1
-      ORDER BY CASE WHEN tipo = 'matriz' THEN 0 ELSE 1 END, cnpj NULLS LAST, nome
+      ORDER BY CASE WHEN tipo = 'matriz' THEN 0 ELSE 1 END,
+               regexp_replace(COALESCE(cnpj,''), '[^0-9]', '', 'g') NULLS LAST,
+               nome
     `, [req.usuario.empresa_id]);
     res.json(unidades);
   } catch (e) {
