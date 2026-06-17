@@ -113,10 +113,10 @@ router.get('/:id', async (req, res) => {
 // Atualizar usuário
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, avatar, permissoes_modulos } = req.body;
+    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, permissoes_modulos } = req.body;
     await run(`
     UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-      setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, avatar=?, permissoes_modulos=?
+      setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?, permissoes_modulos=?
     WHERE id=? AND empresa_id=?
   `, [
       nome, perfil,
@@ -124,7 +124,7 @@ router.put('/:id', async (req, res) => {
       funcao || null, nivel || null,
       ativo !== undefined ? ativo : 1,
       bloqueado !== undefined ? bloqueado : 0,
-      data_nascimento || null, avatar || null,
+      data_nascimento || null, cidade || null, avatar || null,
       permissoes_modulos ? JSON.stringify(permissoes_modulos) : null,
       req.params.id, req.usuario.empresa_id
     ]);
