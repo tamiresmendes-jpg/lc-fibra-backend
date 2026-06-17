@@ -728,6 +728,10 @@ async function initSchema() {
     )
   `);
   await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS cnpj TEXT`);
+  await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS whatsapp TEXT`);
+  await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS instagram TEXT`);
+  await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS facebook TEXT`);
+  await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS site TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ceps (
