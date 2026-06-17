@@ -49,6 +49,7 @@ app.use('/api/escalas', require('./routes/escalas'));
 app.use('/api/upload', require('./routes/upload'));
 app.use('/api/ceps', require('./routes/ceps'));
 app.use('/api/unidades', require('./routes/unidades'));
+app.use('/api/redes-sociais', require('./routes/redes-sociais'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));
