@@ -1,7 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { run, all } = require('../config/database');
-const auth = require('../middleware/auth');
+const { autenticar } = require('../middleware/auth');
 
 // GET /api/ceps — retorna todos os CEPs do banco
 router.get('/', async (req, res) => {
@@ -15,7 +15,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/ceps/importar — importa lista de CEPs (substitui por cidade)
-router.post('/importar', auth, async (req, res) => {
+router.post('/importar', autenticar, async (req, res) => {
   try {
     const { ceps, cidade } = req.body;
     if (!Array.isArray(ceps) || ceps.length === 0) {

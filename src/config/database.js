@@ -708,6 +708,26 @@ async function initSchema() {
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cidade TEXT`);
 
   await pool.query(`
+    CREATE TABLE IF NOT EXISTS unidades (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      tipo TEXT DEFAULT 'filial',
+      cep TEXT,
+      logradouro TEXT,
+      numero TEXT,
+      complemento TEXT,
+      bairro TEXT,
+      cidade TEXT,
+      estado TEXT DEFAULT 'PA',
+      telefone TEXT,
+      responsavel TEXT,
+      ativo INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  await pool.query(`
     CREATE TABLE IF NOT EXISTS ceps (
       id SERIAL PRIMARY KEY,
       cep TEXT NOT NULL,
