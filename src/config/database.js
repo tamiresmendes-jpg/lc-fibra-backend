@@ -720,12 +720,14 @@ async function initSchema() {
       bairro TEXT,
       cidade TEXT,
       estado TEXT DEFAULT 'PA',
+      cnpj TEXT,
       telefone TEXT,
       responsavel TEXT,
       ativo INTEGER DEFAULT 1,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+  await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS cnpj TEXT`);
 
   await pool.query(`
     CREATE TABLE IF NOT EXISTS ceps (

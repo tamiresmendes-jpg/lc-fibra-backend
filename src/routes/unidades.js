@@ -24,17 +24,18 @@ router.get('/', async (req, res) => {
 // POST / — cria nova unidade
 router.post('/', async (req, res) => {
   try {
-    const { nome, tipo, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel } = req.body;
+    const { nome, tipo, cnpj, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
     await run(`
-      INSERT INTO unidades (id, empresa_id, nome, tipo, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+      INSERT INTO unidades (id, empresa_id, nome, tipo, cnpj, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
     `, [
       id,
       req.usuario.empresa_id,
       nome,
       tipo || 'filial',
+      cnpj || null,
       cep || null,
       logradouro || null,
       numero || null,
@@ -55,15 +56,16 @@ router.post('/', async (req, res) => {
 // PUT /:id — atualiza unidade
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, tipo, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel } = req.body;
+    const { nome, tipo, cnpj, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel } = req.body;
     await run(`
       UPDATE unidades
-      SET nome=$1, tipo=$2, cep=$3, logradouro=$4, numero=$5, complemento=$6,
-          bairro=$7, cidade=$8, estado=$9, telefone=$10, responsavel=$11
-      WHERE id=$12 AND empresa_id=$13
+      SET nome=$1, tipo=$2, cnpj=$3, cep=$4, logradouro=$5, numero=$6, complemento=$7,
+          bairro=$8, cidade=$9, estado=$10, telefone=$11, responsavel=$12
+      WHERE id=$13 AND empresa_id=$14
     `, [
       nome,
       tipo || 'filial',
+      cnpj || null,
       cep || null,
       logradouro || null,
       numero || null,
