@@ -47,6 +47,7 @@ app.use('/api/fluxos', require('./routes/fluxos'));
 app.use('/api/checklists', require('./routes/checklists'));
 app.use('/api/escalas', require('./routes/escalas'));
 app.use('/api/upload', require('./routes/upload'));
+app.use('/api/ceps', require('./routes/ceps'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));

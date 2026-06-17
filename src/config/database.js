@@ -706,6 +706,20 @@ async function initSchema() {
 
   // Garante colunas adicionadas após a criação inicial (tabelas já existentes)
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS cidade TEXT`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ceps (
+      id SERIAL PRIMARY KEY,
+      cep TEXT NOT NULL,
+      log TEXT NOT NULL,
+      tipo TEXT DEFAULT '',
+      bairro TEXT DEFAULT '',
+      cidade TEXT DEFAULT 'Mãe do Rio',
+      empresa_id TEXT,
+      UNIQUE(cep, bairro, log)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_ceps_cidade ON ceps(cidade)`);
 }
 
 async function seedAdmin() {
