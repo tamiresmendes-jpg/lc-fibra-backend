@@ -8,7 +8,7 @@ router.use(autenticar);
 // GET — dados da empresa
 router.get('/', async (req, res) => {
   try {
-    const empresa = await get('SELECT id, nome, cnpj, logo FROM empresas WHERE id = $1', [req.usuario.empresa_id]);
+    const empresa = await get('SELECT id, nome, cnpj, logo, cor_primaria FROM empresas WHERE id = $1', [req.usuario.empresa_id]);
     res.json(empresa || {});
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -17,10 +17,10 @@ router.get('/', async (req, res) => {
 router.put('/', async (req, res) => {
   try {
     if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas administrador' });
-    const { nome, cnpj, logo } = req.body;
+    const { nome, cnpj, logo, cor_primaria } = req.body;
     await run(
-      'UPDATE empresas SET nome = $1, cnpj = $2, logo = $3 WHERE id = $4',
-      [nome || null, cnpj || null, logo || null, req.usuario.empresa_id]
+      'UPDATE empresas SET nome = $1, cnpj = $2, logo = $3, cor_primaria = $4 WHERE id = $5',
+      [nome || null, cnpj || null, logo || null, cor_primaria || '#7B55F1', req.usuario.empresa_id]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
