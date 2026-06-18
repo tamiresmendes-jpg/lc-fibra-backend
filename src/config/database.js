@@ -829,6 +829,123 @@ async function initSchema() {
     )
   `);
 
+  // Férias e folgas
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS ferias (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      data_inicio TEXT NOT NULL,
+      data_fim TEXT NOT NULL,
+      dias INTEGER,
+      tipo TEXT DEFAULT 'ferias',
+      status TEXT DEFAULT 'solicitado',
+      aprovado_por TEXT,
+      observacoes TEXT,
+      created_by TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // Cultura extra: Eventos, Enquetes, Mural
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cultura_eventos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      data_inicio TEXT,
+      data_fim TEXT,
+      local TEXT,
+      tipo TEXT DEFAULT 'evento',
+      publico INTEGER DEFAULT 1,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS cultura_enquetes (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      opcoes TEXT,
+      data_fim TEXT,
+      anonima INTEGER DEFAULT 0,
+      ativa INTEGER DEFAULT 1,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS cultura_enquete_respostas (
+      id TEXT PRIMARY KEY,
+      enquete_id TEXT NOT NULL,
+      usuario_id TEXT,
+      opcao_index INTEGER NOT NULL,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      UNIQUE(enquete_id, usuario_id)
+    );
+    CREATE TABLE IF NOT EXISTS cultura_mural (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      conteudo TEXT NOT NULL,
+      tipo TEXT DEFAULT 'aviso',
+      fixado INTEGER DEFAULT 0,
+      data_expiracao TEXT,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS cultura_campanhas_internas (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      objetivo TEXT,
+      data_inicio TEXT,
+      data_fim TEXT,
+      status TEXT DEFAULT 'ativa',
+      imagem TEXT,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+  `);
+
+  // Empresa extra: Telefones, Contatos, Horários
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS empresa_telefones (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      descricao TEXT NOT NULL,
+      numero TEXT NOT NULL,
+      ramal TEXT,
+      whatsapp INTEGER DEFAULT 0,
+      departamento TEXT,
+      observacao TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS empresa_contatos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      cargo TEXT,
+      email TEXT,
+      telefone TEXT,
+      whatsapp TEXT,
+      departamento TEXT,
+      observacao TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS empresa_horarios (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      unidade TEXT DEFAULT 'Sede',
+      dia_semana INTEGER NOT NULL,
+      hora_abertura TEXT,
+      hora_fechamento TEXT,
+      fechado INTEGER DEFAULT 0,
+      observacao TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+  `);
+
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
   for (const t of tabelasSoftDelete) {
