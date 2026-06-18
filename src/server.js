@@ -53,6 +53,7 @@ app.use('/api/ceps', require('./routes/ceps'));
 app.use('/api/unidades', require('./routes/unidades'));
 app.use('/api/redes-sociais', require('./routes/redes-sociais'));
 app.use('/api/feriados', require('./routes/feriados'));
+app.use('/api/empresa', require('./routes/empresa'));
 app.use('/api/audit-log', require('./routes/audit-log'));
 app.use('/api/lixeira', require('./routes/lixeira'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
