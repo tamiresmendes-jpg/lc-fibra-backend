@@ -390,12 +390,25 @@ function extrairTextoExcel(buffer) {
 
 function extrairTextoPDF(buffer) {
   return new Promise((resolve, reject) => {
+    let done = false;
     const parser = new PDFParser(null, 1);
     parser.on('pdfParser_dataReady', () => {
+      if (done) return; done = true;
       try { resolve(parser.getRawTextContent() || ''); } catch { resolve(''); }
     });
-    parser.on('pdfParser_dataError', err => reject(err));
-    parser.parseBuffer(buffer);
+    parser.on('pdfParser_dataError', err => {
+      if (done) return; done = true;
+      reject(err?.parserError ? new Error(String(err.parserError)) : (err instanceof Error ? err : new Error(String(err))));
+    });
+    try {
+      const result = parser.parseBuffer(buffer);
+      // pdf2json v4 returns a Promise from parseBuffer
+      if (result && typeof result.then === 'function') {
+        result.then(() => {
+          if (!done) { done = true; try { resolve(parser.getRawTextContent() || ''); } catch { resolve(''); } }
+        }).catch(err => { if (!done) { done = true; reject(err); } });
+      }
+    } catch (e) { if (!done) { done = true; reject(e); } }
   });
 }
 
@@ -759,12 +772,14 @@ function extrairSemIA(texto, nomeArquivo) {
   return dados;
 }
 
-router.post('/extrair-documento', (req, res, next) => {
-  uploadTemp.single('arquivo')(req, res, (err) => {
-    if (err) return res.status(400).json({ erro: 'Erro no upload: ' + err.message });
-    next();
-  });
-}, async (req, res) => {
+router.post('/extrair-documento', async (req, res) => {
+  try {
+    await new Promise((resolve, reject) => {
+      uploadTemp.single('arquivo')(req, res, err => err ? reject(err) : resolve());
+    });
+  } catch (err) {
+    return res.status(400).json({ erro: 'Erro no upload: ' + err.message });
+  }
   if (!req.file) return res.status(400).json({ erro: 'Arquivo não enviado' });
 
   const filePath = req.file.path;

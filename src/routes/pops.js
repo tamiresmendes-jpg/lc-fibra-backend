@@ -312,21 +312,34 @@ router.get('/exportar-todos/pdf', async (req, res) => {
     if (popsAll.length === 0) return res.status(404).json({ erro: 'Nenhum POP encontrado' });
 
     const archiver = require('archiver');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    const chunks = [];
+
+    await new Promise((resolve, reject) => {
+      archive.on('data', chunk => chunks.push(chunk));
+      archive.on('end', resolve);
+      archive.on('error', reject);
+      archive.on('warning', err => { if (err.code !== 'ENOENT') reject(err); });
+      (async () => {
+        for (const pop of popsAll) {
+          try {
+            const buf = await gerarPDFPOP(pop);
+            const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.pdf`;
+            archive.append(buf, { name: nome });
+          } catch (e) { console.error('PDF falhou para', pop.codigo, e.message); }
+        }
+        archive.finalize();
+      })().catch(reject);
+    });
+
+    const zipBuffer = Buffer.concat(chunks);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="POPs-todos.zip"');
-    const archive = archiver('zip', { zlib: { level: 6 } });
-    archive.pipe(res);
-    for (const pop of popsAll) {
-      try {
-        const buf = await gerarPDFPOP(pop);
-        const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.pdf`;
-        archive.append(buf, { name: nome });
-      } catch {}
-    }
-    await archive.finalize();
+    res.setHeader('Content-Length', zipBuffer.length);
+    res.send(zipBuffer);
   } catch (err) {
     console.error('Erro ao gerar ZIP:', err.message);
-    if (!res.headersSent) res.status(500).json({ erro: 'Erro ao gerar arquivo' });
+    res.status(500).json({ erro: err.message || 'Erro ao gerar arquivo' });
   }
 });
 
@@ -388,19 +401,30 @@ ${secoes}<div style="margin-top:32px;border-top:1px solid #e2e8f0;padding-top:10
     }
 
     const archiver = require('archiver');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    const chunks = [];
+
+    await new Promise((resolve, reject) => {
+      archive.on('data', chunk => chunks.push(chunk));
+      archive.on('end', resolve);
+      archive.on('error', reject);
+      archive.on('warning', err => { if (err.code !== 'ENOENT') reject(err); });
+      for (const pop of popsAll) {
+        const html = gerarWordPop(pop);
+        const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.doc`;
+        archive.append(Buffer.from(html, 'utf-8'), { name: nome });
+      }
+      archive.finalize();
+    });
+
+    const zipBuffer = Buffer.concat(chunks);
     res.setHeader('Content-Type', 'application/zip');
     res.setHeader('Content-Disposition', 'attachment; filename="POPs-todos-word.zip"');
-    const archive = archiver('zip', { zlib: { level: 6 } });
-    archive.pipe(res);
-    for (const pop of popsAll) {
-      const html = gerarWordPop(pop);
-      const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.doc`;
-      archive.append(Buffer.from(html, 'utf-8'), { name: nome });
-    }
-    archive.finalize();
+    res.setHeader('Content-Length', zipBuffer.length);
+    res.send(zipBuffer);
   } catch (err) {
     console.error('Erro ao gerar ZIP Word:', err.message);
-    if (!res.headersSent) res.status(500).json({ erro: 'Erro ao gerar arquivo' });
+    res.status(500).json({ erro: err.message || 'Erro ao gerar arquivo' });
   }
 });
 
