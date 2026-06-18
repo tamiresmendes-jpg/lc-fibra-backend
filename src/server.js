@@ -19,6 +19,7 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, l
 
 // autoNotificacao desativado — Central de Ciência é alimentada manualmente
 // app.use(require('./middleware/autoNotificacao'));
+app.use(require('./middleware/auditLog'));
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/usuarios', require('./routes/usuarios'));
@@ -52,6 +53,8 @@ app.use('/api/ceps', require('./routes/ceps'));
 app.use('/api/unidades', require('./routes/unidades'));
 app.use('/api/redes-sociais', require('./routes/redes-sociais'));
 app.use('/api/feriados', require('./routes/feriados'));
+app.use('/api/audit-log', require('./routes/audit-log'));
+app.use('/api/lixeira', require('./routes/lixeira'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));

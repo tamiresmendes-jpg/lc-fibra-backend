@@ -54,7 +54,7 @@ router.get('/', async (req, res) => {
     const itens = await all(`
       SELECT r.*, u.nome as criado_por_nome
       FROM reunioes r LEFT JOIN usuarios u ON u.id = r.criado_por
-      WHERE r.empresa_id = $1
+      WHERE r.empresa_id = $1 AND r.excluido_em IS NULL
       ORDER BY r.data_reuniao DESC
     `, [req.usuario.empresa_id]);
     res.json(itens);
@@ -90,8 +90,13 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM reunioes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Removido' });
+    const item = await get('SELECT titulo FROM reunioes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    if (!item) return res.status(404).json({ erro: 'Não encontrado' });
+    await run(
+      'UPDATE reunioes SET excluido_em=NOW(), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4',
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
+    );
+    res.json({ mensagem: 'Movido para lixeira', titulo: item.titulo });
   } catch (e) {
     console.error(e);
     res.status(500).json({ erro: 'Erro interno' });

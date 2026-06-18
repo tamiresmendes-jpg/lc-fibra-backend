@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     SELECT c.*, d.nome as departamento_nome
     FROM cargos c
     LEFT JOIN departamentos d ON d.id = c.departamento_id
-    WHERE c.empresa_id = ?
+    WHERE c.empresa_id = ? AND c.excluido_em IS NULL
     ORDER BY c.nivel, c.nome
   `, [req.usuario.empresa_id]);
     res.json(itens);
@@ -45,8 +45,13 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM cargos WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Removido' });
+    const item = await get('SELECT nome FROM cargos WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    if (!item) return res.status(404).json({ erro: 'Não encontrado' });
+    await run(
+      'UPDATE cargos SET excluido_em=NOW(), excluido_por=?, excluido_por_nome=? WHERE id=? AND empresa_id=?',
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
+    );
+    res.json({ mensagem: 'Movido para lixeira', nome: item.nome });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }

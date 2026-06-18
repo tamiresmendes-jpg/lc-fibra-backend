@@ -776,6 +776,31 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+
+  // Auditoria do sistema
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS audit_log (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      usuario_nome TEXT,
+      perfil TEXT,
+      modulo TEXT,
+      acao TEXT,
+      entidade_nome TEXT,
+      ip TEXT,
+      created_at TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_empresa ON audit_log(empresa_id, created_at DESC)`);
+
+  // Soft delete — colunas adicionadas às tabelas principais
+  const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
+  for (const t of tabelasSoftDelete) {
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_por TEXT`);
+    await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT`);
+  }
 }
 
 async function seedAdmin() {

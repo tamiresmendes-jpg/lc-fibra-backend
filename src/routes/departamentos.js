@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     SELECT d.*, COUNT(u.id) as total_colaboradores
     FROM departamentos d
     LEFT JOIN usuarios u ON u.departamento_id = d.id AND u.ativo = 1
-    WHERE d.empresa_id = ?
+    WHERE d.empresa_id = ? AND d.excluido_em IS NULL
     GROUP BY d.id ORDER BY d.nome
   `, [req.usuario.empresa_id]);
     res.json(itens);
@@ -46,8 +46,13 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM departamentos WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Removido' });
+    const item = await get('SELECT nome FROM departamentos WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    if (!item) return res.status(404).json({ erro: 'Não encontrado' });
+    await run(
+      'UPDATE departamentos SET excluido_em=NOW(), excluido_por=?, excluido_por_nome=? WHERE id=? AND empresa_id=?',
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
+    );
+    res.json({ mensagem: 'Movido para lixeira', nome: item.nome });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }

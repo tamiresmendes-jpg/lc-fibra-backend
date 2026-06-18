@@ -12,7 +12,7 @@ router.get('/', async (req, res) => {
     let sql = `
       SELECT a.*, u.nome as responsavel_nome
       FROM acoes a LEFT JOIN usuarios u ON u.id = a.responsavel_id
-      WHERE a.empresa_id = $1
+      WHERE a.empresa_id = $1 AND a.excluido_em IS NULL
     `;
     const params = [req.usuario.empresa_id];
     if (status) { sql += ` AND a.status = $${params.length + 1}`; params.push(status); }
@@ -57,8 +57,13 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM acoes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Removido' });
+    const item = await get('SELECT titulo FROM acoes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    if (!item) return res.status(404).json({ erro: 'Não encontrado' });
+    await run(
+      'UPDATE acoes SET excluido_em=NOW(), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4',
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
+    );
+    res.json({ mensagem: 'Movido para lixeira', titulo: item.titulo });
   } catch (e) {
     console.error(e);
     res.status(500).json({ erro: 'Erro interno' });
