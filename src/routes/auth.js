@@ -83,7 +83,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
+      { expiresIn: '30d' }
     );
 
     const { senha: _, ...dadosUsuario } = usuario;
@@ -126,7 +126,7 @@ router.post('/registrar', async (req, res) => {
     const token = jwt.sign(
       { id: usuarioId, email, perfil: 'admin', empresa_id: empresaId },
       process.env.JWT_SECRET,
-      { expiresIn: process.env.JWT_EXPIRES_IN }
+      { expiresIn: '30d' }
     );
 
     res.status(201).json({ token, usuario: { id: usuarioId, nome, email, perfil: 'admin', empresa_id: empresaId, empresa_nome: nome_empresa } });
