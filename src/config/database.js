@@ -794,6 +794,15 @@ async function initSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_empresa ON audit_log(empresa_id, created_at DESC)`);
 
+  await pool.query(`ALTER TABLE feriados ADD COLUMN IF NOT EXISTS validacao TEXT DEFAULT 'confirmado'`);
+  // Tipos que precisam de validação entram como pendente
+  await pool.query(`
+    UPDATE feriados SET validacao = 'pendente'
+    WHERE validacao = 'confirmado'
+      AND tipo NOT IN ('nacional','estadual')
+      AND validacao IS NOT NULL
+  `).catch(() => {});
+
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
   for (const t of tabelasSoftDelete) {

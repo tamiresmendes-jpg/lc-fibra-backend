@@ -4,7 +4,9 @@ const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 
-// GET / — lista feriados ativos da empresa com data_exibicao calculada
+// Tipos que entram automaticamente confirmados
+const TIPOS_AUTO_CONFIRMADOS = ['nacional', 'estadual'];
+
 router.get('/', autenticar, async (req, res) => {
   try {
     const rows = await all(
@@ -28,83 +30,84 @@ router.get('/', autenticar, async (req, res) => {
 
     res.json(rows);
   } catch (err) {
-    console.error('[feriados GET]', err.message);
     res.status(500).json({ erro: 'Erro ao buscar feriados' });
   }
 });
 
-// POST / — cria feriado
 router.post('/', autenticar, async (req, res) => {
   try {
     const { nome, data, tipo, recorrente, observacao } = req.body;
-    if (!nome || !data) {
-      return res.status(400).json({ erro: 'Nome e data são obrigatórios' });
-    }
+    if (!nome || !data) return res.status(400).json({ erro: 'Nome e data são obrigatórios' });
+
+    const tipoFinal = tipo || 'nacional';
+    const validacao = TIPOS_AUTO_CONFIRMADOS.includes(tipoFinal) ? 'confirmado' : 'pendente';
+
     const id = uuidv4();
     await run(
-      `INSERT INTO feriados (id, empresa_id, nome, data, tipo, recorrente, observacao) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-      [
-        id,
-        req.usuario.empresa_id,
-        nome,
-        data,
-        tipo || 'nacional',
-        recorrente !== undefined ? (recorrente ? 1 : 0) : 1,
-        observacao || null,
-      ]
+      `INSERT INTO feriados (id, empresa_id, nome, data, tipo, recorrente, observacao, validacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.usuario.empresa_id, nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, validacao]
     );
     const novo = await get(`SELECT * FROM feriados WHERE id = ?`, [id]);
     res.status(201).json(novo);
   } catch (err) {
-    console.error('[feriados POST]', err.message);
     res.status(500).json({ erro: 'Erro ao criar feriado' });
   }
 });
 
-// PUT /:id — atualiza feriado
 router.put('/:id', autenticar, async (req, res) => {
   try {
-    const existente = await get(
-      `SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`,
-      [req.params.id, req.usuario.empresa_id]
-    );
-    if (!existente) {
-      return res.status(404).json({ erro: 'Feriado não encontrado' });
-    }
+    const existente = await get(`SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
+    if (!existente) return res.status(404).json({ erro: 'Feriado não encontrado' });
+
     const { nome, data, tipo, recorrente, observacao } = req.body;
-    await run(
-      `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ? WHERE id = ?`,
-      [
-        nome,
-        data,
-        tipo || 'nacional',
-        recorrente !== undefined ? (recorrente ? 1 : 0) : 1,
-        observacao || null,
-        req.params.id,
-      ]
-    );
+    const tipoFinal = tipo || 'nacional';
+
+    // Se mudou para tipo auto-confirmado, atualiza validação automaticamente
+    const validacaoAuto = TIPOS_AUTO_CONFIRMADOS.includes(tipoFinal) ? 'confirmado' : null;
+
+    if (validacaoAuto) {
+      await run(
+        `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ?, validacao = ? WHERE id = ?`,
+        [nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, validacaoAuto, req.params.id]
+      );
+    } else {
+      await run(
+        `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ? WHERE id = ?`,
+        [nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, req.params.id]
+      );
+    }
+
     const atualizado = await get(`SELECT * FROM feriados WHERE id = ?`, [req.params.id]);
     res.json(atualizado);
   } catch (err) {
-    console.error('[feriados PUT]', err.message);
     res.status(500).json({ erro: 'Erro ao atualizar feriado' });
   }
 });
 
-// DELETE /:id — soft delete
+// PATCH /:id/validar — confirma ou rejeita o feriado
+router.patch('/:id/validar', autenticar, async (req, res) => {
+  try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { validacao } = req.body; // 'confirmado' ou 'rejeitado'
+    if (!['confirmado', 'rejeitado'].includes(validacao)) return res.status(400).json({ erro: 'Validação inválida' });
+
+    const existente = await get(`SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
+    if (!existente) return res.status(404).json({ erro: 'Feriado não encontrado' });
+
+    await run(`UPDATE feriados SET validacao = ? WHERE id = ?`, [validacao, req.params.id]);
+    res.json({ ok: true, validacao });
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro ao validar feriado' });
+  }
+});
+
 router.delete('/:id', autenticar, async (req, res) => {
   try {
-    const existente = await get(
-      `SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`,
-      [req.params.id, req.usuario.empresa_id]
-    );
-    if (!existente) {
-      return res.status(404).json({ erro: 'Feriado não encontrado' });
-    }
+    const existente = await get(`SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
+    if (!existente) return res.status(404).json({ erro: 'Feriado não encontrado' });
     await run(`UPDATE feriados SET ativo = 0 WHERE id = ?`, [req.params.id]);
     res.json({ mensagem: 'Feriado removido com sucesso' });
   } catch (err) {
-    console.error('[feriados DELETE]', err.message);
     res.status(500).json({ erro: 'Erro ao remover feriado' });
   }
 });
