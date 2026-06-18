@@ -946,6 +946,120 @@ async function initSchema() {
     );
   `);
 
+  // Treinamentos extra: trilhas, vídeos, cursos externos
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS trilhas_aprendizagem (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      nivel TEXT DEFAULT 'iniciante',
+      departamento_id TEXT,
+      carga_horaria INTEGER,
+      status TEXT DEFAULT 'ativa',
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS treinamento_videos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      url TEXT NOT NULL,
+      duracao TEXT,
+      categoria TEXT DEFAULT 'geral',
+      tags TEXT,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS cursos_externos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      colaborador_id TEXT,
+      titulo TEXT NOT NULL,
+      instituicao TEXT,
+      carga_horaria INTEGER,
+      data_inicio TEXT,
+      data_conclusao TEXT,
+      certificado INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'em_andamento',
+      valor REAL,
+      observacoes TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+  `);
+
+  // Gestão extra: metas, okrs
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS metas (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      valor_meta REAL DEFAULT 0,
+      valor_atual REAL DEFAULT 0,
+      unidade TEXT DEFAULT '%',
+      departamento_id TEXT,
+      responsavel_id TEXT,
+      data_inicio TEXT,
+      data_fim TEXT,
+      status TEXT DEFAULT 'ativa',
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS okrs (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      objetivo TEXT NOT NULL,
+      resultados_chave TEXT,
+      responsavel_id TEXT,
+      data_inicio TEXT,
+      data_fim TEXT,
+      ciclo TEXT,
+      status TEXT DEFAULT 'ativo',
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+  `);
+
+  // Auditoria extra: não conformidades, evidências
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS auditoria_nao_conformidades (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      auditoria_id TEXT,
+      responsavel_id TEXT,
+      prazo TEXT,
+      gravidade TEXT DEFAULT 'media',
+      status TEXT DEFAULT 'aberta',
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS auditoria_evidencias (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      auditoria_id TEXT,
+      tipo TEXT DEFAULT 'documento',
+      url TEXT,
+      usuario_id TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+  `);
+
+  // Fluxos / Fluxogramas
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fluxos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      setor TEXT,
+      etapas TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
   for (const t of tabelasSoftDelete) {
