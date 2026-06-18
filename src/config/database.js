@@ -803,6 +803,32 @@ async function initSchema() {
       AND validacao IS NOT NULL
   `).catch(() => {});
 
+  // Grupos de permissão
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS grupos_permissao (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      descricao TEXT,
+      permissoes_modulos TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS grupo_membros (
+      grupo_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      PRIMARY KEY (grupo_id, usuario_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS grupo_departamentos (
+      grupo_id TEXT NOT NULL,
+      departamento_id TEXT NOT NULL,
+      PRIMARY KEY (grupo_id, departamento_id)
+    )
+  `);
+
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
   for (const t of tabelasSoftDelete) {

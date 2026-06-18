@@ -56,6 +56,7 @@ app.use('/api/feriados', require('./routes/feriados'));
 app.use('/api/empresa', require('./routes/empresa'));
 app.use('/api/audit-log', require('./routes/audit-log'));
 app.use('/api/lixeira', require('./routes/lixeira'));
+app.use('/api/grupos-permissao', require('./routes/grupos-permissao'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));
