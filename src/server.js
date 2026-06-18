@@ -17,7 +17,8 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false }));
 
-app.use(require('./middleware/autoNotificacao'));
+// autoNotificacao desativado — Central de Ciência é alimentada manualmente
+// app.use(require('./middleware/autoNotificacao'));
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/usuarios', require('./routes/usuarios'));
