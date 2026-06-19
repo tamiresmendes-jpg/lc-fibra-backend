@@ -1065,6 +1065,9 @@ async function initSchema() {
   await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS maps_url TEXT`);
   await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS periodo TEXT`);
   await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS tipo_atendimento TEXT DEFAULT 'presencial'`);
+  await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS hora_abertura2 TEXT`);
+  await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS hora_fechamento2 TEXT`);
+  await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS fechado2 INTEGER DEFAULT 0`);
 
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
