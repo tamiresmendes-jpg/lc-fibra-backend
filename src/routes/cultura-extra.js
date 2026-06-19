@@ -19,13 +19,13 @@ router.get('/eventos', autenticar, async (req, res) => {
 
 router.post('/eventos', autenticar, async (req, res) => {
   try {
-    const { titulo, descricao, data_inicio, data_fim, local, tipo, publico } = req.body;
+    const { titulo, descricao, data_inicio, data_fim, local, tipo, publico, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(
-      `INSERT INTO cultura_eventos (id,empresa_id,titulo,descricao,data_inicio,data_fim,local,tipo,publico,criado_por)
-       VALUES (?,?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, titulo, descricao || null, data_inicio || null, data_fim || null, local || null, tipo || 'evento', publico !== false ? 1 : 0, req.usuario.id]
+      `INSERT INTO cultura_eventos (id,empresa_id,titulo,descricao,data_inicio,data_fim,local,tipo,publico,imagem,criado_por)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, descricao || null, data_inicio || null, data_fim || null, local || null, tipo || 'evento', publico !== false ? 1 : 0, imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_eventos WHERE id = ?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar evento' }); }
@@ -35,10 +35,10 @@ router.put('/eventos/:id', autenticar, async (req, res) => {
   try {
     const exist = await get(`SELECT id FROM cultura_eventos WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    const { titulo, descricao, data_inicio, data_fim, local, tipo, publico } = req.body;
+    const { titulo, descricao, data_inicio, data_fim, local, tipo, publico, imagem } = req.body;
     await run(
-      `UPDATE cultura_eventos SET titulo=?,descricao=?,data_inicio=?,data_fim=?,local=?,tipo=?,publico=? WHERE id=?`,
-      [titulo, descricao || null, data_inicio || null, data_fim || null, local || null, tipo || 'evento', publico !== false ? 1 : 0, req.params.id]
+      `UPDATE cultura_eventos SET titulo=?,descricao=?,data_inicio=?,data_fim=?,local=?,tipo=?,publico=?,imagem=? WHERE id=?`,
+      [titulo, descricao || null, data_inicio || null, data_fim || null, local || null, tipo || 'evento', publico !== false ? 1 : 0, imagem || null, req.params.id]
     );
     res.json(await get(`SELECT * FROM cultura_eventos WHERE id = ?`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar evento' }); }
@@ -140,13 +140,13 @@ router.get('/mural', autenticar, async (req, res) => {
 
 router.post('/mural', autenticar, async (req, res) => {
   try {
-    const { titulo, conteudo, tipo, fixado, data_expiracao } = req.body;
+    const { titulo, conteudo, tipo, fixado, data_expiracao, imagem } = req.body;
     if (!titulo || !conteudo) return res.status(400).json({ erro: 'Título e conteúdo obrigatórios' });
     const id = uuidv4();
     await run(
-      `INSERT INTO cultura_mural (id,empresa_id,titulo,conteudo,tipo,fixado,data_expiracao,criado_por)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, titulo, conteudo, tipo || 'aviso', fixado ? 1 : 0, data_expiracao || null, req.usuario.id]
+      `INSERT INTO cultura_mural (id,empresa_id,titulo,conteudo,tipo,fixado,data_expiracao,imagem,criado_por)
+       VALUES (?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, conteudo, tipo || 'aviso', fixado ? 1 : 0, data_expiracao || null, imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_mural WHERE id = ?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar aviso' }); }
@@ -156,10 +156,10 @@ router.put('/mural/:id', autenticar, async (req, res) => {
   try {
     const exist = await get(`SELECT id FROM cultura_mural WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    const { titulo, conteudo, tipo, fixado, data_expiracao } = req.body;
+    const { titulo, conteudo, tipo, fixado, data_expiracao, imagem } = req.body;
     await run(
-      `UPDATE cultura_mural SET titulo=?,conteudo=?,tipo=?,fixado=?,data_expiracao=? WHERE id=?`,
-      [titulo, conteudo, tipo || 'aviso', fixado ? 1 : 0, data_expiracao || null, req.params.id]
+      `UPDATE cultura_mural SET titulo=?,conteudo=?,tipo=?,fixado=?,data_expiracao=?,imagem=? WHERE id=?`,
+      [titulo, conteudo, tipo || 'aviso', fixado ? 1 : 0, data_expiracao || null, imagem || null, req.params.id]
     );
     res.json(await get(`SELECT * FROM cultura_mural WHERE id = ?`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar aviso' }); }
@@ -189,13 +189,13 @@ router.get('/campanhas-internas', autenticar, async (req, res) => {
 
 router.post('/campanhas-internas', autenticar, async (req, res) => {
   try {
-    const { titulo, descricao, objetivo, data_inicio, data_fim, status } = req.body;
+    const { titulo, descricao, objetivo, data_inicio, data_fim, status, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(
-      `INSERT INTO cultura_campanhas_internas (id,empresa_id,titulo,descricao,objetivo,data_inicio,data_fim,status,criado_por)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, titulo, descricao || null, objetivo || null, data_inicio || null, data_fim || null, status || 'planejada', req.usuario.id]
+      `INSERT INTO cultura_campanhas_internas (id,empresa_id,titulo,descricao,objetivo,data_inicio,data_fim,status,imagem,criado_por)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, descricao || null, objetivo || null, data_inicio || null, data_fim || null, status || 'planejada', imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_campanhas_internas WHERE id = ?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar campanha' }); }
@@ -205,10 +205,10 @@ router.put('/campanhas-internas/:id', autenticar, async (req, res) => {
   try {
     const exist = await get(`SELECT id FROM cultura_campanhas_internas WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    const { titulo, descricao, objetivo, data_inicio, data_fim, status } = req.body;
+    const { titulo, descricao, objetivo, data_inicio, data_fim, status, imagem } = req.body;
     await run(
-      `UPDATE cultura_campanhas_internas SET titulo=?,descricao=?,objetivo=?,data_inicio=?,data_fim=?,status=? WHERE id=?`,
-      [titulo, descricao || null, objetivo || null, data_inicio || null, data_fim || null, status || 'planejada', req.params.id]
+      `UPDATE cultura_campanhas_internas SET titulo=?,descricao=?,objetivo=?,data_inicio=?,data_fim=?,status=?,imagem=? WHERE id=?`,
+      [titulo, descricao || null, objetivo || null, data_inicio || null, data_fim || null, status || 'planejada', imagem || null, req.params.id]
     );
     res.json(await get(`SELECT * FROM cultura_campanhas_internas WHERE id = ?`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar campanha' }); }

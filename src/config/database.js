@@ -1087,6 +1087,11 @@ async function initSchema() {
   await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS hora_fechamento2 TEXT`);
   await pool.query(`ALTER TABLE empresa_horarios ADD COLUMN IF NOT EXISTS fechado2 INTEGER DEFAULT 0`);
 
+  // Imagem em conteúdos sociais (mural, eventos, coffee break)
+  await pool.query(`ALTER TABLE cultura_mural ADD COLUMN IF NOT EXISTS imagem TEXT`);
+  await pool.query(`ALTER TABLE cultura_eventos ADD COLUMN IF NOT EXISTS imagem TEXT`);
+  await pool.query(`ALTER TABLE coffee_breaks ADD COLUMN IF NOT EXISTS imagem TEXT`);
+
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
   for (const t of tabelasSoftDelete) {

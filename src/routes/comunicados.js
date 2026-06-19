@@ -23,13 +23,13 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { titulo, conteudo, tipo, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite } = req.body;
+    const { titulo, conteudo, tipo, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(`
-      INSERT INTO comunicados (id, empresa_id, titulo, conteudo, tipo, publicado_por, data_publicacao, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite)
-      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, $8, $9, $10, $11, $12, $13, $14)
-    `, [id, req.usuario.empresa_id, titulo, conteudo||null, tipo||'comunicado', req.usuario.id, fixado?1:0, categoria||'geral', tema||'padrao', data_inicio||null, data_fim||null, responsavel||null, etapa||null, vagas_limite||null]);
+      INSERT INTO comunicados (id, empresa_id, titulo, conteudo, tipo, publicado_por, data_publicacao, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite, imagem)
+      VALUES ($1, $2, $3, $4, $5, $6, CURRENT_TIMESTAMP, $7, $8, $9, $10, $11, $12, $13, $14, $15)
+    `, [id, req.usuario.empresa_id, titulo, conteudo||null, tipo||'comunicado', req.usuario.id, fixado?1:0, categoria||'geral', tema||'padrao', data_inicio||null, data_fim||null, responsavel||null, etapa||null, vagas_limite||null, imagem||null]);
     res.status(201).json({ id, titulo });
   } catch (e) {
     console.error(e);
@@ -39,9 +39,9 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const { titulo, conteudo, tipo, ativo, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite } = req.body;
-    await run(`UPDATE comunicados SET titulo=$1, conteudo=$2, tipo=$3, ativo=$4, fixado=$5, categoria=$6, tema=$7, data_inicio=$8, data_fim=$9, responsavel=$10, etapa=$11, vagas_limite=$12 WHERE id=$13 AND empresa_id=$14`,
-      [titulo, conteudo||null, tipo||'comunicado', ativo !== undefined ? ativo : 1, fixado?1:0, categoria||'geral', tema||'padrao', data_inicio||null, data_fim||null, responsavel||null, etapa||null, vagas_limite||null, req.params.id, req.usuario.empresa_id]);
+    const { titulo, conteudo, tipo, ativo, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite, imagem } = req.body;
+    await run(`UPDATE comunicados SET titulo=$1, conteudo=$2, tipo=$3, ativo=$4, fixado=$5, categoria=$6, tema=$7, data_inicio=$8, data_fim=$9, responsavel=$10, etapa=$11, vagas_limite=$12, imagem=$13 WHERE id=$14 AND empresa_id=$15`,
+      [titulo, conteudo||null, tipo||'comunicado', ativo !== undefined ? ativo : 1, fixado?1:0, categoria||'geral', tema||'padrao', data_inicio||null, data_fim||null, responsavel||null, etapa||null, vagas_limite||null, imagem||null, req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Atualizado' });
   } catch (e) {
     console.error(e);
