@@ -74,12 +74,20 @@ router.get('/', async (req, res) => {
 
     // Queries opcionais — não quebram o dashboard se a tabela não existir ainda
     const safe = async (fn) => { try { return await fn(); } catch { return []; } };
-    const [proximosCoffeeBreaks] = await Promise.all([
+    const hojeStr = `TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD')`;
+    const [proximosCoffeeBreaks, proximasFerias, colaboradoresNascimento] = await Promise.all([
       safe(() => all(`SELECT id, unidade, data, horario, titulo, observacao
            FROM coffee_breaks
            WHERE empresa_id=$1 AND ativo=1
-             AND data >= TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD')
+             AND data >= ${hojeStr}
            ORDER BY data ASC LIMIT 5`, [eid])),
+      safe(() => all(`SELECT f.data_inicio, f.data_fim, f.status, u.nome as colaborador_nome, u.avatar
+           FROM ferias f JOIN usuarios u ON u.id = f.usuario_id
+           WHERE f.empresa_id=$1 AND f.data_fim >= ${hojeStr}
+           ORDER BY f.data_inicio ASC LIMIT 6`, [eid])),
+      safe(() => all(`SELECT id, nome, avatar, data_nascimento
+           FROM usuarios
+           WHERE empresa_id=$1 AND ativo=1 AND data_nascimento IS NOT NULL`, [eid])),
     ]);
 
     const totalColaboradores = rowResumo.total_colaboradores;
@@ -119,6 +127,8 @@ router.get('/', async (req, res) => {
       solicitacoesAuditoria,
       popsMaisVistos,
       proximosCoffeeBreaks,
+      proximasFerias,
+      colaboradoresNascimento,
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
