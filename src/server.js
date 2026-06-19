@@ -53,6 +53,7 @@ app.use('/api/ceps', require('./routes/ceps'));
 app.use('/api/unidades', require('./routes/unidades'));
 app.use('/api/redes-sociais', require('./routes/redes-sociais'));
 app.use('/api/feriados', require('./routes/feriados'));
+app.use('/api/coffee-breaks', require('./routes/coffee-breaks'));
 app.use('/api/empresa', require('./routes/empresa'));
 app.use('/api/audit-log', require('./routes/audit-log'));
 app.use('/api/lixeira', require('./routes/lixeira'));
@@ -60,6 +61,10 @@ app.use('/api/grupos-permissao', require('./routes/grupos-permissao'));
 app.use('/api/ferias', require('./routes/ferias'));
 app.use('/api/cultura', require('./routes/cultura-extra'));
 app.use('/api/empresa', require('./routes/empresa-extra'));
+app.use('/api/processos', require('./routes/processos-extra'));
+app.use('/api/treinamentos', require('./routes/treinamentos-extra'));
+app.use('/api/gestao', require('./routes/gestao-extra'));
+app.use('/api/auditoria-extra', require('./routes/auditoria-extra'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));

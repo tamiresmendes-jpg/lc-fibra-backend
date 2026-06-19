@@ -756,6 +756,21 @@ async function initSchema() {
     )
   `);
 
+  // Coffee Break (datas por unidade — Matriz e Filiais)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS coffee_breaks (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      unidade TEXT NOT NULL,
+      data TEXT NOT NULL,
+      horario TEXT,
+      titulo TEXT,
+      observacao TEXT,
+      ativo INTEGER DEFAULT 1,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Auditoria do sistema
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (

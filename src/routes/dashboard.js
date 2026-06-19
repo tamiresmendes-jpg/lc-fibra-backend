@@ -74,19 +74,12 @@ router.get('/', async (req, res) => {
 
     // Queries opcionais — não quebram o dashboard se a tabela não existir ainda
     const safe = async (fn) => { try { return await fn(); } catch { return []; } };
-    const [muralAvisos, institucional, proximosEventos] = await Promise.all([
-      safe(() => all(`SELECT m.id, m.titulo, m.conteudo, m.tipo, m.fixado, m.created_at, u.nome as autor_nome
-           FROM cultura_mural m LEFT JOIN usuarios u ON u.id = m.criado_por
-           WHERE m.empresa_id=$1
-             AND (m.data_expiracao IS NULL OR m.data_expiracao >= CURRENT_DATE)
-           ORDER BY m.fixado DESC, m.created_at DESC LIMIT 5`, [eid])),
-      safe(() => all(`SELECT tipo, titulo, conteudo FROM cultura_institucional
-           WHERE empresa_id=$1 AND ativo=1 AND tipo IN ('missao','visao','valores')
-           ORDER BY tipo`, [eid])),
-      safe(() => all(`SELECT id, titulo, descricao, data_inicio, data_fim, local, tipo
-           FROM cultura_eventos
-           WHERE empresa_id=$1 AND data_inicio >= CURRENT_DATE
-           ORDER BY data_inicio ASC LIMIT 5`, [eid])),
+    const [proximosCoffeeBreaks] = await Promise.all([
+      safe(() => all(`SELECT id, unidade, data, horario, titulo, observacao
+           FROM coffee_breaks
+           WHERE empresa_id=$1 AND ativo=1
+             AND data >= TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD')
+           ORDER BY data ASC LIMIT 5`, [eid])),
     ]);
 
     const totalColaboradores = rowResumo.total_colaboradores;
@@ -125,9 +118,7 @@ router.get('/', async (req, res) => {
       popsEmRevisao,
       solicitacoesAuditoria,
       popsMaisVistos,
-      muralAvisos,
-      institucional,
-      proximosEventos,
+      proximosCoffeeBreaks,
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
