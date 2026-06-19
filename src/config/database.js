@@ -558,27 +558,6 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
 
-    CREATE TABLE IF NOT EXISTS cultura_pontos (
-      id TEXT PRIMARY KEY,
-      empresa_id TEXT NOT NULL,
-      usuario_id TEXT NOT NULL,
-      acao TEXT NOT NULL,
-      pontos INTEGER DEFAULT 0,
-      descricao TEXT,
-      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
-    );
-
-    CREATE TABLE IF NOT EXISTS cultura_medalhas (
-      id TEXT PRIMARY KEY,
-      empresa_id TEXT NOT NULL,
-      usuario_id TEXT NOT NULL,
-      tipo TEXT NOT NULL,
-      titulo TEXT NOT NULL,
-      descricao TEXT,
-      icone TEXT DEFAULT '🏅',
-      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
-    );
-
     CREATE TABLE IF NOT EXISTS cultura_rankings (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

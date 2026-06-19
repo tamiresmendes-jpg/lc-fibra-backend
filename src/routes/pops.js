@@ -202,6 +202,35 @@ router.get('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Histórico de visualizações de um POP (quem acessou + quando)
+router.get('/:id/visualizacoes', async (req, res) => {
+  try {
+    const pop = await get('SELECT id FROM pops WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+
+    const acessos = await all(`
+      SELECT v.created_at, COALESCE(u.nome, 'Usuário removido') as usuario_nome
+      FROM pop_visualizacoes v
+      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      WHERE v.pop_id = $1
+      ORDER BY v.created_at DESC
+      LIMIT 300
+    `, [req.params.id]);
+
+    const porPessoa = await all(`
+      SELECT COALESCE(u.nome, 'Usuário removido') as usuario_nome,
+             COUNT(*) as total, MAX(v.created_at) as ultimo_acesso
+      FROM pop_visualizacoes v
+      LEFT JOIN usuarios u ON u.id = v.usuario_id
+      WHERE v.pop_id = $1
+      GROUP BY u.nome
+      ORDER BY total DESC
+    `, [req.params.id]);
+
+    res.json({ acessos, porPessoa });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Ativar POP (rascunho → ativo)
 router.post('/:id/ativar', async (req, res) => {
   try {

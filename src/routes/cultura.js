@@ -8,16 +8,6 @@ router.use(autenticar);
 
 function empId(req) { return req.usuario.empresa_id; }
 
-// ─── HELPER ───────────────────────────────────────────────────────────────────
-async function adicionarPontos(empresaId, usuarioId, acao, pontos, descricao) {
-  try {
-    await run(
-      'INSERT INTO cultura_pontos (id,empresa_id,usuario_id,acao,pontos,descricao) VALUES ($1,$2,$3,$4,$5,$6)',
-      [uuidv4(), empresaId, usuarioId, acao, pontos, descricao]
-    );
-  } catch {}
-}
-
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
 router.get('/dashboard', async (req, res) => {
   try {
@@ -59,15 +49,6 @@ router.get('/dashboard', async (req, res) => {
       GROUP BY p.id ORDER BY p.created_at DESC LIMIT 3
     `, [eid]);
 
-    // Ranking gamificação top 5
-    const ranking = await all(`
-      SELECT u.id, u.nome, u.avatar, COALESCE(SUM(p.pontos),0) as total_pontos
-      FROM usuarios u
-      LEFT JOIN cultura_pontos p ON p.usuario_id = u.id AND p.empresa_id = $1
-      WHERE u.empresa_id = $2 AND u.ativo = 1
-      GROUP BY u.id, u.nome, u.avatar ORDER BY total_pontos DESC LIMIT 5
-    `, [eid, eid]);
-
     // Valores da empresa (institucional tipo valores)
     const valores = await get(`
       SELECT * FROM cultura_institucional
@@ -75,7 +56,7 @@ router.get('/dashboard', async (req, res) => {
       LIMIT 1
     `, [eid]);
 
-    res.json({ comunicados, reconhecimentos, aniversariantes, pesquisas, ranking, valores });
+    res.json({ comunicados, reconhecimentos, aniversariantes, pesquisas, valores });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -160,8 +141,6 @@ router.post('/reconhecimentos', async (req, res) => {
       'INSERT INTO cultura_reconhecimentos (id,empresa_id,tipo,de_usuario_id,para_usuario_id,valor,descricao,publico) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
       [id, empId(req), tipo||'elogio', req.usuario.id, para_usuario_id, valor||null, descricao, publico!==false?1:0]
     );
-    // Conceder pontos ao reconhecido
-    await adicionarPontos(empId(req), para_usuario_id, 'reconhecimento_recebido', 15, `Reconhecimento: ${tipo||'elogio'}`);
     res.json({ id });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -336,7 +315,6 @@ router.post('/pesquisas/:id/responder', async (req, res) => {
       'INSERT INTO cultura_pesquisa_respostas (id,pesquisa_id,usuario_id,respostas) VALUES ($1,$2,$3,$4)',
       [id, req.params.id, usuarioId, JSON.stringify(respostas)]
     );
-    await adicionarPontos(empId(req), req.usuario.id, 'pesquisa_respondida', 5, 'Pesquisa respondida');
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -391,28 +369,6 @@ router.delete('/biblioteca/:id', async (req, res) => {
   try {
     await run('DELETE FROM cultura_biblioteca WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
     res.json({ ok: true });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
-
-// ─── GAMIFICAÇÃO ──────────────────────────────────────────────────────────────
-router.get('/gamificacao', async (req, res) => {
-  try {
-    const eid = empId(req);
-    const ranking = await all(`
-      SELECT u.id, u.nome, u.avatar, u.departamento_id,
-             COALESCE(SUM(p.pontos),0) as total_pontos,
-             COUNT(DISTINCT m.id) as total_medalhas
-      FROM usuarios u
-      LEFT JOIN cultura_pontos p ON p.usuario_id=u.id AND p.empresa_id=$1
-      LEFT JOIN cultura_medalhas m ON m.usuario_id=u.id AND m.empresa_id=$2
-      WHERE u.empresa_id=$3 AND u.ativo=1
-      GROUP BY u.id, u.nome, u.avatar, u.departamento_id ORDER BY total_pontos DESC
-    `, [eid, eid, eid]);
-
-    const meusPontos = await all('SELECT * FROM cultura_pontos WHERE empresa_id=$1 AND usuario_id=$2 ORDER BY created_at DESC LIMIT 20', [eid, req.usuario.id]);
-    const minhasMedalhas = await all('SELECT * FROM cultura_medalhas WHERE empresa_id=$1 AND usuario_id=$2 ORDER BY created_at DESC', [eid, req.usuario.id]);
-
-    res.json({ ranking, meusPontos, minhasMedalhas });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
