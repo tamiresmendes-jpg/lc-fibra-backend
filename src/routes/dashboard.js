@@ -20,6 +20,9 @@ router.get('/', async (req, res) => {
       popsLancados,
       solicitacoesAuditoria,
       popsMaisVistos,
+      muralAvisos,
+      institucional,
+      proximosEventos,
     ] = await Promise.all([
       get(`SELECT
         (SELECT COUNT(*) FROM usuarios     WHERE empresa_id=$1 AND ativo=1)           as total_colaboradores,
@@ -70,6 +73,18 @@ router.get('/', async (req, res) => {
            FROM pops p LEFT JOIN categorias_pop c ON c.id = p.categoria_id
            WHERE p.empresa_id=$1 AND p.status='ativo' AND p.total_visualizacoes > 0
            ORDER BY p.total_visualizacoes DESC LIMIT 5`, [eid]),
+      all(`SELECT m.id, m.titulo, m.conteudo, m.tipo, m.fixado, m.created_at, u.nome as autor_nome
+           FROM cultura_mural m LEFT JOIN usuarios u ON u.id = m.criado_por
+           WHERE m.empresa_id=$1
+             AND (m.data_expiracao IS NULL OR m.data_expiracao >= CURRENT_DATE)
+           ORDER BY m.fixado DESC, m.created_at DESC LIMIT 5`, [eid]),
+      all(`SELECT tipo, titulo, conteudo FROM cultura_institucional
+           WHERE empresa_id=$1 AND ativo=1 AND tipo IN ('missao','visao','valores')
+           ORDER BY tipo`, [eid]),
+      all(`SELECT id, titulo, descricao, data_inicio, data_fim, local, tipo
+           FROM cultura_eventos
+           WHERE empresa_id=$1 AND data_inicio >= CURRENT_DATE
+           ORDER BY data_inicio ASC LIMIT 5`, [eid]),
     ]);
 
     const totalColaboradores = rowResumo.total_colaboradores;
@@ -107,7 +122,10 @@ router.get('/', async (req, res) => {
       popsLancados,
       popsEmRevisao,
       solicitacoesAuditoria,
-      popsMaisVistos
+      popsMaisVistos,
+      muralAvisos,
+      institucional,
+      proximosEventos,
     });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
