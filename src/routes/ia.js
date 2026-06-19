@@ -478,7 +478,7 @@ Regras absolutas:
 - Se o documento for muito curto ou informal, ainda assim estruture o máximo possível`;
 
   const msg = await client.messages.create({
-    model: 'claude-haiku-4-5',
+    model: 'claude-haiku-4-5-20251001',
     max_tokens: 3000,
     messages: [{ role: 'user', content: prompt }],
   });
@@ -591,14 +591,17 @@ function extrairSemIA(texto, nomeArquivo) {
   }
 
   // ── 1. Metadados básicos ──────────────────────────────────────────────────
-  // Título: primeira linha que NÃO seja item de lista, metadado ou muito curta
+  // Palavras genéricas que NÃO são o título real (cabeçalhos de template)
+  const linhasGenericas = /^(procedimento operacional|pop|pr[oó]cedimento|instru[çc][aã]o de trabalho|it[- ]?\d|pop[- ]?\d|pr[- ]?\d|lc fibra|vivo|empresa|manual|n[oó]rma|descri[çc][aã]o|elabora[çc][aã]o|emiss[aã]o|revis[aã]o|aprovado|folha \d|p[aá]g|page|\d{2}\/\d{2}\/\d{4})$/i;
+
   const titulo = linhas.find(l =>
-    l.length > 5 && l.length < 150 &&
-    !/^\d+[\.\)]\s/.test(l) &&        // não começa com "1. " ou "1)"
-    !/^[-\•\*]\s/.test(l) &&           // não é item com marcador
+    l.length > 8 && l.length < 120 &&
+    !/^\d+[\.\)]\s/.test(l) &&
+    !/^[-\•\*]\s/.test(l) &&
     !/^\d+$/.test(l) &&
-    !/^(vers[aã]o|data|departamento|elaborad|aprovad|p[aá]gina|pg\.|cod[ií]go|status)/i.test(l)
-  ) || nomeArquivo.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ');
+    !/^(vers[aã]o|data|departamento|elaborad|aprovad|p[aá]gina|pg\.|cod[ií]go|status)/i.test(l) &&
+    !linhasGenericas.test(l.trim())
+  ) || nomeArquivo.replace(/\.[^.]+$/, '').replace(/[-_]/g, ' ').replace(/^pop[\s-]?\d+[\s-]?/i, '').trim();
 
   const versaoMatch = texto.match(/vers[aã]o[\s:]*([0-9]+(?:\.[0-9]+)*)/i);
   const deptoMatch  = texto.match(/(?:departamento|[aá]rea|setor)[\s:]+([^\n]{3,60})/i);
@@ -813,14 +816,17 @@ router.post('/extrair-documento', async (req, res) => {
 
     // Usa IA se a chave estiver configurada, senão usa extração por palavras-chave
     let dados;
-    if (process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY.includes('SUA_CHAVE')) {
+    const temChave = process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY.includes('SUA_CHAVE');
+    if (temChave) {
       try {
         dados = await extrairComIA(texto, nome);
+        console.log('[extrair] modo: IA');
       } catch (e) {
-        console.error('IA falhou, usando fallback:', e.message);
+        console.error('[extrair] IA falhou (' + e.message + '), usando fallback por palavras-chave');
         dados = extrairSemIA(texto, nome);
       }
     } else {
+      console.log('[extrair] modo: palavras-chave (ANTHROPIC_API_KEY não configurada)');
       dados = extrairSemIA(texto, nome);
     }
 
