@@ -54,6 +54,7 @@ app.use('/api/unidades', require('./routes/unidades'));
 app.use('/api/redes-sociais', require('./routes/redes-sociais'));
 app.use('/api/feriados', require('./routes/feriados'));
 app.use('/api/coffee-breaks', require('./routes/coffee-breaks'));
+app.use('/api/interacoes', require('./routes/interacoes'));
 app.use('/api/empresa', require('./routes/empresa'));
 app.use('/api/audit-log', require('./routes/audit-log'));
 app.use('/api/lixeira', require('./routes/lixeira'));

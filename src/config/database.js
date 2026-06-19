@@ -771,6 +771,30 @@ async function initSchema() {
     )
   `);
 
+  // Interações genéricas (curtidas e comentários) — reutilizável por mural, eventos, campanhas, coffee, aniversário...
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS interacao_curtidas (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      UNIQUE(tipo, ref_id, usuario_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS interacao_comentarios (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      ref_id TEXT NOT NULL,
+      usuario_id TEXT,
+      texto TEXT NOT NULL,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Auditoria do sistema
   await pool.query(`
     CREATE TABLE IF NOT EXISTS audit_log (
