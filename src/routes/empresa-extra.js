@@ -100,8 +100,8 @@ router.post('/horarios', autenticar, async (req, res) => {
     const { unidade, periodo, tipo_atendimento, hora_abertura, hora_fechamento, fechado, observacao } = req.body;
     const id = uuidv4();
     await run(
-      `INSERT INTO empresa_horarios (id,empresa_id,unidade,periodo,tipo_atendimento,hora_abertura,hora_fechamento,fechado,observacao) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, unidade || 'Sede', periodo || 'seg_sab', tipo_atendimento || 'presencial', hora_abertura || null, hora_fechamento || null, fechado ? 1 : 0, observacao || null]
+      `INSERT INTO empresa_horarios (id,empresa_id,unidade,dia_semana,periodo,tipo_atendimento,hora_abertura,hora_fechamento,fechado,observacao) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, unidade || 'Sede', 0, periodo || 'seg', tipo_atendimento || 'presencial', hora_abertura || null, hora_fechamento || null, fechado ? 1 : 0, observacao || null]
     );
     res.status(201).json(await get(`SELECT * FROM empresa_horarios WHERE id = ?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar horário' }); }
@@ -114,7 +114,7 @@ router.put('/horarios/:id', autenticar, async (req, res) => {
     const { unidade, periodo, tipo_atendimento, hora_abertura, hora_fechamento, fechado, observacao } = req.body;
     await run(
       `UPDATE empresa_horarios SET unidade=?,periodo=?,tipo_atendimento=?,hora_abertura=?,hora_fechamento=?,fechado=?,observacao=? WHERE id=?`,
-      [unidade || 'Sede', periodo || 'seg_sab', tipo_atendimento || 'presencial', hora_abertura || null, hora_fechamento || null, fechado ? 1 : 0, observacao || null, req.params.id]
+      [unidade || 'Sede', periodo || 'seg', tipo_atendimento || 'presencial', hora_abertura || null, hora_fechamento || null, fechado ? 1 : 0, observacao || null, req.params.id]
     );
     res.json(await get(`SELECT * FROM empresa_horarios WHERE id = ?`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar horário' }); }
