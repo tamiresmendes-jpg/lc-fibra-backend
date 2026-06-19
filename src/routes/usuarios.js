@@ -123,21 +123,32 @@ router.get('/:id', async (req, res) => {
 // Atualizar usuário
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, permissoes_modulos } = req.body;
-    await run(`
-    UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-      setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?, permissoes_modulos=?
-    WHERE id=? AND empresa_id=?
-  `, [
+    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar } = req.body;
+    const base = [
       nome, perfil,
       departamento_id || null, cargo_id || null, gestor_id || null, setor_id || null,
       funcao || null, nivel || null,
       ativo !== undefined ? ativo : 1,
       bloqueado !== undefined ? bloqueado : 0,
       data_nascimento || null, cidade || null, avatar || null,
-      permissoes_modulos ? JSON.stringify(permissoes_modulos) : null,
-      req.params.id, req.usuario.empresa_id
-    ]);
+    ];
+
+    // Só atualiza permissoes_modulos quando foi explicitamente enviado no body
+    if ('permissoes_modulos' in req.body) {
+      const perms = req.body.permissoes_modulos;
+      await run(`
+        UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
+          setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+          permissoes_modulos=?
+        WHERE id=? AND empresa_id=?
+      `, [...base, perms ? JSON.stringify(perms) : null, req.params.id, req.usuario.empresa_id]);
+    } else {
+      await run(`
+        UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
+          setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?
+        WHERE id=? AND empresa_id=?
+      `, [...base, req.params.id, req.usuario.empresa_id]);
+    }
     res.json({ mensagem: 'Usuário atualizado' });
   } catch(err) {
     res.status(500).json({ erro: err.message });
