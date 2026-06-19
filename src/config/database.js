@@ -1062,6 +1062,7 @@ async function initSchema() {
 
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS foto TEXT`);
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS fixo INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS maps_url TEXT`);
 
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
