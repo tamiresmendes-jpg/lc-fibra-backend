@@ -55,12 +55,12 @@ router.get('/contatos', autenticar, async (req, res) => {
 
 router.post('/contatos', autenticar, async (req, res) => {
   try {
-    const { nome, cargo, email, telefone, whatsapp, departamento, observacao } = req.body;
+    const { nome, cargo, email, telefone, whatsapp, departamento, observacao, foto } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
     await run(
-      `INSERT INTO empresa_contatos (id,empresa_id,nome,cargo,email,telefone,whatsapp,departamento,observacao) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, nome, cargo || null, email || null, telefone || null, whatsapp || null, departamento || null, observacao || null]
+      `INSERT INTO empresa_contatos (id,empresa_id,nome,cargo,email,telefone,whatsapp,departamento,observacao,foto) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, nome, cargo || null, email || null, telefone || null, whatsapp || null, departamento || null, observacao || null, foto || null]
     );
     res.status(201).json(await get(`SELECT * FROM empresa_contatos WHERE id = ?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar contato' }); }
@@ -70,10 +70,10 @@ router.put('/contatos/:id', autenticar, async (req, res) => {
   try {
     const exist = await get(`SELECT id FROM empresa_contatos WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    const { nome, cargo, email, telefone, whatsapp, departamento, observacao } = req.body;
+    const { nome, cargo, email, telefone, whatsapp, departamento, observacao, foto } = req.body;
     await run(
-      `UPDATE empresa_contatos SET nome=?,cargo=?,email=?,telefone=?,whatsapp=?,departamento=?,observacao=? WHERE id=?`,
-      [nome, cargo || null, email || null, telefone || null, whatsapp || null, departamento || null, observacao || null, req.params.id]
+      `UPDATE empresa_contatos SET nome=?,cargo=?,email=?,telefone=?,whatsapp=?,departamento=?,observacao=?,foto=? WHERE id=?`,
+      [nome, cargo || null, email || null, telefone || null, whatsapp || null, departamento || null, observacao || null, foto !== undefined ? foto : exist.foto, req.params.id]
     );
     res.json(await get(`SELECT * FROM empresa_contatos WHERE id = ?`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar contato' }); }
