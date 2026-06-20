@@ -20,6 +20,9 @@ app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, l
 // autoNotificacao desativado — Central de Ciência é alimentada manualmente
 // app.use(require('./middleware/autoNotificacao'));
 app.use(require('./middleware/auditLog'));
+// Garante as regras de permissão no servidor (colaborador = somente leitura,
+// líder/gestor seguem o grupo). Roda antes das rotas em todas as mutações.
+app.use(require('./middleware/verificarPermissao'));
 
 app.use('/api/auth', require('./routes/auth'));
 app.use('/api/usuarios', require('./routes/usuarios'));

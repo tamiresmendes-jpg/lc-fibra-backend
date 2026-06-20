@@ -4,57 +4,7 @@ const jwt = require('jsonwebtoken');
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
-
-// Mescla permissões de módulos: retorna a união de perms do usuário + grupos
-// Nível mais alto vence: editar > visualizar > false
-function mesclarPermissoes(userPerms, grupoPermsList) {
-  if (!grupoPermsList || grupoPermsList.length === 0) return userPerms;
-  if (!userPerms && grupoPermsList.every(g => !g)) return null; // todos nulos = sem restrição
-  // Começa com as permissões do usuário ou cria um objeto vazio para mescla
-  const base = userPerms ? JSON.parse(JSON.stringify(userPerms)) : {};
-  for (const gPerms of grupoPermsList) {
-    if (!gPerms) return null; // grupo sem restrição → acesso total
-    for (const [modulo, valor] of Object.entries(gPerms)) {
-      if (!base[modulo] || base[modulo] === false) {
-        base[modulo] = valor;
-      } else if (valor && valor !== false) {
-        if (base[modulo] === true || base[modulo] === 'editar') continue; // já no máximo
-        if (valor === true || valor === 'editar') { base[modulo] = valor; continue; }
-        if (typeof base[modulo] === 'object' && typeof valor === 'object') {
-          base[modulo] = { enabled: true, itens: { ...(base[modulo].itens || {}) } };
-          for (const [item, nivelGrupo] of Object.entries(valor.itens || {})) {
-            const nivelAtual = base[modulo].itens[item];
-            if (!nivelAtual || nivelAtual === false) base[modulo].itens[item] = nivelGrupo;
-            else if (nivelAtual === 'visualizar' && (nivelGrupo === 'editar' || nivelGrupo === true)) base[modulo].itens[item] = nivelGrupo;
-          }
-        }
-      }
-    }
-  }
-  return base;
-}
-
-async function buscarPermsEfetivas(usuarioId, empresaId, permModulos) {
-  try {
-    // Grupos por usuário direto
-    const gruposDiretos = await all(
-      'SELECT g.permissoes_modulos FROM grupos_permissao g JOIN grupo_membros gm ON gm.grupo_id = g.id WHERE gm.usuario_id = ? AND g.empresa_id = ?',
-      [usuarioId, empresaId]
-    );
-    // Grupos por departamento
-    const usuario = await get('SELECT departamento_id FROM usuarios WHERE id = ?', [usuarioId]);
-    let gruposDept = [];
-    if (usuario?.departamento_id) {
-      gruposDept = await all(
-        'SELECT g.permissoes_modulos FROM grupos_permissao g JOIN grupo_departamentos gd ON gd.grupo_id = g.id WHERE gd.departamento_id = ? AND g.empresa_id = ?',
-        [usuario.departamento_id, empresaId]
-      );
-    }
-    const todasPerms = [...gruposDiretos, ...gruposDept]
-      .map(g => { try { return g.permissoes_modulos ? JSON.parse(g.permissoes_modulos) : null; } catch { return null; } });
-    return mesclarPermissoes(permModulos, todasPerms);
-  } catch { return permModulos; }
-}
+const { buscarPermsEfetivas } = require('../utils/permissoes');
 
 const rateLimit = require('express-rate-limit');
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { erro: 'Muitas tentativas. Tente novamente em 15 minutos.' } });
