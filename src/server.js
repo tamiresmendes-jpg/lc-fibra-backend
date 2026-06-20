@@ -60,6 +60,8 @@ app.use('/api/audit-log', require('./routes/audit-log'));
 app.use('/api/lixeira', require('./routes/lixeira'));
 app.use('/api/grupos-permissao', require('./routes/grupos-permissao'));
 app.use('/api/ferias', require('./routes/ferias'));
+app.use('/api/agenda', require('./routes/agenda'));
+app.use('/api/calendario', require('./routes/calendario'));
 app.use('/api/cultura', require('./routes/cultura-extra'));
 app.use('/api/empresa', require('./routes/empresa-extra'));
 app.use('/api/processos', require('./routes/processos-extra'));

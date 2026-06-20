@@ -1093,6 +1093,20 @@ async function initSchema() {
   await pool.query(`ALTER TABLE coffee_breaks ADD COLUMN IF NOT EXISTS imagem TEXT`);
   await pool.query(`ALTER TABLE coffee_breaks ADD COLUMN IF NOT EXISTS cidade TEXT`);
 
+  // Agenda pessoal de compromissos
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS agenda_itens (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      data_hora TEXT NOT NULL,
+      status TEXT DEFAULT 'pendente',
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];
   for (const t of tabelasSoftDelete) {
