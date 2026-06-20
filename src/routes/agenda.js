@@ -17,14 +17,14 @@ router.get('/', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Itens pendentes nos próximos 15 minutos — usado pelo notificador
+// Itens que já chegaram a hora (ou estão atrasados) e ainda não foram resolvidos —
+// usado pelo notificador. Continuam aparecendo até o usuário marcar feito ou reagendar.
 router.get('/proximos', async (req, res) => {
   try {
     const rows = await all(
       `SELECT * FROM agenda_itens
        WHERE empresa_id=? AND usuario_id=? AND status='pendente'
-         AND data_hora >= TO_CHAR(NOW() - INTERVAL '3 hours' - INTERVAL '1 minute', 'YYYY-MM-DD HH24:MI:SS')
-         AND data_hora <= TO_CHAR(NOW() - INTERVAL '3 hours' + INTERVAL '14 minutes', 'YYYY-MM-DD HH24:MI:SS')
+         AND data_hora <= TO_CHAR(NOW() - INTERVAL '3 hours' + INTERVAL '1 minute', 'YYYY-MM-DD HH24:MI:SS')
        ORDER BY data_hora ASC`,
       [req.usuario.empresa_id, req.usuario.id]
     );
@@ -69,13 +69,26 @@ router.post('/:id/concluir', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Adiar — move data_hora em X minutos
+// Adiar / reagendar — aceita uma nova data/hora absoluta (data_hora) OU X minutos
 router.post('/:id/adiar', async (req, res) => {
   try {
-    const mins = parseInt(req.body.minutos, 10);
-    if (!mins || mins < 1 || mins > 1440) return res.status(400).json({ erro: 'Informe entre 1 e 1440 minutos' });
     const existe = await get(`SELECT id FROM agenda_itens WHERE id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
     if (!existe) return res.status(404).json({ erro: 'Não encontrado' });
+
+    const { data_hora, minutos } = req.body;
+
+    if (data_hora) {
+      // Reagendar para uma data/hora específica escolhida pelo usuário
+      if (!/^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}/.test(data_hora)) {
+        return res.status(400).json({ erro: 'Data/hora inválida' });
+      }
+      const dh = data_hora.replace('T', ' ').slice(0, 19);
+      await run(`UPDATE agenda_itens SET status='pendente', data_hora=? WHERE id=?`, [dh, req.params.id]);
+      return res.json(await get(`SELECT * FROM agenda_itens WHERE id=?`, [req.params.id]));
+    }
+
+    const mins = parseInt(minutos, 10);
+    if (!mins || mins < 1 || mins > 10080) return res.status(400).json({ erro: 'Informe a nova data/hora ou os minutos para adiar' });
     await run(
       `UPDATE agenda_itens SET status='pendente',
          data_hora=TO_CHAR(data_hora::timestamp + (? || ' minutes')::INTERVAL, 'YYYY-MM-DD HH24:MI:SS')

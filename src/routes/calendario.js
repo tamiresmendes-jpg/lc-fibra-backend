@@ -9,11 +9,12 @@ router.use(autenticar);
 router.get('/', async (req, res) => {
   try {
     const mes = (req.query.mes || '').slice(0, 7) || new Date().toISOString().slice(0, 7);
+    const mesMM = mes.slice(5, 7); // mês "MM" para feriados recorrentes
     const eid = req.usuario.empresa_id;
     const uid = req.usuario.id;
     const safe = async (fn) => { try { return await fn(); } catch { return []; } };
 
-    const [agenda, reunioes, eventos, coffeeBreaks, ferias] = await Promise.all([
+    const [agenda, reunioes, eventos, coffeeBreaks, ferias, feriados, avisos] = await Promise.all([
       safe(() => all(
         `SELECT id, titulo, descricao, data_hora as data, NULL as data_fim, 'agenda' as tipo
          FROM agenda_itens
@@ -49,9 +50,26 @@ router.get('/', async (req, res) => {
          ORDER BY f.data_inicio`,
         [eid, mes, mes]
       )),
+      safe(() => all(
+        `SELECT id, nome as titulo, observacao as descricao, data, NULL as data_fim, tipo as subtipo, 'feriado' as tipo
+         FROM feriados
+         WHERE empresa_id=? AND ativo=1 AND (substr(data,1,7)=? OR (recorrente=1 AND substr(data,6,2)=?))
+         ORDER BY data`,
+        [eid, mes, mesMM]
+      )),
+      safe(() => all(
+        `SELECT id, titulo, conteudo as descricao,
+                COALESCE(data_publicacao, data_programada, data_inicio) as data,
+                NULL as data_fim, tipo as subtipo, 'aviso' as tipo
+         FROM comunicados
+         WHERE empresa_id=? AND ativo=1
+           AND substr(COALESCE(data_publicacao, data_programada, data_inicio),1,7)=?
+         ORDER BY data`,
+        [eid, mes]
+      )),
     ]);
 
-    res.json({ agenda, reunioes, eventos, coffeeBreaks, ferias });
+    res.json({ agenda, reunioes, eventos, coffeeBreaks, ferias, feriados, avisos });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
