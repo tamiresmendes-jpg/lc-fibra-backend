@@ -1115,11 +1115,8 @@ async function initSchema() {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT`);
   }
 
-  // Chave de proteção do nome do sistema (só o dono da empresa pode alterar)
+  // Chave de proteção do sistema (acesso exclusivo do dono)
   await pool.query(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS chave_sistema TEXT`);
-
-  // Renomeia empresa padrão para o novo nome do sistema
-  await pool.query(`UPDATE empresas SET nome = 'Venux' WHERE nome = 'LC FIBRA'`);
 }
 
 async function seedAdmin() {
