@@ -1114,6 +1114,12 @@ async function initSchema() {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_por TEXT`);
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT`);
   }
+
+  // Chave de proteção do nome do sistema (só o dono da empresa pode alterar)
+  await pool.query(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS chave_sistema TEXT`);
+
+  // Renomeia empresa padrão para o novo nome do sistema
+  await pool.query(`UPDATE empresas SET nome = 'Venux' WHERE nome = 'LC FIBRA'`);
 }
 
 async function seedAdmin() {
@@ -1123,7 +1129,7 @@ async function seedAdmin() {
   const admin = await get("SELECT id FROM usuarios WHERE email = 'admin@sistema.com'");
   if (!admin) {
     const empresaId = uuidv4();
-    await run("INSERT INTO empresas (id, nome, cnpj) VALUES (?, 'LC FIBRA', '00.000.000/0001-00')", [empresaId]);
+    await run("INSERT INTO empresas (id, nome, cnpj) VALUES (?, 'Venux', '00.000.000/0001-00')", [empresaId]);
     const senhaHash = bcrypt.hashSync('admin123', 10);
     await run(
       "INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil) VALUES (?, ?, 'Administrador', 'admin@sistema.com', ?, 'admin')",
