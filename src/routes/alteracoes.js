@@ -8,9 +8,21 @@ router.use(autenticar);
 
 function eid(req) { return req.usuario.empresa_id; }
 
-// Migração: garante coluna publico_alvo na tabela
+// Migrações de startup
 (async () => {
+  // Garante coluna publico_alvo
   try { await run("ALTER TABLE alteracoes ADD COLUMN publico_alvo TEXT DEFAULT 'todos'"); } catch {}
+
+  // Limpeza única: apaga histórico automático antigo (roda só uma vez)
+  try {
+    await run("CREATE TABLE IF NOT EXISTS _migracoes (nome TEXT PRIMARY KEY, executado_em TEXT)");
+    const jaFez = await get("SELECT nome FROM _migracoes WHERE nome='limpar_ciencia_automatica_v1'");
+    if (!jaFez) {
+      await run('DELETE FROM alteracao_ciencias');
+      await run('DELETE FROM alteracoes');
+      await run("INSERT INTO _migracoes (nome, executado_em) VALUES ('limpar_ciencia_automatica_v1', datetime('now'))");
+    }
+  } catch {}
 })();
 
 // Verifica se usuario tem acesso ao modulo
@@ -109,10 +121,10 @@ router.get('/contador', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Criar notificação (admin/gestor)
+// Criar notificação (admin/gestor/lider)
 router.post('/', async (req, res) => {
   try {
-    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { modulo, titulo, tipo_acao, nivel, descricao, versao_anterior, versao_atual, publico_alvo } = req.body;
     if (!modulo || !titulo || !tipo_acao) return res.status(400).json({ erro: 'Campos obrigatórios: modulo, titulo, tipo_acao' });
     const id = uuidv4();
@@ -129,7 +141,7 @@ router.post('/', async (req, res) => {
 // Editar
 router.put('/:id', async (req, res) => {
   try {
-    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { modulo, titulo, tipo_acao, nivel, descricao, versao_anterior, versao_atual, publico_alvo } = req.body;
     await run(
       `UPDATE alteracoes SET modulo=?,titulo=?,tipo_acao=?,nivel=?,descricao=?,versao_anterior=?,versao_atual=?,publico_alvo=?
@@ -144,7 +156,7 @@ router.put('/:id', async (req, res) => {
 // Excluir (soft delete)
 router.delete('/:id', async (req, res) => {
   try {
-    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     await run('UPDATE alteracoes SET ativo=0 WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -175,7 +187,7 @@ router.post('/:id/ciente', async (req, res) => {
 // Dashboard gerencial
 router.get('/dashboard', async (req, res) => {
   try {
-    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const totalAlteracoes = (await get('SELECT COUNT(*) as t FROM alteracoes WHERE empresa_id=? AND ativo=1', [eid(req)])).t;
     const totalCiencias   = (await get('SELECT COUNT(DISTINCT usuario_id) as t FROM alteracao_ciencias ac JOIN alteracoes a ON a.id=ac.alteracao_id WHERE a.empresa_id=?', [eid(req)])).t;
     const totalUsuarios   = (await get('SELECT COUNT(*) as t FROM usuarios WHERE empresa_id=? AND ativo=1', [eid(req)])).t;
