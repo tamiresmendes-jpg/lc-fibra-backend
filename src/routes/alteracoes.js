@@ -8,6 +8,11 @@ router.use(autenticar);
 
 function eid(req) { return req.usuario.empresa_id; }
 
+// Migração: garante coluna publico_alvo na tabela
+(async () => {
+  try { await run("ALTER TABLE alteracoes ADD COLUMN publico_alvo TEXT DEFAULT 'todos'"); } catch {}
+})();
+
 // Verifica se usuario tem acesso ao modulo
 function usuarioTemAcessoModulo(usuario, modulo) {
   if (usuario.perfil === 'admin') return true;
@@ -20,7 +25,22 @@ function usuarioTemAcessoModulo(usuario, modulo) {
   return true;
 }
 
-// Lista alteracoes (admin vê todas, colaborador vê as do seu acesso)
+// Verifica se o usuário deve ver a notificação com base em publico_alvo
+function usuarioPodeVer(alteracao, usuario) {
+  const pub = alteracao.publico_alvo || 'todos';
+  if (pub === 'todos') return true;
+  // Admin e gestor sempre veem tudo (são quem cria)
+  if (usuario.perfil === 'admin' || usuario.perfil === 'gestor') return true;
+  if (pub === 'lider') return usuario.perfil === 'lider';
+  if (pub === 'gestor') return false; // gestor já retornou true acima
+  if (pub.startsWith('departamento:')) {
+    const deptId = pub.split(':')[1];
+    return String(usuario.departamento_id) === String(deptId);
+  }
+  return true;
+}
+
+// Lista alterações (aplica filtro publico_alvo)
 router.get('/', async (req, res) => {
   try {
     const { modulo, nivel, pendentes } = req.query;
@@ -35,7 +55,13 @@ router.get('/', async (req, res) => {
     sql += ' ORDER BY a.created_at DESC';
     let lista = await all(sql, params);
 
-    // Para cada alteracao, verifica se usuario ja leu
+    // Busca dados completos do usuário para filtro de departamento
+    const usuarioCompleto = await get('SELECT * FROM usuarios WHERE id=?', [req.usuario.id]);
+
+    // Filtra por publico_alvo
+    lista = lista.filter(a => usuarioPodeVer(a, usuarioCompleto || req.usuario));
+
+    // Para cada alteração, verifica se usuário já leu
     lista = await Promise.all(lista.map(async a => {
       const ciencia = await get('SELECT id, created_at FROM alteracao_ciencias WHERE alteracao_id=? AND usuario_id=?', [a.id, req.usuario.id]);
       return { ...a, eu_li: !!ciencia, data_ciencia: ciencia?.created_at };
@@ -47,7 +73,7 @@ router.get('/', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Pendentes do usuario logado
+// Pendentes do usuário logado
 router.get('/pendentes', async (req, res) => {
   try {
     const usuario = await get('SELECT * FROM usuarios WHERE id=?', [req.usuario.id]);
@@ -60,8 +86,9 @@ router.get('/pendentes', async (req, res) => {
       ORDER BY a.created_at DESC
     `, [eid(req), req.usuario.id]);
 
-    // Filtra por permissao de modulo
-    const filtrados = lista.filter(a => usuarioTemAcessoModulo(usuario, a.modulo));
+    const filtrados = lista
+      .filter(a => usuarioTemAcessoModulo(usuario, a.modulo))
+      .filter(a => usuarioPodeVer(a, usuario));
     res.json(filtrados);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -71,24 +98,30 @@ router.get('/contador', async (req, res) => {
   try {
     const usuario = await get('SELECT * FROM usuarios WHERE id=?', [req.usuario.id]);
     const lista = await all(`
-      SELECT a.modulo FROM alteracoes a
+      SELECT a.id, a.modulo, a.publico_alvo FROM alteracoes a
       WHERE a.empresa_id = ? AND a.ativo = 1
       AND NOT EXISTS (SELECT 1 FROM alteracao_ciencias c WHERE c.alteracao_id=a.id AND c.usuario_id=?)
     `, [eid(req), req.usuario.id]);
-    const filtrados = lista.filter(a => usuarioTemAcessoModulo(usuario, a.modulo));
+    const filtrados = lista
+      .filter(a => usuarioTemAcessoModulo(usuario, a.modulo))
+      .filter(a => usuarioPodeVer(a, usuario));
     res.json({ total: filtrados.length });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Criar alteracao (admin/gestor)
+// Criar notificação (admin/gestor)
 router.post('/', async (req, res) => {
   try {
     if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const { modulo, titulo, tipo_acao, nivel, descricao, versao_anterior, versao_atual } = req.body;
+    const { modulo, titulo, tipo_acao, nivel, descricao, versao_anterior, versao_atual, publico_alvo } = req.body;
     if (!modulo || !titulo || !tipo_acao) return res.status(400).json({ erro: 'Campos obrigatórios: modulo, titulo, tipo_acao' });
     const id = uuidv4();
-    await run(`INSERT INTO alteracoes (id,empresa_id,modulo,titulo,tipo_acao,nivel,descricao,versao_anterior,versao_atual,criado_por)
-      VALUES (?,?,?,?,?,?,?,?,?,?)`, [id, eid(req), modulo, titulo, tipo_acao, nivel||'informativa', descricao||null, versao_anterior||null, versao_atual||null, req.usuario.id]);
+    await run(
+      `INSERT INTO alteracoes (id,empresa_id,modulo,titulo,tipo_acao,nivel,descricao,versao_anterior,versao_atual,criado_por,publico_alvo)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, eid(req), modulo, titulo, tipo_acao, nivel||'informativa', descricao||null,
+       versao_anterior||null, versao_atual||null, req.usuario.id, publico_alvo||'todos']
+    );
     res.status(201).json({ id });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -97,9 +130,13 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const { modulo, titulo, tipo_acao, nivel, descricao, versao_anterior, versao_atual } = req.body;
-    await run(`UPDATE alteracoes SET modulo=?,titulo=?,tipo_acao=?,nivel=?,descricao=?,versao_anterior=?,versao_atual=? WHERE id=? AND empresa_id=?`,
-      [modulo, titulo, tipo_acao, nivel||'informativa', descricao||null, versao_anterior||null, versao_atual||null, req.params.id, eid(req)]);
+    const { modulo, titulo, tipo_acao, nivel, descricao, versao_anterior, versao_atual, publico_alvo } = req.body;
+    await run(
+      `UPDATE alteracoes SET modulo=?,titulo=?,tipo_acao=?,nivel=?,descricao=?,versao_anterior=?,versao_atual=?,publico_alvo=?
+       WHERE id=? AND empresa_id=?`,
+      [modulo, titulo, tipo_acao, nivel||'informativa', descricao||null,
+       versao_anterior||null, versao_atual||null, publico_alvo||'todos', req.params.id, eid(req)]
+    );
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -113,7 +150,18 @@ router.delete('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Confirmar ciencia
+// Limpar todo o histórico (admin apenas)
+router.delete('/limpar/historico', async (req, res) => {
+  try {
+    if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas administradores podem limpar o histórico.' });
+    const ids = await all('SELECT id FROM alteracoes WHERE empresa_id=?', [eid(req)]);
+    for (const { id } of ids) await run('DELETE FROM alteracao_ciencias WHERE alteracao_id=?', [id]);
+    await run('DELETE FROM alteracoes WHERE empresa_id=?', [eid(req)]);
+    res.json({ ok: true, removidos: ids.length });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Confirmar ciência
 router.post('/:id/ciente', async (req, res) => {
   try {
     const existe = await get('SELECT id FROM alteracao_ciencias WHERE alteracao_id=? AND usuario_id=?', [req.params.id, req.usuario.id]);
@@ -133,35 +181,26 @@ router.get('/dashboard', async (req, res) => {
     const totalUsuarios   = (await get('SELECT COUNT(*) as t FROM usuarios WHERE empresa_id=? AND ativo=1', [eid(req)])).t;
 
     const porModulo = await all(`
-      SELECT a.modulo,
-        COUNT(DISTINCT a.id) as total_alteracoes,
-        COUNT(DISTINCT ac.usuario_id) as total_cientes
-      FROM alteracoes a
-      LEFT JOIN alteracao_ciencias ac ON ac.alteracao_id = a.id
-      WHERE a.empresa_id=? AND a.ativo=1
-      GROUP BY a.modulo ORDER BY total_alteracoes DESC
+      SELECT a.modulo, COUNT(DISTINCT a.id) as total_alteracoes, COUNT(DISTINCT ac.usuario_id) as total_cientes
+      FROM alteracoes a LEFT JOIN alteracao_ciencias ac ON ac.alteracao_id = a.id
+      WHERE a.empresa_id=? AND a.ativo=1 GROUP BY a.modulo ORDER BY total_alteracoes DESC
     `, [eid(req)]);
 
     const porNivel = await all('SELECT nivel, COUNT(*) as total FROM alteracoes WHERE empresa_id=? AND ativo=1 GROUP BY nivel', [eid(req)]);
 
     const recentes = await all(`
-      SELECT a.*, u.nome as criador_nome,
-        COUNT(DISTINCT ac.usuario_id) as total_cientes
+      SELECT a.*, u.nome as criador_nome, COUNT(DISTINCT ac.usuario_id) as total_cientes
       FROM alteracoes a
       LEFT JOIN usuarios u ON u.id = a.criado_por
       LEFT JOIN alteracao_ciencias ac ON ac.alteracao_id = a.id
-      WHERE a.empresa_id=? AND a.ativo=1
-      GROUP BY a.id ORDER BY a.created_at DESC LIMIT 10
+      WHERE a.empresa_id=? AND a.ativo=1 GROUP BY a.id ORDER BY a.created_at DESC LIMIT 10
     `, [eid(req)]);
 
-    // Usuarios pendentes por alteracao critica
     const criticas = await all(`
       SELECT a.id, a.titulo, a.modulo,
         (SELECT COUNT(*) FROM usuarios WHERE empresa_id=? AND ativo=1) -
         (SELECT COUNT(*) FROM alteracao_ciencias WHERE alteracao_id=a.id) as pendentes
-      FROM alteracoes a
-      WHERE a.empresa_id=? AND a.ativo=1 AND a.nivel='critica'
-      ORDER BY pendentes DESC LIMIT 5
+      FROM alteracoes a WHERE a.empresa_id=? AND a.ativo=1 AND a.nivel='critica' ORDER BY pendentes DESC LIMIT 5
     `, [eid(req), eid(req)]);
 
     res.json({ totalAlteracoes, totalCiencias, totalUsuarios, porModulo, porNivel, recentes, criticas });
