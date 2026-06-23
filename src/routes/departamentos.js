@@ -11,7 +11,7 @@ router.get('/', async (req, res) => {
     const itens = await all(`
     SELECT d.*, COUNT(u.id) as total_colaboradores
     FROM departamentos d
-    LEFT JOIN usuarios u ON u.departamento_id = d.id AND u.ativo = 1
+    LEFT JOIN usuarios u ON u.departamento_id = d.id AND u.ativo = 1 AND COALESCE(u.tipo_usuario,'colaborador')='colaborador'
     WHERE d.empresa_id = ? AND d.excluido_em IS NULL
     GROUP BY d.id ORDER BY d.nome
   `, [req.usuario.empresa_id]);

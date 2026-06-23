@@ -22,7 +22,7 @@ router.get('/', async (req, res) => {
       popsMaisVistos,
     ] = await Promise.all([
       get(`SELECT
-        (SELECT COUNT(*) FROM usuarios     WHERE empresa_id=$1 AND ativo=1)           as total_colaboradores,
+        (SELECT COUNT(*) FROM usuarios     WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador') as total_colaboradores,
         (SELECT COUNT(*) FROM departamentos WHERE empresa_id=$1)                       as total_departamentos,
         (SELECT COUNT(*) FROM pops          WHERE empresa_id=$1)                       as total_pops,
         (SELECT COUNT(*) FROM pops          WHERE empresa_id=$1 AND status='ativo')    as pops_ativos,
@@ -87,7 +87,7 @@ router.get('/', async (req, res) => {
            ORDER BY f.data_inicio ASC LIMIT 6`, [eid])),
       safe(() => all(`SELECT id, nome, avatar, data_nascimento
            FROM usuarios
-           WHERE empresa_id=$1 AND ativo=1 AND data_nascimento IS NOT NULL`, [eid])),
+           WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador' AND data_nascimento IS NOT NULL`, [eid])),
     ]);
 
     const totalColaboradores = rowResumo.total_colaboradores;

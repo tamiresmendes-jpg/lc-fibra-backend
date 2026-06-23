@@ -1117,6 +1117,12 @@ async function initSchema() {
 
   // Chave de proteção do sistema (acesso exclusivo do dono)
   await pool.query(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS chave_sistema TEXT`);
+
+  // Tipo de usuário: 'colaborador' (padrão, entra em RH/escalas/contagens) ou
+  // 'administrativo' (sócios, diretores, consultores, auditores, parceiros, etc.
+  // — têm acesso e permissões próprias, mas NÃO contam como colaboradores).
+  await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tipo_usuario TEXT DEFAULT 'colaborador'`);
+  await pool.query(`UPDATE usuarios SET tipo_usuario = 'colaborador' WHERE tipo_usuario IS NULL`).catch(() => {});
 }
 
 async function seedAdmin() {

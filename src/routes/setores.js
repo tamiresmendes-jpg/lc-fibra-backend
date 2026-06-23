@@ -10,7 +10,7 @@ router.get('/', async (req, res) => {
   try {
     const setores = await all(`
       SELECT s.*, d.nome as departamento_nome, u.nome as responsavel_nome,
-             (SELECT COUNT(*) FROM usuarios WHERE setor_id = s.id AND ativo = 1) as total_membros
+             (SELECT COUNT(*) FROM usuarios WHERE setor_id = s.id AND ativo = 1 AND COALESCE(tipo_usuario,'colaborador')='colaborador') as total_membros
       FROM setores s
       LEFT JOIN departamentos d ON d.id = s.departamento_id
       LEFT JOIN usuarios u ON u.id = s.responsavel_id

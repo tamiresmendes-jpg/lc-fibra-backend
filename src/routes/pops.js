@@ -319,7 +319,7 @@ router.delete('/:id', async (req, res) => {
     const pop = await get('SELECT titulo FROM pops WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
     if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
     await run(
-      `UPDATE pops SET excluido_em=datetime('now'), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4`,
+      `UPDATE pops SET excluido_em=NOW(), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4`,
       [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
     );
     res.json({ mensagem: 'Removido', titulo: pop.titulo });

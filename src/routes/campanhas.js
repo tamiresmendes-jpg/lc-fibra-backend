@@ -70,13 +70,13 @@ router.post('/', async (req, res) => {
     // Gera participantes conforme tipo de público
     let users = [];
     if (tipo_publico === 'todos') {
-      users = await all('SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1', [eid(req)]);
+      users = await all("SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador'", [eid(req)]);
     } else if (tipo_publico === 'departamento' && publico_ids?.length) {
       const placeholders = publico_ids.map((_, i) => `$${i + 2}`).join(',');
-      users = await all(`SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND departamento_id IN (${placeholders})`, [eid(req), ...publico_ids]);
+      users = await all(`SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador' AND departamento_id IN (${placeholders})`, [eid(req), ...publico_ids]);
     } else if (tipo_publico === 'cargo' && publico_ids?.length) {
       const placeholders = publico_ids.map((_, i) => `$${i + 2}`).join(',');
-      users = await all(`SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND cargo_id IN (${placeholders})`, [eid(req), ...publico_ids]);
+      users = await all(`SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador' AND cargo_id IN (${placeholders})`, [eid(req), ...publico_ids]);
     } else if (tipo_publico === 'individual' && publico_ids?.length) {
       const placeholders = publico_ids.map((_, i) => `$${i + 2}`).join(',');
       users = await all(`SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND id IN (${placeholders})`, [eid(req), ...publico_ids]);

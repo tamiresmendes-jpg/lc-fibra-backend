@@ -20,7 +20,7 @@ function eid(req) { return req.usuario.empresa_id; }
     if (!jaFez) {
       await run('DELETE FROM alteracao_ciencias');
       await run('DELETE FROM alteracoes');
-      await run("INSERT INTO _migracoes (nome, executado_em) VALUES ('limpar_ciencia_automatica_v1', datetime('now'))");
+      await run("INSERT INTO _migracoes (nome, executado_em) VALUES ('limpar_ciencia_automatica_v1', NOW()::text)");
     }
   } catch {}
 })();
@@ -190,7 +190,7 @@ router.get('/dashboard', async (req, res) => {
     if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const totalAlteracoes = (await get('SELECT COUNT(*) as t FROM alteracoes WHERE empresa_id=? AND ativo=1', [eid(req)])).t;
     const totalCiencias   = (await get('SELECT COUNT(DISTINCT usuario_id) as t FROM alteracao_ciencias ac JOIN alteracoes a ON a.id=ac.alteracao_id WHERE a.empresa_id=?', [eid(req)])).t;
-    const totalUsuarios   = (await get('SELECT COUNT(*) as t FROM usuarios WHERE empresa_id=? AND ativo=1', [eid(req)])).t;
+    const totalUsuarios   = (await get("SELECT COUNT(*) as t FROM usuarios WHERE empresa_id=? AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador'", [eid(req)])).t;
 
     const porModulo = await all(`
       SELECT a.modulo, COUNT(DISTINCT a.id) as total_alteracoes, COUNT(DISTINCT ac.usuario_id) as total_cientes
@@ -210,7 +210,7 @@ router.get('/dashboard', async (req, res) => {
 
     const criticas = await all(`
       SELECT a.id, a.titulo, a.modulo,
-        (SELECT COUNT(*) FROM usuarios WHERE empresa_id=? AND ativo=1) -
+        (SELECT COUNT(*) FROM usuarios WHERE empresa_id=? AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador') -
         (SELECT COUNT(*) FROM alteracao_ciencias WHERE alteracao_id=a.id) as pendentes
       FROM alteracoes a WHERE a.empresa_id=? AND a.ativo=1 AND a.nivel='critica' ORDER BY pendentes DESC LIMIT 5
     `, [eid(req), eid(req)]);

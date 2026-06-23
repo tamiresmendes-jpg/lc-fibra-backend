@@ -39,11 +39,11 @@ function statusDaPlanilha(u) {
 // Listar usuários da empresa — sem avatar para não travar o sistema
 router.get('/', async (req, res) => {
   try {
-    const { departamento_id, ativo } = req.query;
+    const { departamento_id, ativo, tipo } = req.query;
     let sql = `
     SELECT u.id, u.nome, u.email, u.perfil, u.ativo, u.created_at,
            u.departamento_id, u.cargo_id, u.gestor_id, u.setor_id, u.funcao, u.bloqueado, u.sort_order, u.cor, u.nivel,
-           u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos,
+           u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos, u.tipo_usuario,
            d.nome as departamento_nome, c.nome as cargo_nome,
            g.nome as gestor_nome, s.nome as setor_nome
     FROM usuarios u
@@ -53,6 +53,10 @@ router.get('/', async (req, res) => {
     LEFT JOIN setores s ON s.id = u.setor_id
     WHERE u.empresa_id = ?`;
     const params = [req.usuario.empresa_id];
+    // Separa colaboradores de usuários administrativos. Padrão = colaborador.
+    // ?tipo=administrativo lista só os administrativos; ?tipo=todos lista ambos.
+    const tipoFiltro = tipo || 'colaborador';
+    if (tipoFiltro !== 'todos') { sql += " AND COALESCE(u.tipo_usuario,'colaborador') = ?"; params.push(tipoFiltro); }
     if (departamento_id) { sql += ' AND u.departamento_id = ?'; params.push(departamento_id); }
     if (ativo !== undefined) { sql += ' AND u.ativo = ?'; params.push(ativo === 'true' ? 1 : 0); }
     sql += ' ORDER BY u.sort_order ASC, u.nome ASC';
@@ -78,25 +82,26 @@ router.post('/', async (req, res) => {
     if (!['admin','gestor'].includes(req.usuario.perfil)) {
       return res.status(403).json({ erro: 'Sem permissão para criar usuários' });
     }
-    const { nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel } = req.body;
+    const { nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, tipo_usuario } = req.body;
     if (!nome || !email || !senha) return res.status(400).json({ erro: 'Nome, email e senha obrigatórios' });
 
     const existe = await get('SELECT id FROM usuarios WHERE email = ?', [email]);
     if (existe) return res.status(400).json({ erro: 'Email já cadastrado' });
 
+    const tipoFinal = tipo_usuario === 'administrativo' ? 'administrativo' : 'colaborador';
     const id = uuidv4();
     const senhaHash = bcrypt.hashSync(senha, 10);
     await run(`
-    INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, tipo_usuario)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
       id, req.usuario.empresa_id, nome, email, senhaHash,
       perfil || 'colaborador',
       departamento_id || null, cargo_id || null, gestor_id || null,
-      setor_id || null, funcao || null, nivel || null
+      setor_id || null, funcao || null, nivel || null, tipoFinal
     ]);
 
-    res.status(201).json({ id, nome, email, perfil: perfil || 'colaborador' });
+    res.status(201).json({ id, nome, email, perfil: perfil || 'colaborador', tipo_usuario: tipoFinal });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }
@@ -123,29 +128,51 @@ router.get('/:id', async (req, res) => {
 // Atualizar usuário
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar } = req.body;
+    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, tipo_usuario } = req.body;
+    const ehAdmin = req.usuario.perfil === 'admin';
+
+    // Estado atual do usuário-alvo (mesma empresa). Usado para proteger campos sensíveis.
+    const alvo = await get('SELECT perfil, tipo_usuario FROM usuarios WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado' });
+
+    // Perfil de acesso (admin/gestor/colaborador): só admin pode alterar.
+    // Impede escalada de privilégio (ex.: alguém se tornar admin pela edição).
+    let perfilFinal = alvo.perfil;
+    if (perfil !== undefined && perfil !== alvo.perfil) {
+      if (!ehAdmin) return res.status(403).json({ erro: 'Apenas administradores podem alterar o perfil de acesso' });
+      if (!['admin','gestor','colaborador'].includes(perfil)) return res.status(400).json({ erro: 'Perfil inválido' });
+      perfilFinal = perfil;
+    }
+
+    // tipo_usuario (colaborador/administrativo): só muda quando enviado explicitamente.
+    let tipoFinal = alvo.tipo_usuario || 'colaborador';
+    if (tipo_usuario === 'colaborador' || tipo_usuario === 'administrativo') tipoFinal = tipo_usuario;
+
     const base = [
-      nome, perfil,
+      nome, perfilFinal,
       departamento_id || null, cargo_id || null, gestor_id || null, setor_id || null,
       funcao || null, nivel || null,
       ativo !== undefined ? ativo : 1,
       bloqueado !== undefined ? bloqueado : 0,
       data_nascimento || null, cidade || null, avatar || null,
+      tipoFinal,
     ];
 
-    // Só atualiza permissoes_modulos quando foi explicitamente enviado no body
-    if ('permissoes_modulos' in req.body) {
+    // permissoes_modulos é operação administrativa: só admin pode alterar.
+    // Quando enviado por não-admin, é ignorado (preserva o valor atual).
+    if ('permissoes_modulos' in req.body && ehAdmin) {
       const perms = req.body.permissoes_modulos;
       await run(`
         UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
           setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
-          permissoes_modulos=?
+          tipo_usuario=?, permissoes_modulos=?
         WHERE id=? AND empresa_id=?
       `, [...base, perms ? JSON.stringify(perms) : null, req.params.id, req.usuario.empresa_id]);
     } else {
       await run(`
         UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-          setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?
+          setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+          tipo_usuario=?
         WHERE id=? AND empresa_id=?
       `, [...base, req.params.id, req.usuario.empresa_id]);
     }
