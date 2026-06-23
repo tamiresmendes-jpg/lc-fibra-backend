@@ -61,9 +61,9 @@ router.get('/', async (req, res) => {
            ORDER BY p.created_at DESC LIMIT 5`, [eid]),
       all(`SELECT s.id, s.tipo, s.descricao, s.status, s.created_at,
                   p.titulo as pop_titulo, p.versao as pop_versao, u.nome as solicitante_nome
-           FROM auditoria_solicitacoes s LEFT JOIN pops p ON p.id = s.pop_id
+           FROM auditoria_solicitacoes s JOIN pops p ON p.id = s.pop_id
            LEFT JOIN usuarios u ON u.id = s.solicitante_id
-           WHERE s.empresa_id=$1 AND s.status='pendente'
+           WHERE s.empresa_id=$1 AND s.status='pendente' AND p.excluido_em IS NULL
            ORDER BY s.created_at DESC LIMIT 5`, [eid]),
       all(`SELECT p.id, p.titulo, p.versao, p.total_visualizacoes,
                   c.nome as categoria_nome, c.cor as categoria_cor

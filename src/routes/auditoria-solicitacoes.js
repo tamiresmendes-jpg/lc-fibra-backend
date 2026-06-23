@@ -21,7 +21,7 @@ router.get('/', async (req, res) => {
       LEFT JOIN categorias_pop c ON c.id = p.categoria_id
       JOIN usuarios u ON u.id = s.solicitante_id
       LEFT JOIN departamentos d ON d.id = u.departamento_id
-      WHERE s.empresa_id = ?
+      WHERE s.empresa_id = ? AND p.excluido_em IS NULL
       ORDER BY s.created_at DESC
     `, [req.usuario.empresa_id]);
     res.json(itens);
