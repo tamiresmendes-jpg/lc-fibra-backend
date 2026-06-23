@@ -27,7 +27,7 @@ const SELECT_TREINAMENTO = `
 
 router.get('/', async (req, res) => {
   try {
-    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
+    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
     res.json(itens);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -36,7 +36,7 @@ router.get('/meus', async (req, res) => {
   try {
     const isAdmin = req.usuario.perfil === 'admin';
     const itens = await all(`${SELECT_TREINAMENTO}
-      WHERE t.empresa_id = $1 AND ($2 = 1 OR t.colaborador_id = $3 OR t.responsavel_id = $4)
+      WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND ($2 = 1 OR t.colaborador_id = $3 OR t.responsavel_id = $4)
       ORDER BY t.data_hora ASC
     `, [req.usuario.empresa_id, isAdmin ? 1 : 0, req.usuario.id, req.usuario.id]);
     res.json(itens);
@@ -274,13 +274,13 @@ router.delete('/:id/anotacoes/:an_id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM treinamento_anotacoes WHERE treinamento_id=$1', [req.params.id]);
-    await run('DELETE FROM treinamento_respostas WHERE treinamento_id=$1', [req.params.id]);
-    await run('DELETE FROM treinamento_avaliacoes WHERE treinamento_id=$1', [req.params.id]);
-    await run('DELETE FROM treinamento_pops WHERE treinamento_id=$1', [req.params.id]);
-    await run('DELETE FROM treinamento_participantes WHERE treinamento_id=$1', [req.params.id]);
-    await run('DELETE FROM treinamentos WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Removido' });
+    const tr = await get('SELECT titulo FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!tr) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    await run(
+      `UPDATE treinamentos SET excluido_em=datetime('now'), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4`,
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
+    );
+    res.json({ mensagem: 'Removido', titulo: tr.titulo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

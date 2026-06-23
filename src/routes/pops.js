@@ -94,7 +94,7 @@ router.get('/', async (req, res) => {
       LEFT JOIN departamentos d ON d.id = p.departamento_id
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN categorias_pop c ON c.id = p.categoria_id
-      WHERE p.empresa_id = $1
+      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL
     `;
     const params = [req.usuario.empresa_id];
     let idx = 2;
@@ -313,13 +313,16 @@ router.put('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Excluir POP
+// Excluir POP (soft delete → vai para lixeira)
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM pop_historico WHERE pop_id=$1', [req.params.id]);
-    await run('DELETE FROM pop_visualizacoes WHERE pop_id=$1', [req.params.id]);
-    await run('DELETE FROM pops WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Removido' });
+    const pop = await get('SELECT titulo FROM pops WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+    await run(
+      `UPDATE pops SET excluido_em=datetime('now'), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4`,
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
+    );
+    res.json({ mensagem: 'Removido', titulo: pop.titulo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

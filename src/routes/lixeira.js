@@ -75,6 +75,12 @@ router.delete('/:modulo/:id', async (req, res) => {
       await run('DELETE FROM treinamento_pops         WHERE treinamento_id = $1', [tid]);
       await run('DELETE FROM treinamento_participantes WHERE treinamento_id = $1', [tid]);
     }
+    // Para POPs, limpa histórico e visualizações antes
+    if (req.params.modulo === 'pops') {
+      const pid = req.params.id;
+      await run('DELETE FROM pop_historico    WHERE pop_id = $1', [pid]);
+      await run('DELETE FROM pop_visualizacoes WHERE pop_id = $1', [pid]);
+    }
 
     await run(
       `DELETE FROM ${cfg.tabela} WHERE id = $1 AND empresa_id = $2 AND excluido_em IS NOT NULL`,

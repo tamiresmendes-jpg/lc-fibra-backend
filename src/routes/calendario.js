@@ -53,7 +53,7 @@ router.get('/', async (req, res) => {
       safe(() => all(
         `SELECT id, nome as titulo, observacao as descricao, data, NULL as data_fim, tipo as subtipo, 'feriado' as tipo
          FROM feriados
-         WHERE empresa_id=? AND ativo=1 AND (substr(data,1,7)=? OR (recorrente=1 AND substr(data,6,2)=?))
+         WHERE empresa_id=? AND COALESCE(validacao,'confirmado') != 'rejeitado' AND (substr(data,1,7)=? OR (recorrente=1 AND substr(data,6,2)=?))
          ORDER BY data`,
         [eid, mes, mesMM]
       )),
