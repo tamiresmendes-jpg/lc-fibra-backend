@@ -75,6 +75,19 @@ router.get('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+router.put('/:id', async (req, res) => {
+  try {
+    const auditoria = await get('SELECT id FROM auditorias WHERE id = ? AND empresa_id = ?', [req.params.id, req.usuario.empresa_id]);
+    if (!auditoria) return res.status(404).json({ erro: 'Auditoria não encontrada' });
+    const { titulo, tipo, descricao, auditado_id, pop_id, data_auditoria, status } = req.body;
+    await run(
+      `UPDATE auditorias SET titulo=?, tipo=?, descricao=?, auditado_id=?, pop_id=?, data_auditoria=?, status=? WHERE id=?`,
+      [titulo, tipo || 'pop', descricao || null, auditado_id || null, pop_id || null, data_auditoria || null, status || 'pendente', req.params.id]
+    );
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.put('/:id/responder', async (req, res) => {
   try {
     const { respostas } = req.body; // [{ item_id, resposta, conformidade, observacao }]

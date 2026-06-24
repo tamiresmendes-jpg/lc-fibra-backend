@@ -62,6 +62,7 @@ app.use('/api/empresa', require('./routes/empresa'));
 app.use('/api/audit-log', require('./routes/audit-log'));
 app.use('/api/lixeira', require('./routes/lixeira'));
 app.use('/api/grupos-permissao', require('./routes/grupos-permissao'));
+app.use('/api/feedbacks', require('./routes/feedbacks'));
 app.use('/api/ferias', require('./routes/ferias'));
 app.use('/api/agenda', require('./routes/agenda'));
 app.use('/api/calendario', require('./routes/calendario'));

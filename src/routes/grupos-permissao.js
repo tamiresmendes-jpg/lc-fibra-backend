@@ -72,8 +72,13 @@ router.delete('/:id', autenticar, async (req, res) => {
 // Adicionar membro (usuário)
 router.post('/:id/membros', autenticar, async (req, res) => {
   try {
+    const eid = req.usuario.empresa_id;
+    const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
+    if (!grupo) return res.status(404).json({ erro: 'Grupo não encontrado' });
     const { usuario_id } = req.body;
     if (!usuario_id) return res.status(400).json({ erro: 'usuario_id obrigatório' });
+    const usuario = await get('SELECT id FROM usuarios WHERE id = ? AND empresa_id = ?', [usuario_id, eid]);
+    if (!usuario) return res.status(404).json({ erro: 'Usuário não encontrado' });
     await run('INSERT INTO grupo_membros (grupo_id, usuario_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [req.params.id, usuario_id]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ erro: err.message }); }
@@ -82,6 +87,9 @@ router.post('/:id/membros', autenticar, async (req, res) => {
 // Remover membro (usuário)
 router.delete('/:id/membros/:userId', autenticar, async (req, res) => {
   try {
+    const eid = req.usuario.empresa_id;
+    const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
+    if (!grupo) return res.status(404).json({ erro: 'Grupo não encontrado' });
     await run('DELETE FROM grupo_membros WHERE grupo_id = ? AND usuario_id = ?', [req.params.id, req.params.userId]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ erro: err.message }); }
@@ -90,8 +98,13 @@ router.delete('/:id/membros/:userId', autenticar, async (req, res) => {
 // Adicionar departamento
 router.post('/:id/departamentos', autenticar, async (req, res) => {
   try {
+    const eid = req.usuario.empresa_id;
+    const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
+    if (!grupo) return res.status(404).json({ erro: 'Grupo não encontrado' });
     const { departamento_id } = req.body;
     if (!departamento_id) return res.status(400).json({ erro: 'departamento_id obrigatório' });
+    const dept = await get('SELECT id FROM departamentos WHERE id = ? AND empresa_id = ?', [departamento_id, eid]);
+    if (!dept) return res.status(404).json({ erro: 'Departamento não encontrado' });
     await run('INSERT INTO grupo_departamentos (grupo_id, departamento_id) VALUES (?, ?) ON CONFLICT DO NOTHING', [req.params.id, departamento_id]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ erro: err.message }); }
@@ -100,6 +113,9 @@ router.post('/:id/departamentos', autenticar, async (req, res) => {
 // Remover departamento
 router.delete('/:id/departamentos/:deptId', autenticar, async (req, res) => {
   try {
+    const eid = req.usuario.empresa_id;
+    const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
+    if (!grupo) return res.status(404).json({ erro: 'Grupo não encontrado' });
     await run('DELETE FROM grupo_departamentos WHERE grupo_id = ? AND departamento_id = ?', [req.params.id, req.params.deptId]);
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ erro: err.message }); }
