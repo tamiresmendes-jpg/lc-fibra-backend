@@ -1126,6 +1126,32 @@ async function initSchema() {
 
   // Protege colaboradores específicos de inativação automática via importação de planilha
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS protegido_inativacao INTEGER DEFAULT 0`);
+
+  // Nova estrutura de escala (substitui escala_dias)
+  await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS colaboradores TEXT`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS escala_slots (
+      id TEXT PRIMARY KEY,
+      escala_id TEXT NOT NULL,
+      secao TEXT NOT NULL,
+      dia INTEGER NOT NULL,
+      turno TEXT,
+      posicao TEXT NOT NULL,
+      usuario_id TEXT
+    )
+  `);
+  await pool.query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_escala_slots_uniq
+    ON escala_slots(escala_id, secao, dia, COALESCE(turno,''), posicao)
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS escala_feriados_def (
+      id TEXT PRIMARY KEY,
+      escala_id TEXT NOT NULL,
+      dia INTEGER NOT NULL,
+      nome TEXT NOT NULL
+    )
+  `);
 }
 
 async function seedAdmin() {

@@ -11,10 +11,9 @@ function eid(req) { return req.usuario.empresa_id; }
 router.get('/', async (req, res) => {
   try {
     const { mes, ano, departamento_id } = req.query;
-    let sql = `SELECT e.*, d.nome as departamento_nome, u.nome as criador_nome
+    let sql = `SELECT e.*, d.nome as departamento_nome
                FROM escalas e
                LEFT JOIN departamentos d ON d.id = e.departamento_id
-               LEFT JOIN usuarios u ON u.id = e.criado_por
                WHERE e.empresa_id = ?`;
     const params = [eid(req)];
     if (mes) { sql += ' AND e.mes = ?'; params.push(Number(mes)); }
@@ -22,81 +21,133 @@ router.get('/', async (req, res) => {
     if (departamento_id) { sql += ' AND e.departamento_id = ?'; params.push(departamento_id); }
     sql += ' ORDER BY e.ano DESC, e.mes DESC';
     res.json(await all(sql, params));
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Buscar escala com dias
+// Buscar escala com slots e feriados
 router.get('/:id', async (req, res) => {
   try {
-    const escala = await get('SELECT * FROM escalas WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    const escala = await get(
+      `SELECT e.*, d.nome as departamento_nome
+       FROM escalas e LEFT JOIN departamentos d ON d.id = e.departamento_id
+       WHERE e.id = ? AND e.empresa_id = ?`,
+      [req.params.id, eid(req)]
+    );
     if (!escala) return res.status(404).json({ erro: 'Não encontrada' });
-    const dias = await all('SELECT * FROM escala_dias WHERE escala_id = ?', [req.params.id]);
-    res.json({ ...escala, dias });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+
+    const slots = await all(
+      `SELECT s.*, u.nome as usuario_nome
+       FROM escala_slots s LEFT JOIN usuarios u ON u.id = s.usuario_id
+       WHERE s.escala_id = ?`,
+      [req.params.id]
+    );
+    const feriados = await all(
+      `SELECT * FROM escala_feriados_def WHERE escala_id = ? ORDER BY dia`,
+      [req.params.id]
+    );
+    res.json({ ...escala, slots, feriados });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Criar ou buscar escala do mês/depto
+// Criar ou recuperar escala existente
 router.post('/', async (req, res) => {
   try {
-    const { mes, ano, departamento_id, titulo } = req.body;
-    // Verifica se já existe
-    const existente = await get('SELECT * FROM escalas WHERE empresa_id=? AND departamento_id=? AND mes=? AND ano=?',
-      [eid(req), departamento_id || null, Number(mes), Number(ano)]);
+    const { departamento_id, mes, ano, colaboradores } = req.body;
+    const existente = await get(
+      `SELECT * FROM escalas WHERE empresa_id=? AND departamento_id=? AND mes=? AND ano=?`,
+      [eid(req), departamento_id || null, Number(mes), Number(ano)]
+    );
     if (existente) return res.json(existente);
+
     const id = uuidv4();
-    await run('INSERT INTO escalas (id,empresa_id,departamento_id,mes,ano,titulo,criado_por) VALUES (?,?,?,?,?,?,?)',
-      [id, eid(req), departamento_id || null, Number(mes), Number(ano), titulo || null, req.usuario.id]);
-    res.json({ id, mes, ano, departamento_id });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+    await run(
+      `INSERT INTO escalas (id, empresa_id, departamento_id, mes, ano, criado_por, colaboradores)
+       VALUES (?,?,?,?,?,?,?)`,
+      [id, eid(req), departamento_id || null, Number(mes), Number(ano),
+       req.usuario.id, colaboradores ? JSON.stringify(colaboradores) : null]
+    );
+    res.status(201).json(await get(
+      `SELECT e.*, d.nome as departamento_nome FROM escalas e
+       LEFT JOIN departamentos d ON d.id = e.departamento_id WHERE e.id = ?`,
+      [id]
+    ));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Salvar dia de um colaborador
-router.put('/:id/dias', async (req, res) => {
+// Atualizar lista de colaboradores
+router.patch('/:id', async (req, res) => {
   try {
-    const { usuario_id, dia, tipo, turno, observacao } = req.body;
-    // Verifica se a escala pertence à empresa
+    const { colaboradores } = req.body;
+    await run(
+      `UPDATE escalas SET colaboradores = ? WHERE id = ? AND empresa_id = ?`,
+      [colaboradores ? JSON.stringify(colaboradores) : null, req.params.id, eid(req)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Salvar slot (upsert)
+router.put('/:id/slot', async (req, res) => {
+  try {
     const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
     if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
-    const existing = await get('SELECT id FROM escala_dias WHERE escala_id=? AND usuario_id=? AND dia=?',
-      [req.params.id, usuario_id, dia]);
+
+    const { secao, dia, turno, posicao, usuario_id } = req.body;
+    const turnoVal = turno || null;
+
+    const existing = await get(
+      `SELECT id FROM escala_slots
+       WHERE escala_id=? AND secao=? AND dia=? AND COALESCE(turno,'')=COALESCE(?,'') AND posicao=?`,
+      [req.params.id, secao, dia, turnoVal, posicao]
+    );
+
     if (existing) {
-      await run('UPDATE escala_dias SET tipo=?,turno=?,observacao=? WHERE id=?',
-        [tipo, turno||'dia', observacao||null, existing.id]);
-    } else {
-      await run('INSERT INTO escala_dias (id,escala_id,usuario_id,dia,tipo,turno,observacao) VALUES (?,?,?,?,?,?,?)',
-        [uuidv4(), req.params.id, usuario_id, dia, tipo||'trabalho', turno||'dia', observacao||null]);
+      if (usuario_id) {
+        await run('UPDATE escala_slots SET usuario_id=? WHERE id=?', [usuario_id, existing.id]);
+      } else {
+        await run('DELETE FROM escala_slots WHERE id=?', [existing.id]);
+      }
+    } else if (usuario_id) {
+      await run(
+        `INSERT INTO escala_slots (id,escala_id,secao,dia,turno,posicao,usuario_id) VALUES (?,?,?,?,?,?,?)`,
+        [uuidv4(), req.params.id, secao, dia, turnoVal, posicao, usuario_id]
+      );
     }
+
     res.json({ ok: true });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Salvar múltiplos dias de uma vez (lote)
-router.put('/:id/dias/lote', async (req, res) => {
+// Adicionar feriado
+router.post('/:id/feriados', async (req, res) => {
   try {
-    const { entradas } = req.body; // [{ usuario_id, dia, tipo, turno }]
     const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
     if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
-    for (const e of entradas) {
-      const existing = await get('SELECT id FROM escala_dias WHERE escala_id=? AND usuario_id=? AND dia=?',
-        [req.params.id, e.usuario_id, e.dia]);
-      if (existing) {
-        await run('UPDATE escala_dias SET tipo=?,turno=? WHERE id=?', [e.tipo||'trabalho', e.turno||'dia', existing.id]);
-      } else {
-        await run('INSERT INTO escala_dias (id,escala_id,usuario_id,dia,tipo,turno) VALUES (?,?,?,?,?,?)',
-          [uuidv4(), req.params.id, e.usuario_id, e.dia, e.tipo||'trabalho', e.turno||'dia']);
-      }
-    }
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+    const { dia, nome } = req.body;
+    if (!dia || !nome) return res.status(400).json({ erro: 'Dia e nome obrigatórios' });
+    const id = uuidv4();
+    await run('INSERT INTO escala_feriados_def (id,escala_id,dia,nome) VALUES (?,?,?,?)',
+      [id, req.params.id, parseInt(dia), nome]);
+    res.status(201).json({ id, escala_id: req.params.id, dia: parseInt(dia), nome });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Deletar escala
+// Remover feriado
+router.delete('/:id/feriados/:fid', async (req, res) => {
+  try {
+    await run('DELETE FROM escala_feriados_def WHERE id=? AND escala_id=?', [req.params.fid, req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Excluir escala
 router.delete('/:id', async (req, res) => {
   try {
-    await run('DELETE FROM escala_dias WHERE escala_id=?', [req.params.id]);
+    await run('DELETE FROM escala_slots WHERE escala_id=?', [req.params.id]);
+    await run('DELETE FROM escala_feriados_def WHERE escala_id=?', [req.params.id]);
     await run('DELETE FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
     res.json({ ok: true });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 module.exports = router;
