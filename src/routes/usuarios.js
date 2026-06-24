@@ -274,11 +274,14 @@ router.post('/importar', async (req, res) => {
       if (existe) {
         idsNaPlanilha.add(existe.id);
         // NÃO sobrescreve dados já salvos: COALESCE(coluna, ?) só preenche o que está vazio.
-        // O perfil/nível de acesso não é tocado. Quem está na planilha é considerado ativo,
-        // a não ser que a própria planilha marque explicitamente como inativo.
+        // O perfil/nível de acesso não é tocado.
+        // O status (ativo/inativo) só é promovido para ativo via coluna da planilha;
+        // desativação é feita apenas pelo flag inativarForaDaLista, para evitar que
+        // planilhas do Ahgora (que trazem "Demitido" para ex-colaboradores) derrubem
+        // quem ainda está ativo no sistema.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
         const sinalStatus = statusDaPlanilha(u);
-        const ativoFinal = sinalStatus === null ? 1 : sinalStatus;
+        const ativoFinal = sinalStatus === 1 ? 1 : existe.ativo;
         await run(
           `UPDATE usuarios SET
              data_nascimento = COALESCE(data_nascimento, ?),
