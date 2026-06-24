@@ -1123,6 +1123,9 @@ async function initSchema() {
   // — têm acesso e permissões próprias, mas NÃO contam como colaboradores).
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS tipo_usuario TEXT DEFAULT 'colaborador'`);
   await pool.query(`UPDATE usuarios SET tipo_usuario = 'colaborador' WHERE tipo_usuario IS NULL`).catch(() => {});
+
+  // Protege colaboradores específicos de inativação automática via importação de planilha
+  await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS protegido_inativacao INTEGER DEFAULT 0`);
 }
 
 async function seedAdmin() {

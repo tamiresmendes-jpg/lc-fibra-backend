@@ -128,7 +128,7 @@ router.get('/:id', async (req, res) => {
 // Atualizar usuário
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, tipo_usuario } = req.body;
+    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, tipo_usuario, protegido_inativacao } = req.body;
     const ehAdmin = req.usuario.perfil === 'admin';
 
     // Estado atual do usuário-alvo (mesma empresa). Usado para proteger campos sensíveis.
@@ -148,6 +148,11 @@ router.put('/:id', async (req, res) => {
     let tipoFinal = alvo.tipo_usuario || 'colaborador';
     if (tipo_usuario === 'colaborador' || tipo_usuario === 'administrativo') tipoFinal = tipo_usuario;
 
+    // protegido_inativacao: só admin pode alterar; se não enviado, preserva valor atual
+    const protegidoFinal = ehAdmin && protegido_inativacao !== undefined
+      ? (protegido_inativacao ? 1 : 0)
+      : undefined;
+
     const base = [
       nome, perfilFinal,
       departamento_id || null, cargo_id || null, gestor_id || null, setor_id || null,
@@ -162,19 +167,37 @@ router.put('/:id', async (req, res) => {
     // Quando enviado por não-admin, é ignorado (preserva o valor atual).
     if ('permissoes_modulos' in req.body && ehAdmin) {
       const perms = req.body.permissoes_modulos;
-      await run(`
-        UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-          setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
-          tipo_usuario=?, permissoes_modulos=?
-        WHERE id=? AND empresa_id=?
-      `, [...base, perms ? JSON.stringify(perms) : null, req.params.id, req.usuario.empresa_id]);
+      if (protegidoFinal !== undefined) {
+        await run(`
+          UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            tipo_usuario=?, permissoes_modulos=?, protegido_inativacao=?
+          WHERE id=? AND empresa_id=?
+        `, [...base, perms ? JSON.stringify(perms) : null, protegidoFinal, req.params.id, req.usuario.empresa_id]);
+      } else {
+        await run(`
+          UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            tipo_usuario=?, permissoes_modulos=?
+          WHERE id=? AND empresa_id=?
+        `, [...base, perms ? JSON.stringify(perms) : null, req.params.id, req.usuario.empresa_id]);
+      }
     } else {
-      await run(`
-        UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-          setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
-          tipo_usuario=?
-        WHERE id=? AND empresa_id=?
-      `, [...base, req.params.id, req.usuario.empresa_id]);
+      if (protegidoFinal !== undefined) {
+        await run(`
+          UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            tipo_usuario=?, protegido_inativacao=?
+          WHERE id=? AND empresa_id=?
+        `, [...base, protegidoFinal, req.params.id, req.usuario.empresa_id]);
+      } else {
+        await run(`
+          UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            tipo_usuario=?
+          WHERE id=? AND empresa_id=?
+        `, [...base, req.params.id, req.usuario.empresa_id]);
+      }
     }
     res.json({ mensagem: 'Usuário atualizado' });
   } catch(err) {
@@ -267,21 +290,20 @@ router.post('/importar', async (req, res) => {
         if (!u.senha) u.senha = 'Mudar@123';
       }
       // Busca por email OU por nome (para arquivos sem email)
-      let existe = await get('SELECT id, perfil, ativo FROM usuarios WHERE email = ? AND empresa_id = ?', [u.email.trim(), req.usuario.empresa_id]);
+      let existe = await get('SELECT id, perfil, ativo, protegido_inativacao FROM usuarios WHERE email = ? AND empresa_id = ?', [u.email.trim(), req.usuario.empresa_id]);
       if (!existe && u.nome) {
-        existe = await get('SELECT id, perfil, ativo FROM usuarios WHERE empresa_id = ? AND LOWER(nome) = LOWER(?)', [req.usuario.empresa_id, u.nome.trim()]);
+        existe = await get('SELECT id, perfil, ativo, protegido_inativacao FROM usuarios WHERE empresa_id = ? AND LOWER(nome) = LOWER(?)', [req.usuario.empresa_id, u.nome.trim()]);
       }
       if (existe) {
         idsNaPlanilha.add(existe.id);
         // NÃO sobrescreve dados já salvos: COALESCE(coluna, ?) só preenche o que está vazio.
         // O perfil/nível de acesso não é tocado.
-        // O status (ativo/inativo) só é promovido para ativo via coluna da planilha;
-        // desativação é feita apenas pelo flag inativarForaDaLista, para evitar que
-        // planilhas do Ahgora (que trazem "Demitido" para ex-colaboradores) derrubem
-        // quem ainda está ativo no sistema.
+        // Colaboradores com protegido_inativacao=1 nunca são desativados pela planilha:
+        // apenas a ação manual (botão de desativar) pode mudar o status deles.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
         const sinalStatus = statusDaPlanilha(u);
-        const ativoFinal = sinalStatus === 1 ? 1 : existe.ativo;
+        const estaProtegido = existe.protegido_inativacao === 1 || existe.protegido_inativacao === true;
+        const ativoFinal = estaProtegido ? existe.ativo : (sinalStatus === null ? 1 : sinalStatus);
         await run(
           `UPDATE usuarios SET
              data_nascimento = COALESCE(data_nascimento, ?),
@@ -375,6 +397,7 @@ router.post('/importar', async (req, res) => {
       const r = await run(
         `UPDATE usuarios SET ativo = 0
          WHERE empresa_id = ? AND ativo = 1 AND perfil <> 'admin'
+           AND COALESCE(protegido_inativacao, 0) = 0
            AND id <> ? AND id NOT IN (${placeholders})`,
         [req.usuario.empresa_id, req.usuario.id, ...ids]
       );
