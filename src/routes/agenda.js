@@ -99,6 +99,14 @@ router.post('/:id/adiar', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Reabrir item concluído — volta para pendente com a data original
+router.post('/:id/reabrir', async (req, res) => {
+  try {
+    await run(`UPDATE agenda_itens SET status='pendente' WHERE id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Excluir
 router.delete('/:id', async (req, res) => {
   try {
