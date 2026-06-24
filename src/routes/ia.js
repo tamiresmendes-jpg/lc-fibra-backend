@@ -791,15 +791,51 @@ router.post('/extrair-documento', async (req, res) => {
 
   try {
     const buffer = fs.readFileSync(filePath);
-    let texto = '';
+    const nomeBase = nome.replace(/\.[^.]+$/, '');
+    const nomeExt  = nome.toLowerCase();
 
     const EXCEL_MIMES = [
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.ms-excel',
       'application/octet-stream',
     ];
-    const nomeExt = nome.toLowerCase();
+    const WORD_MIMES  = [
+      'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+      'application/msword',
+    ];
+    const IMAGE_MIMES = ['image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp', 'image/bmp', 'image/svg+xml'];
 
+    // ── Imagem → embute como <img> base64 ──────────────────────────────────
+    if (IMAGE_MIMES.includes(mime) || /\.(jpe?g|png|gif|webp|bmp|svg)$/i.test(nomeExt)) {
+      const mimeReal = mime.startsWith('image/') ? mime : 'image/jpeg';
+      const b64 = buffer.toString('base64');
+      const html = `<img src="data:${mimeReal};base64,${b64}" alt="${nomeBase}" style="max-width:100%;height:auto;"/>`;
+      return res.json({ titulo: nomeBase, procedimento: html });
+    }
+
+    // ── Word (.docx) → HTML com imagens embutidas ────────────────────────────
+    if (WORD_MIMES.includes(mime) || /\.docx?$/i.test(nomeExt)) {
+      const mammoth = require('mammoth');
+      let result;
+      try {
+        result = await mammoth.convertToHtml(
+          { buffer },
+          {
+            convertImage: mammoth.images.imgElement(async (image) => ({
+              src: `data:${image.contentType};base64,${await image.read('base64')}`,
+            })),
+          }
+        );
+      } catch (e) {
+        return res.status(422).json({ erro: 'Não foi possível processar o documento Word: ' + e.message });
+      }
+      if (!result.value || result.value.trim().length < 10)
+        return res.status(422).json({ erro: 'O documento Word parece estar vazio ou protegido.' });
+      return res.json({ titulo: nomeBase, procedimento: result.value });
+    }
+
+    // ── PDF / Excel / TXT ────────────────────────────────────────────────────
+    let texto = '';
     if (mime === 'application/pdf') {
       try { texto = await extrairTextoPDF(buffer); } catch (e) {
         return res.status(422).json({ erro: 'Não foi possível ler o PDF. Tente converter para TXT.' });
@@ -814,11 +850,7 @@ router.post('/extrair-documento', async (req, res) => {
     if (!texto || texto.trim().length < 20)
       return res.status(422).json({ erro: 'O arquivo parece estar vazio ou protegido.' });
 
-    // Retorna o texto bruto do arquivo direto no campo procedimento,
-    // sem IA — preserva a estrutura original do documento.
-    const nomeBase = nome.replace(/\.[^.]+$/, '');
     const dados = { titulo: nomeBase, procedimento: texto };
-
     res.json(dados);
   } catch (e) {
     console.error('Erro extrair-documento:', e.message);
