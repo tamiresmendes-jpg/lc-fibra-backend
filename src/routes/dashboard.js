@@ -51,13 +51,13 @@ router.get('/', async (req, res) => {
            ORDER BY r.data_reuniao ASC LIMIT 5`, [eid]),
       all(`SELECT p.id, p.titulo, p.versao, p.updated_at, u.nome as criado_por_nome
            FROM pops p LEFT JOIN usuarios u ON u.id = p.criado_por
-           WHERE p.empresa_id=$1 AND p.status='revisao'
+           WHERE p.empresa_id=$1 AND p.status='revisao' AND p.excluido_em IS NULL
            ORDER BY p.updated_at DESC LIMIT 10`, [eid]),
       all(`SELECT p.id, p.titulo, p.versao, p.created_at, u.nome as criado_por_nome,
                   c.nome as categoria_nome, c.cor as categoria_cor
            FROM pops p LEFT JOIN usuarios u ON u.id = p.criado_por
            LEFT JOIN categorias_pop c ON c.id = p.categoria_id
-           WHERE p.empresa_id=$1 AND p.status='ativo'
+           WHERE p.empresa_id=$1 AND p.status='ativo' AND p.excluido_em IS NULL
            ORDER BY p.created_at DESC LIMIT 5`, [eid]),
       all(`SELECT s.id, s.tipo, s.descricao, s.status, s.created_at,
                   p.titulo as pop_titulo, p.versao as pop_versao, u.nome as solicitante_nome
@@ -68,7 +68,7 @@ router.get('/', async (req, res) => {
       all(`SELECT p.id, p.titulo, p.versao, p.total_visualizacoes,
                   c.nome as categoria_nome, c.cor as categoria_cor
            FROM pops p LEFT JOIN categorias_pop c ON c.id = p.categoria_id
-           WHERE p.empresa_id=$1 AND p.status='ativo' AND p.total_visualizacoes > 0
+           WHERE p.empresa_id=$1 AND p.status='ativo' AND p.excluido_em IS NULL AND p.total_visualizacoes > 0
            ORDER BY p.total_visualizacoes DESC LIMIT 5`, [eid]),
     ]);
 

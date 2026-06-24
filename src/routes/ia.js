@@ -814,21 +814,10 @@ router.post('/extrair-documento', async (req, res) => {
     if (!texto || texto.trim().length < 20)
       return res.status(422).json({ erro: 'O arquivo parece estar vazio ou protegido.' });
 
-    // Usa IA se a chave estiver configurada, senão usa extração por palavras-chave
-    let dados;
-    const temChave = process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_API_KEY.includes('SUA_CHAVE');
-    if (temChave) {
-      try {
-        dados = await extrairComIA(texto, nome);
-        console.log('[extrair] modo: IA');
-      } catch (e) {
-        console.error('[extrair] IA falhou (' + e.message + '), usando fallback por palavras-chave');
-        dados = extrairSemIA(texto, nome);
-      }
-    } else {
-      console.log('[extrair] modo: palavras-chave (ANTHROPIC_API_KEY não configurada)');
-      dados = extrairSemIA(texto, nome);
-    }
+    // Retorna o texto bruto do arquivo direto no campo procedimento,
+    // sem IA — preserva a estrutura original do documento.
+    const nomeBase = nome.replace(/\.[^.]+$/, '');
+    const dados = { titulo: nomeBase, procedimento: texto };
 
     res.json(dados);
   } catch (e) {
