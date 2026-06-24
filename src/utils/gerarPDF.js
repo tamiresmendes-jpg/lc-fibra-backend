@@ -14,9 +14,34 @@ function parseLista(valor) {
   } catch { return null; }
 }
 
-function secao(doc, numero, titulo, conteudo) {
-  if (!conteudo) return;
+// Para campos que podem conter JSON de tabela (responsabilidade/disposicao_final):
+// quando não há linhas válidas, evita imprimir o texto cru "[]" — devolve vazio (placeholder).
+function fallbackTexto(val) {
+  if (!val) return '';
+  return String(val).trim().startsWith('[') ? '' : val;
+}
 
+// Remove marcação HTML (vinda do editor rich text) e devolve texto puro com quebras de linha.
+function stripHtml(html) {
+  if (!html) return '';
+  return String(html)
+    .replace(/<li[^>]*>/gi, '\n• ')
+    .replace(/<\/(p|div|h[1-6]|tr|ol|ul|li)>/gi, '\n')
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(Number(d)); } catch { return ''; } })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; } })
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&(apos|#39);/gi, "'")
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
+function secao(doc, numero, titulo, conteudo) {
   doc.moveDown(0.5);
 
   // Cabeçalho da seção
@@ -31,13 +56,18 @@ function secao(doc, numero, titulo, conteudo) {
 
   doc.moveDown(0.4);
 
-  // Conteúdo
-  doc.fillColor('#374151').font('Helvetica').fontSize(10);
-  const linhas = conteudo.split('\n');
-  linhas.forEach(linha => {
-    if (linha.trim()) doc.text(linha.trim(), { indent: 10 });
-    else doc.moveDown(0.3);
-  });
+  // Conteúdo (sempre exibido — seções vazias mostram um marcador discreto)
+  const texto = stripHtml(conteudo);
+  if (texto) {
+    doc.fillColor('#374151').font('Helvetica').fontSize(10);
+    texto.split('\n').forEach(linha => {
+      if (linha.trim()) doc.text(linha.trim(), { indent: 10 });
+      else doc.moveDown(0.3);
+    });
+  } else {
+    doc.fillColor('#94a3b8').font('Helvetica-Oblique').fontSize(9)
+      .text('(seção não preenchida)', { indent: 10 });
+  }
 
   doc.moveDown(0.6);
   doc.moveTo(doc.page.margins.left, doc.y)
@@ -47,8 +77,6 @@ function secao(doc, numero, titulo, conteudo) {
 }
 
 function secaoTabela(doc, numero, titulo, colunas, linhas) {
-  if (!linhas || linhas.length === 0) return;
-
   doc.moveDown(0.5);
 
   const circleX = doc.page.margins.left + 10;
@@ -160,8 +188,16 @@ function gerarPDFPOP(pop) {
     doc.fillColor('#fff').font('Helvetica-Bold').fontSize(8)
       .text(statusLabel, marginL + 4, 112, { width: 62, align: 'center' });
 
+    // ── 1. IDENTIFICAÇÃO (cabeçalho da seção) ──
+    const idHeadY = 138;
+    doc.circle(marginL + 10, idHeadY + 8, 10).fill(COR_PRIMARIA);
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(9)
+      .text('1', marginL + 6, idHeadY + 4, { width: 8, align: 'center' });
+    doc.fillColor(COR_TEXTO).font('Helvetica-Bold').fontSize(12)
+      .text('Identificação', marginL + 26, idHeadY + 2);
+
     // ── GRADE DE IDENTIFICAÇÃO ──
-    const gridTop = 145;
+    const gridTop = 162;
     const gridH = 64;
     doc.rect(marginL, gridTop, pageW - marginL - marginR, gridH)
       .fill(COR_FUNDO).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
@@ -192,45 +228,30 @@ function gerarPDFPOP(pop) {
 
     doc.y = gridTop + gridH + 20;
 
-    // ── SEÇÕES ──
-    let numSecao = 1;
-
-    if (pop.objetivo)
-      secao(doc, numSecao++, 'Objetivo', pop.objetivo);
-
-    if (pop.campo_aplicacao)
-      secao(doc, numSecao++, 'Campo de Aplicação', pop.campo_aplicacao);
+    // ── SEÇÕES 2 a 9 — sempre exibidas, mesmo vazias (documento oficial padronizado) ──
+    secao(doc, 2, 'Objetivo', pop.objetivo);
+    secao(doc, 3, 'Campo de Aplicação', pop.campo_aplicacao);
 
     const linhasResp = parseLista(pop.responsabilidade);
     if (linhasResp)
-      secaoTabela(doc, numSecao++, 'Responsabilidades', ['Nome / Cargo', 'Responsabilidade'], linhasResp);
-    else if (pop.responsabilidade)
-      secao(doc, numSecao++, 'Responsabilidades', pop.responsabilidade);
+      secaoTabela(doc, 4, 'Responsabilidades', ['Nome / Cargo', 'Responsabilidade'], linhasResp);
+    else
+      secao(doc, 4, 'Responsabilidades', fallbackTexto(pop.responsabilidade));
 
-    if (pop.procedimento)
-      secao(doc, numSecao++, 'Procedimento Detalhado', pop.procedimento);
-
-    if (pop.documentos)
-      secao(doc, numSecao++, 'Documentos de Referência', pop.documentos);
-
-    if (pop.kpis)
-      secao(doc, numSecao++, 'KPIs e Indicadores', pop.kpis);
-
-    if (pop.seguranca)
-      secao(doc, numSecao++, 'Segurança', pop.seguranca);
-
-    if (pop.penalidade)
-      secao(doc, numSecao++, 'Penalidades', pop.penalidade);
+    secao(doc, 5, 'Procedimento Detalhado', pop.procedimento);
+    secao(doc, 6, 'Documentos e Ferramentas', pop.documentos);
+    secao(doc, 7, 'Segurança e Conduta', pop.seguranca);
+    secao(doc, 8, 'Penalidades', pop.penalidade);
 
     const linhasDisp = parseLista(pop.disposicao_final);
     if (linhasDisp)
-      secaoTabela(doc, numSecao++, 'Disposição Final', ['Item', 'Destino / Ação Final', 'Responsável'], linhasDisp);
-    else if (pop.disposicao_final)
-      secao(doc, numSecao++, 'Disposição Final', pop.disposicao_final);
+      secaoTabela(doc, 9, 'Disposições Finais', ['Item', 'Destino / Ação Final', 'Responsável'], linhasDisp);
+    else
+      secao(doc, 9, 'Disposições Finais', fallbackTexto(pop.disposicao_final));
 
-    // Conteúdo legado (campo genérico)
-    if (pop.conteudo && numSecao === 1)
-      secao(doc, numSecao++, 'Conteúdo', pop.conteudo);
+    // Extra (campo legado): KPIs apenas quando houver conteúdo
+    if (pop.kpis)
+      secao(doc, '+', 'KPIs e Indicadores', pop.kpis);
 
     // ── RODAPÉ ──
     const rodapeY = doc.page.height - 45;

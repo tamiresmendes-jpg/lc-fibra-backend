@@ -131,7 +131,7 @@ router.post('/', async (req, res) => {
       objetivo || null, campo_aplicacao || null, responsabilidade || null, procedimento || null,
       documentos || null, kpis || null, seguranca || null, penalidade || null,
       disposicao_final || null, data_elaboracao || new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0],
-      checklist || null, fluxograma || null, tipo_pop || 'hierarquia',
+      checklist || null, fluxograma || null, tipo_pop || 'pop',
       dono_processo || null, sipoc_dados || null, dados_inspecao || null, criterio_aceite || null
     ]);
 
@@ -252,6 +252,27 @@ router.post('/:id/ativar', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Converter POP Importado → POP Padrão (apenas habilita as demais seções; não altera conteúdo)
+router.post('/:id/converter-padrao', async (req, res) => {
+  try {
+    const pop = await get('SELECT id, tipo_pop, versao FROM pops WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+    if (pop.tipo_pop !== 'importado') return res.status(400).json({ erro: 'Apenas POPs importados podem ser convertidos' });
+
+    await run(
+      `UPDATE pops SET tipo_pop='pop', updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$1 AND empresa_id=$2`,
+      [req.params.id, req.usuario.empresa_id]
+    );
+
+    await run(`
+      INSERT INTO pop_historico (id, pop_id, usuario_id, versao_anterior, versao_nova, resumo_alteracao, tipo_alteracao)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `, [uuidv4(), req.params.id, req.usuario.id, null, pop.versao, 'Convertido de Importado para POP Padrão', 'correcao']);
+
+    res.json({ mensagem: 'POP convertido para padrão', tipo_pop: 'pop' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Atualizar POP
 router.put('/:id', async (req, res) => {
   try {
@@ -287,7 +308,7 @@ router.put('/:id', async (req, res) => {
       codigo || null, objetivo || null, campo_aplicacao || null, responsabilidade || null, procedimento || null,
       documentos || null, kpis || null, seguranca || null, penalidade || null,
       disposicao_final || null, data_elaboracao || null,
-      checklist || null, fluxograma || null, tipo_pop || 'hierarquia',
+      checklist || null, fluxograma || null, tipo_pop || 'pop',
       dono_processo || null, sipoc_dados || null, dados_inspecao || null, criterio_aceite || null,
       req.params.id, req.usuario.empresa_id
     ]);
@@ -337,7 +358,7 @@ router.get('/exportar-todos/pdf', async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN cargos uc ON uc.id = u.cargo_id
       LEFT JOIN empresas e ON e.id = p.empresa_id
-      WHERE p.empresa_id = $1
+      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL
       ORDER BY p.codigo
     `, [req.usuario.empresa_id]);
 
@@ -386,7 +407,7 @@ router.get('/exportar-todos/word', async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN cargos uc ON uc.id = u.cargo_id
       LEFT JOIN empresas e ON e.id = p.empresa_id
-      WHERE p.empresa_id = $1
+      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL
       ORDER BY p.codigo
     `, [req.usuario.empresa_id]);
 
@@ -397,39 +418,47 @@ router.get('/exportar-todos/word', async (req, res) => {
       try { const p = JSON.parse(val); return Array.isArray(p) && p.length ? p : null; } catch { return null; }
     }
     function secaoWord(num, titulo, conteudo) {
-      if (!conteudo) return '';
-      const texto = conteudo.replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').trim();
-      return `<div class="secao"><h2><span class="num">${num}</span> ${titulo}</h2><div class="conteudo">${texto.split('\n').map(l => l.trim() ? `<p>${l.trim()}</p>` : '').join('')}</div></div>`;
+      const texto = (conteudo || '').replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').trim();
+      const corpo = texto
+        ? texto.split('\n').map(l => l.trim() ? `<p>${l.trim()}</p>` : '').join('')
+        : `<p class="vazio">(seção não preenchida)</p>`;
+      return `<div class="secao"><h2><span class="num">${num}</span> ${titulo}</h2><div class="conteudo">${corpo}</div></div>`;
     }
     function gerarWordPop(pop) {
       const fmtData = (s) => s ? new Date(s).toLocaleDateString('pt-BR') : '—';
       const resp = parseLista(pop.responsabilidade);
       const disp = parseLista(pop.disposicao_final);
-      let secoes = ''; let n = 1;
-      if (pop.objetivo)        secoes += secaoWord(n++, 'Objetivo', pop.objetivo);
-      if (pop.campo_aplicacao) secoes += secaoWord(n++, 'Campo de Aplicação', pop.campo_aplicacao);
+      const ident = `<div class="secao"><h2><span class="num">1</span> Identificação</h2><div class="conteudo">
+        <p><strong>Empresa:</strong> ${pop.empresa_nome||'LC FIBRA'} &nbsp;|&nbsp; <strong>Elaborado por:</strong> ${pop.criado_por_nome||'—'} &nbsp;|&nbsp; <strong>Cargo:</strong> ${pop.cargo_nome||'—'}</p>
+        <p><strong>Versão:</strong> v${pop.versao||'1.0'} &nbsp;|&nbsp; <strong>Departamento:</strong> ${pop.departamento_nome||'—'} &nbsp;|&nbsp; <strong>Data:</strong> ${fmtData(pop.data_elaboracao||pop.created_at)}</p>
+      </div></div>`;
+      // Documento oficial: seções 2 a 9 sempre presentes, mesmo vazias
+      let secoes = '';
+      secoes += secaoWord(2, 'Objetivo', pop.objetivo);
+      secoes += secaoWord(3, 'Campo de Aplicação', pop.campo_aplicacao);
       if (resp) {
         const rows = resp.filter(r => r.cargo_nome || r.responsabilidade).map(r => `<tr><td>${r.cargo_nome||'—'}</td><td>${r.responsabilidade||'—'}</td></tr>`).join('');
-        secoes += `<div class="secao"><h2><span class="num">${n++}</span> Responsabilidades</h2><table><thead><tr><th>Cargo</th><th>Responsabilidade</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-      } else if (pop.responsabilidade) secoes += secaoWord(n++, 'Responsabilidades', pop.responsabilidade);
-      if (pop.procedimento)    secoes += secaoWord(n++, 'Procedimento Detalhado', pop.procedimento);
-      if (pop.documentos)      secoes += secaoWord(n++, 'Documentos e Ferramentas', pop.documentos);
-      if (pop.seguranca)       secoes += secaoWord(n++, 'Segurança e Conduta', pop.seguranca);
-      if (pop.penalidade)      secoes += secaoWord(n++, 'Penalidades', pop.penalidade);
+        secoes += `<div class="secao"><h2><span class="num">4</span> Responsabilidades</h2><table><thead><tr><th>Cargo</th><th>Responsabilidade</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      } else secoes += secaoWord(4, 'Responsabilidades', (pop.responsabilidade || '').trim().startsWith('[') ? '' : pop.responsabilidade);
+      secoes += secaoWord(5, 'Procedimento Detalhado', pop.procedimento);
+      secoes += secaoWord(6, 'Documentos e Ferramentas', pop.documentos);
+      secoes += secaoWord(7, 'Segurança e Conduta', pop.seguranca);
+      secoes += secaoWord(8, 'Penalidades', pop.penalidade);
       if (disp) {
         const rows = disp.filter(r => r.item).map(r => `<tr><td>${r.item}</td><td>${r.destino||'—'}</td><td>${r.responsavel||'—'}</td></tr>`).join('');
-        secoes += `<div class="secao"><h2><span class="num">${n++}</span> Disposições Finais</h2><table><thead><tr><th>Item</th><th>Destino</th><th>Responsável</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-      } else if (pop.disposicao_final) secoes += secaoWord(n++, 'Disposições Finais', pop.disposicao_final);
+        secoes += `<div class="secao"><h2><span class="num">9</span> Disposições Finais</h2><table><thead><tr><th>Item</th><th>Destino</th><th>Responsável</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+      } else secoes += secaoWord(9, 'Disposições Finais', (pop.disposicao_final || '').trim().startsWith('[') ? '' : pop.disposicao_final);
+      if (pop.kpis) secoes += secaoWord('+', 'KPIs e Indicadores', pop.kpis);
       return `<!DOCTYPE html><html lang="pt-BR"><head><meta charset="UTF-8"><title>${pop.codigo||'POP'} - ${pop.titulo}</title>
 <style>body{font-family:Calibri,Arial,sans-serif;color:#0f172a;margin:2cm;font-size:11pt}
 .cabecalho{background:#7B55F1;color:white;padding:20px 24px;margin:-2cm -2cm 24px}
 .cabecalho h1{margin:0 0 4px;font-size:18pt}.cabecalho .sub{font-size:10pt;opacity:.85}
 .secao{margin-bottom:20px}h2{font-size:12pt;color:#0f172a;border-bottom:2px solid #7B55F1;padding-bottom:4px}
 .num{background:#7B55F1;color:white;border-radius:50%;width:22px;height:22px;display:inline-flex;align-items:center;justify-content:center;font-size:9pt}
-.conteudo p{margin:4px 0;line-height:1.6}table{width:100%;border-collapse:collapse;margin-top:8px}
+.conteudo p{margin:4px 0;line-height:1.6}.conteudo p.vazio{color:#94a3b8;font-style:italic}table{width:100%;border-collapse:collapse;margin-top:8px}
 th{background:#7B55F1;color:white;padding:7px 10px;font-size:9pt}td{padding:6px 10px;border-bottom:1px solid #e2e8f0;font-size:10pt}</style></head>
 <body><div class="cabecalho"><h1>${pop.titulo}</h1><div class="sub">${pop.codigo||''} · v${pop.versao||'1.0'} · ${pop.empresa_nome||'LC FIBRA'}</div></div>
-${secoes}<div style="margin-top:32px;border-top:1px solid #e2e8f0;padding-top:10px;font-size:8pt;color:#64748b;text-align:center">LC FIBRA — ${pop.codigo||''} — Gerado em ${new Date().toLocaleString('pt-BR')}</div></body></html>`;
+${ident}${secoes}<div style="margin-top:32px;border-top:1px solid #e2e8f0;padding-top:10px;font-size:8pt;color:#64748b;text-align:center">LC FIBRA — ${pop.codigo||''} — Gerado em ${new Date().toLocaleString('pt-BR')}</div></body></html>`;
     }
 
     const archiver = require('archiver');
@@ -471,7 +500,7 @@ router.get('/:id/exportar/pdf', async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN cargos uc ON uc.id = u.cargo_id
       LEFT JOIN empresas e ON e.id = p.empresa_id
-      WHERE p.id = $1 AND p.empresa_id = $2
+      WHERE p.id = $1 AND p.empresa_id = $2 AND p.excluido_em IS NULL
     `, [req.params.id, req.usuario.empresa_id]);
 
     if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
@@ -498,7 +527,7 @@ router.get('/:id/exportar/word', async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN cargos uc ON uc.id = u.cargo_id
       LEFT JOIN empresas e ON e.id = p.empresa_id
-      WHERE p.id = $1 AND p.empresa_id = $2
+      WHERE p.id = $1 AND p.empresa_id = $2 AND p.excluido_em IS NULL
     `, [req.params.id, req.usuario.empresa_id]);
 
     if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
@@ -509,12 +538,14 @@ router.get('/:id/exportar/word', async (req, res) => {
     }
 
     function secaoWord(num, titulo, conteudo) {
-      if (!conteudo) return '';
-      const texto = conteudo.replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').trim();
+      const texto = (conteudo || '').replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').trim();
+      const corpo = texto
+        ? texto.split('\n').map(l => l.trim() ? `<p>${l.trim()}</p>` : '').join('')
+        : `<p class="vazio">(seção não preenchida)</p>`;
       return `
         <div class="secao">
           <h2><span class="num">${num}</span> ${titulo}</h2>
-          <div class="conteudo">${texto.split('\n').map(l => l.trim() ? `<p>${l.trim()}</p>` : '').join('')}</div>
+          <div class="conteudo">${corpo}</div>
         </div>`;
     }
 
@@ -522,25 +553,26 @@ router.get('/:id/exportar/word', async (req, res) => {
     const disp = parseLista(pop.disposicao_final);
     const fmtData = (s) => s ? new Date(s).toLocaleDateString('pt-BR') : '—';
 
+    // Documento oficial: seções 2 a 9 sempre presentes, mesmo vazias
     let secoes = '';
-    let n = 1;
-    if (pop.objetivo)        secoes += secaoWord(n++, 'Objetivo', pop.objetivo);
-    if (pop.campo_aplicacao) secoes += secaoWord(n++, 'Campo de Aplicação', pop.campo_aplicacao);
+    secoes += secaoWord(2, 'Objetivo', pop.objetivo);
+    secoes += secaoWord(3, 'Campo de Aplicação', pop.campo_aplicacao);
     if (resp) {
       const rows = resp.filter(r => r.cargo_nome || r.responsabilidade)
         .map(r => `<tr><td>${r.cargo_nome || '—'}</td><td>${r.responsabilidade || '—'}</td></tr>`).join('');
-      secoes += `<div class="secao"><h2><span class="num">${n++}</span> Responsabilidades</h2>
+      secoes += `<div class="secao"><h2><span class="num">4</span> Responsabilidades</h2>
         <table><thead><tr><th>Cargo / Nome</th><th>Responsabilidade</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-    } else if (pop.responsabilidade) secoes += secaoWord(n++, 'Responsabilidades', pop.responsabilidade);
-    if (pop.procedimento)    secoes += secaoWord(n++, 'Procedimento Detalhado', pop.procedimento);
-    if (pop.documentos)      secoes += secaoWord(n++, 'Documentos e Ferramentas', pop.documentos);
-    if (pop.seguranca)       secoes += secaoWord(n++, 'Segurança e Conduta', pop.seguranca);
-    if (pop.penalidade)      secoes += secaoWord(n++, 'Penalidades', pop.penalidade);
+    } else secoes += secaoWord(4, 'Responsabilidades', (pop.responsabilidade || '').trim().startsWith('[') ? '' : pop.responsabilidade);
+    secoes += secaoWord(5, 'Procedimento Detalhado', pop.procedimento);
+    secoes += secaoWord(6, 'Documentos e Ferramentas', pop.documentos);
+    secoes += secaoWord(7, 'Segurança e Conduta', pop.seguranca);
+    secoes += secaoWord(8, 'Penalidades', pop.penalidade);
     if (disp) {
       const rows = disp.filter(r => r.item).map(r => `<tr><td>${r.item}</td><td>${r.destino || '—'}</td><td>${r.responsavel || '—'}</td></tr>`).join('');
-      secoes += `<div class="secao"><h2><span class="num">${n++}</span> Disposições Finais</h2>
+      secoes += `<div class="secao"><h2><span class="num">9</span> Disposições Finais</h2>
         <table><thead><tr><th>Item</th><th>Destino / Ação</th><th>Responsável</th></tr></thead><tbody>${rows}</tbody></table></div>`;
-    } else if (pop.disposicao_final) secoes += secaoWord(n++, 'Disposições Finais', pop.disposicao_final);
+    } else secoes += secaoWord(9, 'Disposições Finais', (pop.disposicao_final || '').trim().startsWith('[') ? '' : pop.disposicao_final);
+    if (pop.kpis) secoes += secaoWord('+', 'KPIs e Indicadores', pop.kpis);
 
     // Fluxograma — representação textual sequencial
     let fluxogramaHtml = '';
@@ -576,6 +608,7 @@ router.get('/:id/exportar/word', async (req, res) => {
     h2 { font-size: 12pt; color: #0f172a; border-bottom: 2px solid #7B55F1; padding-bottom: 4px; display: flex; align-items: center; gap: 8px; }
     .num { background: #7B55F1; color: white; border-radius: 50%; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; font-size: 9pt; flex-shrink: 0; }
     .conteudo p { margin: 4px 0; line-height: 1.6; }
+    .conteudo p.vazio { color: #94a3b8; font-style: italic; }
     table { width: 100%; border-collapse: collapse; margin-top: 8px; }
     th { background: #7B55F1; color: white; padding: 7px 10px; font-size: 9pt; text-align: left; }
     td { padding: 6px 10px; border-bottom: 1px solid #e2e8f0; font-size: 10pt; }
@@ -594,6 +627,7 @@ router.get('/:id/exportar/word', async (req, res) => {
     <h1>${pop.titulo}</h1>
     <div class="sub">${pop.codigo || ''} &nbsp;·&nbsp; Versão ${pop.versao || '1.0'} &nbsp;·&nbsp; ${pop.empresa_nome || 'LC FIBRA'}</div>
   </div>
+  <div class="secao"><h2><span class="num">1</span> Identificação</h2></div>
   <div class="grade-id">
     <div class="cel"><div class="label">Empresa</div><div class="valor">${pop.empresa_nome || 'LC FIBRA'}</div></div>
     <div class="cel"><div class="label">Elaborado por</div><div class="valor">${pop.criado_por_nome || '—'}</div></div>
