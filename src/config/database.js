@@ -1189,6 +1189,19 @@ async function initSchema() {
 
   // Mural: agendamento de publicação futura
   await pool.query(`ALTER TABLE cultura_mural ADD COLUMN IF NOT EXISTS data_agendamento TEXT`);
+
+  // Sugestões anônimas — sem usuario_id (identidade não é registrada)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS sugestoes (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      categoria TEXT DEFAULT 'geral',
+      texto TEXT NOT NULL,
+      status TEXT DEFAULT 'nova',
+      resposta TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
 }
 
 async function seedAdmin() {
