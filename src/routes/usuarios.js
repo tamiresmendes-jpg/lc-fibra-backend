@@ -129,7 +129,7 @@ router.get('/:id', async (req, res) => {
 // Atualizar usuário
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, tipo_usuario, protegido_inativacao } = req.body;
+    const { nome, email, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, tipo_usuario, protegido_inativacao } = req.body;
     const ehAdmin = req.usuario.perfil === 'admin';
 
     // Estado atual do usuário-alvo (mesma empresa). Usado para proteger campos sensíveis.
@@ -143,6 +143,13 @@ router.put('/:id', async (req, res) => {
       if (!ehAdmin) return res.status(403).json({ erro: 'Apenas administradores podem alterar o perfil de acesso' });
       if (!['admin','gestor','colaborador'].includes(perfil)) return res.status(400).json({ erro: 'Perfil inválido' });
       perfilFinal = perfil;
+    }
+
+    // E-mail: só admin pode alterar o próprio e-mail
+    if (email && ehAdmin && req.params.id === req.usuario.id) {
+      const emailEmUso = await get('SELECT id FROM usuarios WHERE email = ? AND id != ?', [email.trim(), req.params.id]);
+      if (emailEmUso) return res.status(400).json({ erro: 'E-mail já está em uso por outro usuário' });
+      await run('UPDATE usuarios SET email = ? WHERE id = ? AND empresa_id = ?', [email.trim(), req.params.id, req.usuario.empresa_id]);
     }
 
     // tipo_usuario (colaborador/administrativo): só muda quando enviado explicitamente.
