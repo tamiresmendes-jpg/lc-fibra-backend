@@ -15,7 +15,7 @@ const router = express.Router();
 router.post('/login', loginLimiter, async (req, res) => {
   try {
     const { email, senha } = req.body;
-    if (!email || !senha) return res.status(400).json({ erro: 'Email e senha obrigatórios' });
+    if (!email) return res.status(400).json({ erro: 'Email obrigatório' });
 
     const usuario = await get(`
     SELECT u.*, e.nome as empresa_nome, e.cor_primaria, d.nome as departamento_nome, c.nome as cargo_nome
@@ -31,6 +31,8 @@ router.post('/login', loginLimiter, async (req, res) => {
     if (usuario.primeiro_acesso === 1) {
       return res.status(200).json({ primeiro_acesso: true });
     }
+
+    if (!senha) return res.status(400).json({ erro: 'Email e senha obrigatórios' });
 
     if (!bcrypt.compareSync(senha, usuario.senha)) {
       return res.status(401).json({ erro: 'Email ou senha incorretos' });

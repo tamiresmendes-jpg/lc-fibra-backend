@@ -1202,6 +1202,30 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+
+  // Tabela de controle de migrações one-time
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS migracoes_executadas (
+      nome TEXT PRIMARY KEY,
+      executado_em TEXT
+    )
+  `);
+
+  // Força primeiro_acesso para colaboradores e administrativos (executa uma única vez)
+  const jaFezReset = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'reset_primeiro_acesso_v1'`);
+  if (!jaFezReset) {
+    await pool.query(`UPDATE usuarios SET senha = '', primeiro_acesso = 1 WHERE perfil != 'admin'`);
+    await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('reset_primeiro_acesso_v1', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+    console.log('✅ Migração reset_primeiro_acesso_v1 executada');
+  }
+
+  // Libera criação de senha para contas admin específicas (executa uma única vez)
+  const jaFezResetAdmin = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'reset_senha_admins_v1'`);
+  if (!jaFezResetAdmin) {
+    await pool.query(`UPDATE usuarios SET senha = '', primeiro_acesso = 1 WHERE email IN ('tamires.mendes@lcvirtualnet.com.br', 'admin@sistema.com')`);
+    await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('reset_senha_admins_v1', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+    console.log('✅ Migração reset_senha_admins_v1 executada');
+  }
 }
 
 async function seedAdmin() {
