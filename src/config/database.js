@@ -1226,6 +1226,14 @@ async function initSchema() {
     await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('reset_senha_admins_v1', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
     console.log('✅ Migração reset_senha_admins_v1 executada');
   }
+
+  // Garante acesso ao novo e-mail do admin (executa uma única vez)
+  const jaFezResetAdmin2 = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'reset_senha_admins_v2'`);
+  if (!jaFezResetAdmin2) {
+    await pool.query(`UPDATE usuarios SET email = 'contato@lcvirtualnet.com.br', senha = '', primeiro_acesso = 1 WHERE email = 'admin@sistema.com' AND perfil = 'admin'`);
+    await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('reset_senha_admins_v2', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+    console.log('✅ Migração reset_senha_admins_v2 executada');
+  }
 }
 
 async function seedAdmin() {
