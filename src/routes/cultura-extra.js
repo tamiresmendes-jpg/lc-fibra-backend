@@ -128,25 +128,48 @@ router.get('/enquetes/:id/resultados', autenticar, async (req, res) => {
 // ── MURAL DE AVISOS ──────────────────────────────────────────────────────────
 router.get('/mural', autenticar, async (req, res) => {
   try {
-    const rows = await all(
-      `SELECT m.*, u.nome AS autor_nome FROM cultura_mural m
-       LEFT JOIN usuarios u ON u.id = m.criado_por
-       WHERE m.empresa_id = ? ORDER BY m.fixado DESC, m.created_at DESC`,
-      [req.usuario.empresa_id]
-    );
-    res.json(rows);
-  } catch { res.status(500).json({ erro: 'Erro ao buscar mural' }); }
+    const hoje = new Date();
+    hoje.setHours(hoje.getHours() - 3); // fuso BR
+    const dataHoje = hoje.toISOString().slice(0, 10); // YYYY-MM-DD
+    const { mes } = req.query; // ex: "2026-06"
+
+    let sql, params;
+    if (mes) {
+      // Histórico: mostra posts que estavam ativos em algum momento do mês selecionado
+      const primeiroDia = mes + '-01';
+      const ultimoDia = mes + '-31'; // PostgreSQL aceita datas inexistentes na comparação TEXT
+      sql = `SELECT m.*, u.nome AS autor_nome FROM cultura_mural m
+             LEFT JOIN usuarios u ON u.id = m.criado_por
+             WHERE m.empresa_id = ?
+               AND (m.data_agendamento IS NULL OR m.data_agendamento <= ?)
+               AND (m.data_expiracao IS NULL OR m.data_expiracao >= ?)
+             ORDER BY m.fixado DESC, m.created_at DESC`;
+      params = [req.usuario.empresa_id, ultimoDia, primeiroDia];
+    } else {
+      // Mural atual: agendados para hoje ou antes, não expirados
+      sql = `SELECT m.*, u.nome AS autor_nome FROM cultura_mural m
+             LEFT JOIN usuarios u ON u.id = m.criado_por
+             WHERE m.empresa_id = ?
+               AND (m.data_agendamento IS NULL OR m.data_agendamento <= ?)
+               AND (m.data_expiracao IS NULL OR m.data_expiracao >= ?)
+             ORDER BY m.fixado DESC, m.created_at DESC`;
+      params = [req.usuario.empresa_id, dataHoje, dataHoje];
+    }
+
+    res.json(await all(sql, params));
+  } catch (e) { res.status(500).json({ erro: 'Erro ao buscar mural' }); }
 });
 
 router.post('/mural', autenticar, async (req, res) => {
   try {
-    const { titulo, conteudo, tipo, fixado, data_expiracao, imagem } = req.body;
-    if (!titulo || !conteudo) return res.status(400).json({ erro: 'Título e conteúdo obrigatórios' });
+    const { titulo, conteudo, tipo, fixado, data_expiracao, data_agendamento, imagem } = req.body;
+    if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(
-      `INSERT INTO cultura_mural (id,empresa_id,titulo,conteudo,tipo,fixado,data_expiracao,imagem,criado_por)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, titulo, conteudo, tipo || 'aviso', fixado ? 1 : 0, data_expiracao || null, imagem || null, req.usuario.id]
+      `INSERT INTO cultura_mural (id,empresa_id,titulo,conteudo,tipo,fixado,data_expiracao,data_agendamento,imagem,criado_por)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, conteudo || '', tipo || 'aviso', fixado ? 1 : 0,
+       data_expiracao || null, data_agendamento || null, imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_mural WHERE id = ?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar aviso' }); }
@@ -156,10 +179,11 @@ router.put('/mural/:id', autenticar, async (req, res) => {
   try {
     const exist = await get(`SELECT id FROM cultura_mural WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    const { titulo, conteudo, tipo, fixado, data_expiracao, imagem } = req.body;
+    const { titulo, conteudo, tipo, fixado, data_expiracao, data_agendamento, imagem } = req.body;
     await run(
-      `UPDATE cultura_mural SET titulo=?,conteudo=?,tipo=?,fixado=?,data_expiracao=?,imagem=? WHERE id=?`,
-      [titulo, conteudo, tipo || 'aviso', fixado ? 1 : 0, data_expiracao || null, imagem || null, req.params.id]
+      `UPDATE cultura_mural SET titulo=?,conteudo=?,tipo=?,fixado=?,data_expiracao=?,data_agendamento=?,imagem=? WHERE id=?`,
+      [titulo, conteudo || '', tipo || 'aviso', fixado ? 1 : 0,
+       data_expiracao || null, data_agendamento || null, imagem || null, req.params.id]
     );
     res.json(await get(`SELECT * FROM cultura_mural WHERE id = ?`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar aviso' }); }

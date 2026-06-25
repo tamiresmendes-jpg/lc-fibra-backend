@@ -1186,6 +1186,9 @@ async function initSchema() {
 
   // Primeiro acesso: colaborador cria a própria senha
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS primeiro_acesso INTEGER DEFAULT 0`);
+
+  // Mural: agendamento de publicação futura
+  await pool.query(`ALTER TABLE cultura_mural ADD COLUMN IF NOT EXISTS data_agendamento TEXT`);
 }
 
 async function seedAdmin() {
