@@ -26,7 +26,13 @@ router.post('/login', loginLimiter, async (req, res) => {
     WHERE u.email = ? AND u.ativo = 1
   `, [email]);
 
-    if (!usuario || !bcrypt.compareSync(senha, usuario.senha)) {
+    if (!usuario) return res.status(401).json({ erro: 'Email ou senha incorretos' });
+
+    if (usuario.primeiro_acesso === 1) {
+      return res.status(200).json({ primeiro_acesso: true });
+    }
+
+    if (!bcrypt.compareSync(senha, usuario.senha)) {
       return res.status(401).json({ erro: 'Email ou senha incorretos' });
     }
 
@@ -80,6 +86,50 @@ router.post('/registrar', async (req, res) => {
     );
 
     res.status(201).json({ token, usuario: { id: usuarioId, nome, email, perfil: 'admin', empresa_id: empresaId, empresa_nome: nome_empresa } });
+  } catch(err) {
+    res.status(500).json({ erro: err.message });
+  }
+});
+
+// Definir senha no primeiro acesso (sem token, verificado por primeiro_acesso=1)
+router.post('/definir-senha', async (req, res) => {
+  try {
+    const { email, nova_senha } = req.body;
+    if (!email || !nova_senha) return res.status(400).json({ erro: 'Email e nova senha obrigatórios' });
+    if (nova_senha.length < 6) return res.status(400).json({ erro: 'Senha deve ter no mínimo 6 caracteres' });
+
+    const usuario = await get(`
+      SELECT u.*, e.nome as empresa_nome, e.cor_primaria, d.nome as departamento_nome, c.nome as cargo_nome
+      FROM usuarios u
+      LEFT JOIN empresas e ON e.id = u.empresa_id
+      LEFT JOIN departamentos d ON d.id = u.departamento_id
+      LEFT JOIN cargos c ON c.id = u.cargo_id
+      WHERE u.email = ? AND u.ativo = 1
+    `, [email]);
+
+    if (!usuario || usuario.primeiro_acesso !== 1) {
+      return res.status(403).json({ erro: 'Operação não permitida' });
+    }
+
+    const senhaHash = bcrypt.hashSync(nova_senha, 10);
+    await run('UPDATE usuarios SET senha=?, primeiro_acesso=0 WHERE id=?', [senhaHash, usuario.id]);
+
+    const token = jwt.sign(
+      { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id },
+      process.env.JWT_SECRET,
+      { expiresIn: '30d' }
+    );
+
+    const { senha: _, ...dadosUsuario } = usuario;
+    let permModulos = null;
+    if (dadosUsuario.permissoes_modulos) {
+      try { permModulos = JSON.parse(dadosUsuario.permissoes_modulos); } catch { permModulos = null; }
+    }
+    if (dadosUsuario.perfil !== 'admin') {
+      permModulos = await buscarPermsEfetivas(dadosUsuario.id, dadosUsuario.empresa_id, permModulos);
+    }
+    dadosUsuario.permissoes_modulos = permModulos;
+    res.json({ token, usuario: dadosUsuario });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }

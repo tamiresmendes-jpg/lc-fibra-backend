@@ -1152,6 +1152,40 @@ async function initSchema() {
       nome TEXT NOT NULL
     )
   `);
+
+  // Anotações pessoais (privadas por usuário)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS anotacoes (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      conteudo TEXT,
+      cor TEXT DEFAULT '#fef9c3',
+      fixada INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // Benefícios da empresa
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS beneficios (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      descricao TEXT,
+      icone TEXT,
+      imagem TEXT,
+      ativo INTEGER DEFAULT 1,
+      ordem INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // Primeiro acesso: colaborador cria a própria senha
+  await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS primeiro_acesso INTEGER DEFAULT 0`);
 }
 
 async function seedAdmin() {

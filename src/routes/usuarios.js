@@ -83,25 +83,26 @@ router.post('/', async (req, res) => {
       return res.status(403).json({ erro: 'Sem permissão para criar usuários' });
     }
     const { nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, tipo_usuario } = req.body;
-    if (!nome || !email || !senha) return res.status(400).json({ erro: 'Nome, email e senha obrigatórios' });
+    if (!nome || !email) return res.status(400).json({ erro: 'Nome e email obrigatórios' });
 
     const existe = await get('SELECT id FROM usuarios WHERE email = ?', [email]);
     if (existe) return res.status(400).json({ erro: 'Email já cadastrado' });
 
     const tipoFinal = tipo_usuario === 'administrativo' ? 'administrativo' : 'colaborador';
     const id = uuidv4();
-    const senhaHash = bcrypt.hashSync(senha, 10);
+    const primAcesso = !senha ? 1 : 0;
+    const senhaHash = senha ? bcrypt.hashSync(senha, 10) : bcrypt.hashSync(uuidv4(), 10);
     await run(`
-    INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, tipo_usuario)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, tipo_usuario, primeiro_acesso)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `, [
       id, req.usuario.empresa_id, nome, email, senhaHash,
       perfil || 'colaborador',
       departamento_id || null, cargo_id || null, gestor_id || null,
-      setor_id || null, funcao || null, nivel || null, tipoFinal
+      setor_id || null, funcao || null, nivel || null, tipoFinal, primAcesso
     ]);
 
-    res.status(201).json({ id, nome, email, perfil: perfil || 'colaborador', tipo_usuario: tipoFinal });
+    res.status(201).json({ id, nome, email, perfil: perfil || 'colaborador', tipo_usuario: tipoFinal, primeiro_acesso: primAcesso });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }
