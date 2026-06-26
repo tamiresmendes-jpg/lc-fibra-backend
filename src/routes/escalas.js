@@ -68,14 +68,23 @@ router.get('/:id', async (req, res) => {
        WHERE h.escala_id = ? ORDER BY h.data ASC, h.created_at ASC`,
       [req.params.id]
     );
-    res.json({ ...escala, slots, feriados, historico, hora_extra: horaExtra });
+    const sobreaviso = await all(
+      `SELECT se.*,
+        t1.nome as tecnico1_nome, t2.nome as tecnico2_nome
+       FROM sobreaviso_entradas se
+       LEFT JOIN usuarios t1 ON t1.id = se.tecnico1_id
+       LEFT JOIN usuarios t2 ON t2.id = se.tecnico2_id
+       WHERE se.escala_id = ? ORDER BY se.data ASC`,
+      [req.params.id]
+    );
+    res.json({ ...escala, slots, feriados, historico, hora_extra: horaExtra, sobreaviso });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // Criar ou recuperar escala existente
 router.post('/', async (req, res) => {
   try {
-    const { departamento_id, mes, ano, colaboradores, tipo, nome } = req.body;
+    const { departamento_id, mes, ano, colaboradores, tipo, nome, subtipo } = req.body;
     const tipoVal = tipo || 'plantao';
     const existente = await get(
       `SELECT * FROM escalas WHERE empresa_id=? AND departamento_id=? AND mes=? AND ano=?`,
@@ -85,10 +94,10 @@ router.post('/', async (req, res) => {
 
     const id = uuidv4();
     await run(
-      `INSERT INTO escalas (id, empresa_id, departamento_id, mes, ano, tipo, nome, criado_por, colaboradores)
-       VALUES (?,?,?,?,?,?,?,?,?)`,
+      `INSERT INTO escalas (id, empresa_id, departamento_id, mes, ano, tipo, subtipo, nome, criado_por, colaboradores)
+       VALUES (?,?,?,?,?,?,?,?,?,?)`,
       [id, eid(req), departamento_id || null, Number(mes), Number(ano),
-       tipoVal, nome || null, req.usuario.id,
+       tipoVal, subtipo || null, nome || null, req.usuario.id,
        colaboradores ? JSON.stringify(colaboradores) : null]
     );
     const criada = await get(
@@ -206,6 +215,64 @@ router.patch('/:id/turnos', async (req, res) => {
       params.push(req.params.id);
       await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=?`, params);
     }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Sobreaviso ───────────────────────────────────────────────────────────────
+
+// Criar entrada de sobreaviso
+router.post('/:id/sobreaviso', async (req, res) => {
+  try {
+    const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
+    const { data, feriado_nome, tecnico1_id, tecnico2_id, observacao } = req.body;
+    if (!data) return res.status(400).json({ erro: 'Data obrigatória' });
+    const id = uuidv4();
+    await run(
+      `INSERT INTO sobreaviso_entradas (id,escala_id,empresa_id,data,feriado_nome,tecnico1_id,tecnico2_id,observacao)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [id, req.params.id, eid(req), data, feriado_nome || null,
+       tecnico1_id || null, tecnico2_id || null, observacao || null]
+    );
+    const criada = await get(
+      `SELECT se.*, t1.nome as tecnico1_nome, t2.nome as tecnico2_nome
+       FROM sobreaviso_entradas se
+       LEFT JOIN usuarios t1 ON t1.id = se.tecnico1_id
+       LEFT JOIN usuarios t2 ON t2.id = se.tecnico2_id
+       WHERE se.id=?`, [id]
+    );
+    res.status(201).json(criada);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Atualizar entrada de sobreaviso
+router.put('/:id/sobreaviso/:sid', async (req, res) => {
+  try {
+    const { data, feriado_nome, tecnico1_id, tecnico2_id, observacao } = req.body;
+    await run(
+      `UPDATE sobreaviso_entradas
+       SET data=?, feriado_nome=?, tecnico1_id=?, tecnico2_id=?, observacao=?
+       WHERE id=? AND escala_id=? AND empresa_id=?`,
+      [data, feriado_nome || null, tecnico1_id || null, tecnico2_id || null,
+       observacao || null, req.params.sid, req.params.id, eid(req)]
+    );
+    const atualizada = await get(
+      `SELECT se.*, t1.nome as tecnico1_nome, t2.nome as tecnico2_nome
+       FROM sobreaviso_entradas se
+       LEFT JOIN usuarios t1 ON t1.id = se.tecnico1_id
+       LEFT JOIN usuarios t2 ON t2.id = se.tecnico2_id
+       WHERE se.id=?`, [req.params.sid]
+    );
+    res.json(atualizada);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Remover entrada de sobreaviso
+router.delete('/:id/sobreaviso/:sid', async (req, res) => {
+  try {
+    await run('DELETE FROM sobreaviso_entradas WHERE id=? AND escala_id=? AND empresa_id=?',
+      [req.params.sid, req.params.id, eid(req)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
