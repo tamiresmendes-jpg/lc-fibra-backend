@@ -140,6 +140,28 @@ router.delete('/:id/feriados/:fid', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Personalizar turnos de almoço / sábado
+router.patch('/:id/turnos', async (req, res) => {
+  try {
+    const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
+    const sets = [], params = [];
+    if ('turnos_almoco' in req.body) {
+      sets.push('turnos_almoco=?');
+      params.push(req.body.turnos_almoco === null ? null : JSON.stringify(req.body.turnos_almoco));
+    }
+    if ('turnos_sabado' in req.body) {
+      sets.push('turnos_sabado=?');
+      params.push(req.body.turnos_sabado === null ? null : JSON.stringify(req.body.turnos_sabado));
+    }
+    if (sets.length) {
+      params.push(req.params.id);
+      await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=?`, params);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Excluir escala
 router.delete('/:id', async (req, res) => {
   try {

@@ -1152,6 +1152,8 @@ async function initSchema() {
       nome TEXT NOT NULL
     )
   `);
+  await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS turnos_almoco TEXT`);
+  await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS turnos_sabado TEXT`);
 
   // Anotações pessoais (privadas por usuário)
   await pool.query(`
@@ -1226,6 +1228,94 @@ async function initSchema() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_tarefas_empresa ON tarefas(empresa_id)`);
+
+  // Extensões da tarefa para etapas / aprovação / aceite / checklist
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS depende_de TEXT`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS projeto TEXT`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS aprovacao_obrigatoria INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS aprovado_por TEXT`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS motivo_reprovacao TEXT`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS aceito INTEGER DEFAULT 0`);
+  await pool.query(`ALTER TABLE tarefas ADD COLUMN IF NOT EXISTS checklist TEXT`);
+
+  // Atividades corporativas (container de etapas; cada etapa é uma tarefa com atividade_id)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atividades (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      objetivo TEXT,
+      prioridade TEXT DEFAULT 'media',
+      criticidade TEXT DEFAULT 'media',
+      departamento_id TEXT,
+      projeto TEXT,
+      prazo TEXT,
+      status TEXT DEFAULT 'em_andamento',
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atividades_empresa ON atividades(empresa_id)`);
+
+  // Anexos / evidências de tarefa
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarefa_anexos (
+      id TEXT PRIMARY KEY,
+      tarefa_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      nome TEXT NOT NULL,
+      tipo TEXT,
+      url TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // Comentários de tarefa (privado = só gestores/criador)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarefa_comentarios (
+      id TEXT PRIMARY KEY,
+      tarefa_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      texto TEXT NOT NULL,
+      privado INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // Histórico imutável de tarefa
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS tarefa_historico (
+      id TEXT PRIMARY KEY,
+      tarefa_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      usuario_nome TEXT,
+      acao TEXT NOT NULL,
+      detalhe TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // Notificações por usuário (genérica)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS notificacoes (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      tipo TEXT DEFAULT 'tarefa',
+      titulo TEXT NOT NULL,
+      texto TEXT,
+      link TEXT,
+      lida INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_notificacoes_usuario ON notificacoes(usuario_id, lida)`);
 
   // Tabela de controle de migrações one-time
   await pool.query(`
