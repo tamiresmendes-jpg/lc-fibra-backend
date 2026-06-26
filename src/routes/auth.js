@@ -141,7 +141,7 @@ router.post('/definir-senha', async (req, res) => {
 router.get('/me', autenticar, async (req, res) => {
   try {
     const usuario = await get(`
-    SELECT u.id, u.nome, u.email, u.perfil, u.avatar, u.empresa_id,
+    SELECT u.id, u.nome, u.email, u.perfil, u.avatar, u.empresa_id, u.departamento_id,
            u.permissoes_modulos,
            e.nome as empresa_nome, e.cor_primaria, e.logo,
            d.nome as departamento_nome, c.nome as cargo_nome
