@@ -74,14 +74,20 @@ router.post('/', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Atualizar lista de colaboradores
+// Atualizar escala (colaboradores, publicação, observação)
 router.patch('/:id', async (req, res) => {
   try {
-    const { colaboradores } = req.body;
-    await run(
-      `UPDATE escalas SET colaboradores = ? WHERE id = ? AND empresa_id = ?`,
-      [colaboradores ? JSON.stringify(colaboradores) : null, req.params.id, eid(req)]
-    );
+    const { colaboradores, publicada, observacao } = req.body;
+    const sets = [], params = [];
+    if (colaboradores !== undefined) {
+      sets.push('colaboradores=?');
+      params.push(colaboradores ? JSON.stringify(colaboradores) : null);
+    }
+    if (publicada !== undefined) { sets.push('publicada=?'); params.push(publicada ? 1 : 0); }
+    if (observacao !== undefined) { sets.push('observacao=?'); params.push(observacao || null); }
+    if (!sets.length) return res.json({ ok: true });
+    params.push(req.params.id, eid(req));
+    await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=? AND empresa_id=?`, params);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
