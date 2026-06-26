@@ -7,6 +7,16 @@ const { autenticar } = require('../middleware/auth');
 router.use(autenticar);
 function eid(req) { return req.usuario.empresa_id; }
 
+async function logHist(escalaId, req, acao, detalhe) {
+  try {
+    await run(
+      `INSERT INTO escala_historico (id, escala_id, empresa_id, usuario_id, usuario_nome, acao, detalhe)
+       VALUES (?,?,?,?,?,?,?)`,
+      [uuidv4(), escalaId, eid(req), req.usuario.id, req.usuario.nome || '', acao, detalhe || null]
+    );
+  } catch {}
+}
+
 // Listar escalas
 router.get('/', async (req, res) => {
   try {
@@ -45,7 +55,11 @@ router.get('/:id', async (req, res) => {
       `SELECT * FROM escala_feriados_def WHERE escala_id = ? ORDER BY dia`,
       [req.params.id]
     );
-    res.json({ ...escala, slots, feriados });
+    const historico = await all(
+      `SELECT * FROM escala_historico WHERE escala_id = ? ORDER BY created_at DESC LIMIT 60`,
+      [req.params.id]
+    );
+    res.json({ ...escala, slots, feriados, historico });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -66,11 +80,13 @@ router.post('/', async (req, res) => {
       [id, eid(req), departamento_id || null, Number(mes), Number(ano),
        req.usuario.id, colaboradores ? JSON.stringify(colaboradores) : null]
     );
-    res.status(201).json(await get(
+    const criada = await get(
       `SELECT e.*, d.nome as departamento_nome FROM escalas e
        LEFT JOIN departamentos d ON d.id = e.departamento_id WHERE e.id = ?`,
       [id]
-    ));
+    );
+    await logHist(id, req, 'criada', `Escala de ${criada.departamento_nome || ''} — ${Number(mes)}/${Number(ano)}`);
+    res.status(201).json(criada);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -88,6 +104,9 @@ router.patch('/:id', async (req, res) => {
     if (!sets.length) return res.json({ ok: true });
     params.push(req.params.id, eid(req));
     await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=? AND empresa_id=?`, params);
+    if (publicada === true)  await logHist(req.params.id, req, 'publicada', null);
+    if (publicada === false) await logHist(req.params.id, req, 'ocultada', null);
+    if (observacao !== undefined && observacao) await logHist(req.params.id, req, 'observacao', null);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -107,17 +126,26 @@ router.put('/:id/slot', async (req, res) => {
       [req.params.id, secao, dia, turnoVal, posicao]
     );
 
+    let nomeAtendente = null;
+    if (usuario_id) {
+      const u = await get('SELECT nome FROM usuarios WHERE id=?', [usuario_id]);
+      nomeAtendente = u?.nome || null;
+    }
+
     if (existing) {
       if (usuario_id) {
         await run('UPDATE escala_slots SET usuario_id=? WHERE id=?', [usuario_id, existing.id]);
+        await logHist(req.params.id, req, 'slot', nomeAtendente ? `Atribuído: ${nomeAtendente}` : null);
       } else {
         await run('DELETE FROM escala_slots WHERE id=?', [existing.id]);
+        await logHist(req.params.id, req, 'slot_removido', null);
       }
     } else if (usuario_id) {
       await run(
         `INSERT INTO escala_slots (id,escala_id,secao,dia,turno,posicao,usuario_id) VALUES (?,?,?,?,?,?,?)`,
         [uuidv4(), req.params.id, secao, dia, turnoVal, posicao, usuario_id]
       );
+      await logHist(req.params.id, req, 'slot', nomeAtendente ? `Atribuído: ${nomeAtendente}` : null);
     }
 
     res.json({ ok: true });
@@ -134,6 +162,7 @@ router.post('/:id/feriados', async (req, res) => {
     const id = uuidv4();
     await run('INSERT INTO escala_feriados_def (id,escala_id,dia,nome) VALUES (?,?,?,?)',
       [id, req.params.id, parseInt(dia), nome]);
+    await logHist(req.params.id, req, 'feriado', `${nome} — dia ${dia}`);
     res.status(201).json({ id, escala_id: req.params.id, dia: parseInt(dia), nome });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

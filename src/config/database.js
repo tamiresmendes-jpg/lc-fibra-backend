@@ -1156,6 +1156,18 @@ async function initSchema() {
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS turnos_sabado TEXT`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS publicada INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS observacao TEXT`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS escala_historico (
+      id TEXT PRIMARY KEY,
+      escala_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      usuario_nome TEXT,
+      acao TEXT NOT NULL,
+      detalhe TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
 
   // Anotações pessoais (privadas por usuário)
   await pool.query(`
