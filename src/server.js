@@ -69,6 +69,7 @@ app.use('/api/calendario', require('./routes/calendario'));
 app.use('/api/anotacoes', require('./routes/anotacoes'));
 app.use('/api/beneficios', require('./routes/beneficios'));
 app.use('/api/sugestoes', require('./routes/sugestoes'));
+app.use('/api/tarefas', require('./routes/tarefas'));
 app.use('/api/cultura', require('./routes/cultura-extra'));
 app.use('/api/empresa', require('./routes/empresa-extra'));
 app.use('/api/processos', require('./routes/processos-extra'));
