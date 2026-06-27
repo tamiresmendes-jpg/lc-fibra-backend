@@ -13,17 +13,17 @@ router.get('/dashboard', async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
 
-    const rowTotal = await get("SELECT COUNT(*) as total FROM pops WHERE empresa_id=$1", [eid]);
+    const rowTotal = await get("SELECT COUNT(*) as total FROM pops WHERE empresa_id=$1 AND excluido_em IS NULL", [eid]);
     const totalPops = rowTotal.total;
     const rowCat = await get("SELECT COUNT(*) as total FROM categorias_pop WHERE empresa_id=$1", [eid]);
     const totalCategorias = rowCat.total;
-    const rowViz = await get("SELECT COALESCE(SUM(total_visualizacoes),0) as total FROM pops WHERE empresa_id=$1", [eid]);
+    const rowViz = await get("SELECT COALESCE(SUM(total_visualizacoes),0) as total FROM pops WHERE empresa_id=$1 AND excluido_em IS NULL", [eid]);
     const totalVisualizacoes = rowViz.total;
-    const porStatus = await all("SELECT status, COUNT(*) as total FROM pops WHERE empresa_id=$1 GROUP BY status", [eid]);
+    const porStatus = await all("SELECT status, COUNT(*) as total FROM pops WHERE empresa_id=$1 AND excluido_em IS NULL GROUP BY status", [eid]);
     const porCategoria = await all(`
       SELECT c.nome, c.cor, COUNT(p.id) as total
       FROM categorias_pop c
-      LEFT JOIN pops p ON p.categoria_id = c.id AND p.empresa_id = c.empresa_id
+      LEFT JOIN pops p ON p.categoria_id = c.id AND p.empresa_id = c.empresa_id AND p.excluido_em IS NULL
       WHERE c.empresa_id = $1
       GROUP BY c.id, c.nome, c.cor ORDER BY total DESC
     `, [eid]);
@@ -31,7 +31,7 @@ router.get('/dashboard', async (req, res) => {
       SELECT p.id, p.titulo, p.total_visualizacoes, p.versao, c.nome as categoria_nome, c.cor as categoria_cor
       FROM pops p
       LEFT JOIN categorias_pop c ON c.id = p.categoria_id
-      WHERE p.empresa_id = $1
+      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL
       ORDER BY p.total_visualizacoes DESC LIMIT 10
     `, [eid]);
     const historicoRecente = await all(`

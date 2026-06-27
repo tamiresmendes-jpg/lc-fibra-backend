@@ -24,8 +24,8 @@ router.get('/', async (req, res) => {
       get(`SELECT
         (SELECT COUNT(*) FROM usuarios     WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador') as total_colaboradores,
         (SELECT COUNT(*) FROM departamentos WHERE empresa_id=$1)                       as total_departamentos,
-        (SELECT COUNT(*) FROM pops          WHERE empresa_id=$1)                       as total_pops,
-        (SELECT COUNT(*) FROM pops          WHERE empresa_id=$1 AND status='ativo')    as pops_ativos,
+        (SELECT COUNT(*) FROM pops          WHERE empresa_id=$1 AND excluido_em IS NULL)                    as total_pops,
+        (SELECT COUNT(*) FROM pops          WHERE empresa_id=$1 AND status='ativo' AND excluido_em IS NULL) as pops_ativos,
         (SELECT COUNT(*) FROM auditorias    WHERE empresa_id=$1)                       as total_auditorias,
         (SELECT AVG(score) FROM auditorias  WHERE empresa_id=$1 AND score IS NOT NULL) as media_score,
         (SELECT COUNT(*) FROM acoes         WHERE empresa_id=$1 AND status='aberta')   as acoes_abertas,
