@@ -554,12 +554,19 @@ router.post('/gerar-acessos-corporativos', async (req, res) => {
     const { usuarios: lista } = req.body;
     if (!Array.isArray(lista) || lista.length === 0) return res.status(400).json({ erro: 'Lista de usuários vazia' });
     const resultados = [];
+    const idsNoLote = new Set(lista.map(x => x.id));
     for (const { id, prefixo } of lista) {
       if (!id || !prefixo) { resultados.push({ id, status: 'erro', motivo: 'Prefixo vazio' }); continue; }
       const email = `${prefixo}@lcvirtualnet.com.br`;
       try {
         const existente = await get('SELECT id FROM usuarios WHERE email = ? AND id != ?', [email, id]);
-        if (existente) { resultados.push({ id, email, status: 'erro', motivo: 'E-mail já em uso por outro usuário' }); continue; }
+        if (existente) {
+          const motivo = idsNoLote.has(existente.id)
+            ? 'Prefixo repetido nesta lista — cada pessoa precisa de um e-mail diferente'
+            : 'E-mail já em uso por outro usuário';
+          resultados.push({ id, email, status: 'erro', motivo });
+          continue;
+        }
         // A senha NÃO é mais gerada automaticamente: marcamos primeiro_acesso=1
         // para o próprio usuário criar a senha no primeiro login.
         await run("UPDATE usuarios SET email = ?, senha = '', primeiro_acesso = 1 WHERE id = ? AND empresa_id = ?", [email, id, req.usuario.empresa_id]);
