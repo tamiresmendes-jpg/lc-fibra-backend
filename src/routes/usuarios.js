@@ -3,6 +3,7 @@ const bcrypt = require('bcryptjs');
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { enviarEmailAcesso } = require('../utils/email');
 
 const router = express.Router();
 router.use(autenticar);
@@ -551,7 +552,7 @@ router.delete('/:id', async (req, res) => {
 // Gerar e-mails e acessos corporativos em massa
 router.post('/gerar-acessos-corporativos', async (req, res) => {
   try {
-    const { usuarios: lista } = req.body;
+    const { usuarios: lista, enviarEmail } = req.body;
     if (!Array.isArray(lista) || lista.length === 0) return res.status(400).json({ erro: 'Lista de usuários vazia' });
     const resultados = [];
     const idsNoLote = new Set(lista.map(x => x.id));
@@ -567,10 +568,32 @@ router.post('/gerar-acessos-corporativos', async (req, res) => {
           resultados.push({ id, email, status: 'erro', motivo });
           continue;
         }
+        // Dados atuais (o e-mail atual ainda é o pessoal/de contato — capturamos antes de trocar)
+        const atual = await get('SELECT nome, email, email_contato FROM usuarios WHERE id = ? AND empresa_id = ?', [id, req.usuario.empresa_id]);
+        const contato = (atual?.email_contato && atual.email_contato.includes('@'))
+          ? atual.email_contato
+          : (atual?.email && atual.email.includes('@') ? atual.email : null);
+
         // A senha NÃO é mais gerada automaticamente: marcamos primeiro_acesso=1
-        // para o próprio usuário criar a senha no primeiro login.
-        await run("UPDATE usuarios SET email = ?, senha = '', primeiro_acesso = 1 WHERE id = ? AND empresa_id = ?", [email, id, req.usuario.empresa_id]);
-        resultados.push({ id, email, status: 'ok' });
+        // para o próprio usuário criar a senha no primeiro login. Guardamos o e-mail de contato.
+        await run(
+          "UPDATE usuarios SET email = ?, email_contato = COALESCE(email_contato, ?), senha = '', primeiro_acesso = 1 WHERE id = ? AND empresa_id = ?",
+          [email, contato, id, req.usuario.empresa_id]
+        );
+
+        // Envio opcional dos dados de acesso para o e-mail de contato
+        let emailEnviado = false, emailDestino = null, emailErro = null;
+        if (enviarEmail) {
+          if (contato && contato !== email) {
+            try {
+              await enviarEmailAcesso({ nome: atual?.nome, email }, contato);
+              emailEnviado = true; emailDestino = contato;
+            } catch (e) { emailErro = e.message; }
+          } else {
+            emailErro = 'Sem e-mail de contato válido para envio';
+          }
+        }
+        resultados.push({ id, email, status: 'ok', emailEnviado, emailDestino, emailErro });
       } catch (e) {
         resultados.push({ id, email, status: 'erro', motivo: e.message });
       }

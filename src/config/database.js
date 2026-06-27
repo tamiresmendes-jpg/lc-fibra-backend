@@ -1248,6 +1248,8 @@ async function initSchema() {
 
   // Primeiro acesso: colaborador cria a própria senha
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS primeiro_acesso INTEGER DEFAULT 0`);
+  // E-mail de contato (pessoal) — usado para enviar os dados de acesso ao colaborador
+  await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS email_contato TEXT`);
 
   // Mural: agendamento de publicação futura
   await pool.query(`ALTER TABLE cultura_mural ADD COLUMN IF NOT EXISTS data_agendamento TEXT`);
