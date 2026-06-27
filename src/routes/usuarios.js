@@ -557,13 +557,13 @@ router.post('/gerar-acessos-corporativos', async (req, res) => {
     for (const { id, prefixo } of lista) {
       if (!id || !prefixo) { resultados.push({ id, status: 'erro', motivo: 'Prefixo vazio' }); continue; }
       const email = `${prefixo}@lcvirtualnet.com.br`;
-      const senha = `LC@${prefixo}`;
       try {
         const existente = await get('SELECT id FROM usuarios WHERE email = ? AND id != ?', [email, id]);
         if (existente) { resultados.push({ id, email, status: 'erro', motivo: 'E-mail já em uso por outro usuário' }); continue; }
-        const senhaHash = bcrypt.hashSync(senha, 10);
-        await run('UPDATE usuarios SET email = ?, senha = ? WHERE id = ? AND empresa_id = ?', [email, senhaHash, id, req.usuario.empresa_id]);
-        resultados.push({ id, email, senha, status: 'ok' });
+        // A senha NÃO é mais gerada automaticamente: marcamos primeiro_acesso=1
+        // para o próprio usuário criar a senha no primeiro login.
+        await run("UPDATE usuarios SET email = ?, senha = '', primeiro_acesso = 1 WHERE id = ? AND empresa_id = ?", [email, id, req.usuario.empresa_id]);
+        resultados.push({ id, email, status: 'ok' });
       } catch (e) {
         resultados.push({ id, email, status: 'erro', motivo: e.message });
       }
