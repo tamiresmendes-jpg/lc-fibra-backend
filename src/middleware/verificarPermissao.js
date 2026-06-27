@@ -57,8 +57,8 @@ async function verificarPermissao(req, res, next) {
 
     return res.status(403).json({ erro: 'Você não tem permissão de edição neste módulo.' });
   } catch (e) {
-    // Em caso de erro inesperado, não bloqueia líder/gestor (colaborador já foi barrado acima)
-    return next();
+    // Fail-closed: em erro inesperado, NEGAR a operação (segurança > disponibilidade)
+    return res.status(500).json({ erro: 'Erro ao verificar permissão.' });
   }
 }
 

@@ -42,9 +42,11 @@ router.post('/:id/registrar', async (req, res) => {
   try {
     const { valor, data_registro, observacao } = req.body;
     if (valor === undefined) return res.status(400).json({ erro: 'Valor obrigatório' });
+    const ind = await get('SELECT id FROM indicadores WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    if (!ind) return res.status(404).json({ erro: 'Indicador não encontrado' });
     const hId = uuidv4();
     await run('INSERT INTO indicadores_historico (id, indicador_id, valor, data_registro, observacao) VALUES ($1, $2, $3, $4, $5)', [hId, req.params.id, valor, data_registro || new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().split('T')[0], observacao||null]);
-    await run('UPDATE indicadores SET valor_atual=$1 WHERE id=$2', [valor, req.params.id]);
+    await run('UPDATE indicadores SET valor_atual=$1 WHERE id=$2 AND empresa_id=$3', [valor, req.params.id, req.usuario.empresa_id]);
     res.status(201).json({ mensagem: 'Valor registrado' });
   } catch (e) {
     console.error(e);
@@ -54,6 +56,8 @@ router.post('/:id/registrar', async (req, res) => {
 
 router.get('/:id/historico', async (req, res) => {
   try {
+    const ind = await get('SELECT id FROM indicadores WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    if (!ind) return res.status(404).json({ erro: 'Indicador não encontrado' });
     const historico = await all('SELECT * FROM indicadores_historico WHERE indicador_id=$1 ORDER BY data_registro ASC', [req.params.id]);
     res.json(historico);
   } catch (e) {

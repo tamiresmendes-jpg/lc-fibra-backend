@@ -1420,12 +1420,21 @@ async function seedAdmin() {
   if (!admin) {
     const empresaId = uuidv4();
     await run("INSERT INTO empresas (id, nome, cnpj) VALUES (?, 'Venux', '00.000.000/0001-00')", [empresaId]);
-    const senhaHash = bcrypt.hashSync('admin123', 10);
-    await run(
-      "INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil) VALUES (?, ?, 'Administrador', 'admin@sistema.com', ?, 'admin')",
-      [uuidv4(), empresaId, senhaHash]
-    );
-    console.log('✅ Acesso padrão criado: admin@sistema.com / admin123');
+    const seedPass = process.env.ADMIN_SEED_PASSWORD;
+    if (seedPass) {
+      const senhaHash = bcrypt.hashSync(seedPass, 10);
+      await run(
+        "INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil) VALUES (?, ?, 'Administrador', 'admin@sistema.com', ?, 'admin')",
+        [uuidv4(), empresaId, senhaHash]
+      );
+    } else {
+      // Sem ADMIN_SEED_PASSWORD: cria sem senha, definida no primeiro acesso (evita senha fixa/fraca)
+      await run(
+        "INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, primeiro_acesso) VALUES (?, ?, 'Administrador', 'admin@sistema.com', '', 'admin', 1)",
+        [uuidv4(), empresaId]
+      );
+    }
+    console.log('✅ Acesso admin inicial criado (admin@sistema.com). A senha é definida no primeiro acesso.');
   }
 }
 

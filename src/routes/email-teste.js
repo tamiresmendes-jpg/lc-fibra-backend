@@ -1,11 +1,12 @@
 const express = require('express');
 const nodemailer = require('nodemailer');
-const { autenticar } = require('../middleware/auth');
+const { autenticar, autorizar } = require('../middleware/auth');
 const { gerarPDFPOP } = require('../utils/gerarPDF');
 const { enviarEmailPOP } = require('../utils/email');
 
 const router = express.Router();
 router.use(autenticar);
+router.use(autorizar('admin')); // configuração de e-mail é só para admin
 
 // Testa conexão SMTP e envia e-mail de teste
 router.post('/testar', async (req, res) => {

@@ -39,7 +39,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id },
+      { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id, nome: usuario.nome },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
@@ -82,7 +82,7 @@ router.post('/registrar', async (req, res) => {
   `, [usuarioId, empresaId, nome, email, senhaHash]);
 
     const token = jwt.sign(
-      { id: usuarioId, email, perfil: 'admin', empresa_id: empresaId },
+      { id: usuarioId, email, perfil: 'admin', empresa_id: empresaId, nome },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );
@@ -117,7 +117,7 @@ router.post('/definir-senha', async (req, res) => {
     await run('UPDATE usuarios SET senha=?, primeiro_acesso=0 WHERE id=?', [senhaHash, usuario.id]);
 
     const token = jwt.sign(
-      { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id },
+      { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id, nome: usuario.nome },
       process.env.JWT_SECRET,
       { expiresIn: '30d' }
     );

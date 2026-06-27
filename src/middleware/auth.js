@@ -8,7 +8,7 @@ function autenticar(req, res, next) {
     return res.status(401).json({ erro: 'Token não fornecido' });
   }
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, usuario) => {
+  jwt.verify(token, process.env.JWT_SECRET, { algorithms: ['HS256'] }, (err, usuario) => {
     if (err) {
       return res.status(403).json({ erro: 'Token inválido ou expirado' });
     }

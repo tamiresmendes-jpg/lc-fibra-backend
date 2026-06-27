@@ -1,7 +1,8 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
-const { autenticar } = require('../middleware/auth');
+const { autenticar, autorizar } = require('../middleware/auth');
+const soAdmin = autorizar('admin'); // grupos de permissão: escrita restrita a admin
 
 const router = express.Router();
 
@@ -52,7 +53,7 @@ router.get('/:id/historico', autenticar, async (req, res) => {
 });
 
 // Criar grupo
-router.post('/', autenticar, async (req, res) => {
+router.post('/', autenticar, soAdmin, async (req, res) => {
   try {
     const { nome, descricao, permissoes_modulos } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
@@ -67,7 +68,7 @@ router.post('/', autenticar, async (req, res) => {
 });
 
 // Atualizar grupo
-router.put('/:id', autenticar, async (req, res) => {
+router.put('/:id', autenticar, soAdmin, async (req, res) => {
   try {
     const { nome, descricao, permissoes_modulos } = req.body;
     const grupo = await get('SELECT * FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, req.usuario.empresa_id]);
@@ -87,7 +88,7 @@ router.put('/:id', autenticar, async (req, res) => {
 });
 
 // Excluir grupo
-router.delete('/:id', autenticar, async (req, res) => {
+router.delete('/:id', autenticar, soAdmin, async (req, res) => {
   try {
     await run('DELETE FROM grupo_membros WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM grupo_departamentos WHERE grupo_id = ?', [req.params.id]);
@@ -98,7 +99,7 @@ router.delete('/:id', autenticar, async (req, res) => {
 });
 
 // Adicionar membro (usuário)
-router.post('/:id/membros', autenticar, async (req, res) => {
+router.post('/:id/membros', autenticar, soAdmin, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
     const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
@@ -114,7 +115,7 @@ router.post('/:id/membros', autenticar, async (req, res) => {
 });
 
 // Remover membro (usuário)
-router.delete('/:id/membros/:userId', autenticar, async (req, res) => {
+router.delete('/:id/membros/:userId', autenticar, soAdmin, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
     const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
@@ -127,7 +128,7 @@ router.delete('/:id/membros/:userId', autenticar, async (req, res) => {
 });
 
 // Adicionar departamento
-router.post('/:id/departamentos', autenticar, async (req, res) => {
+router.post('/:id/departamentos', autenticar, soAdmin, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
     const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);
@@ -143,7 +144,7 @@ router.post('/:id/departamentos', autenticar, async (req, res) => {
 });
 
 // Remover departamento
-router.delete('/:id/departamentos/:deptId', autenticar, async (req, res) => {
+router.delete('/:id/departamentos/:deptId', autenticar, soAdmin, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
     const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, eid]);

@@ -3,10 +3,12 @@ const router = express.Router();
 const { run, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 
-// GET /api/ceps — retorna todos os CEPs do banco
+router.use(autenticar);
+
+// GET /api/ceps — retorna os CEPs da empresa do usuário
 router.get('/', async (req, res) => {
   try {
-    const rows = await all('SELECT cep, log, tipo, bairro, cidade FROM ceps ORDER BY cidade, bairro, log');
+    const rows = await all('SELECT cep, log, tipo, bairro, cidade FROM ceps WHERE empresa_id = ? ORDER BY cidade, bairro, log', [req.usuario.empresa_id]);
     res.json(rows);
   } catch (err) {
     console.error('[ceps GET]', err.message);
@@ -15,7 +17,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/ceps/importar — importa lista de CEPs (substitui por cidade)
-router.post('/importar', autenticar, async (req, res) => {
+router.post('/importar', async (req, res) => {
   try {
     const { ceps, cidade } = req.body;
     if (!Array.isArray(ceps) || ceps.length === 0) {
@@ -23,9 +25,10 @@ router.post('/importar', autenticar, async (req, res) => {
     }
 
     const cidadeNorm = (cidade || 'Mãe do Rio').trim();
+    const eid = req.usuario.empresa_id;
 
-    // Remove CEPs anteriores da cidade
-    await run('DELETE FROM ceps WHERE cidade = ?', [cidadeNorm]);
+    // Remove CEPs anteriores da cidade (apenas da empresa do usuário)
+    await run('DELETE FROM ceps WHERE cidade = ? AND empresa_id = ?', [cidadeNorm, eid]);
 
     // Insere novos
     let inseridos = 0;
@@ -36,8 +39,8 @@ router.post('/importar', autenticar, async (req, res) => {
       const bairro = (item.bairro || '').trim();
       if (!cep || !log) continue;
       await run(
-        'INSERT INTO ceps (cep, log, tipo, bairro, cidade) VALUES (?, ?, ?, ?, ?) ON CONFLICT (cep, bairro, log) DO UPDATE SET tipo=EXCLUDED.tipo, cidade=EXCLUDED.cidade',
-        [cep, log, tipo, bairro, cidadeNorm]
+        'INSERT INTO ceps (cep, log, tipo, bairro, cidade, empresa_id) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (cep, bairro, log) DO UPDATE SET tipo=EXCLUDED.tipo, cidade=EXCLUDED.cidade, empresa_id=EXCLUDED.empresa_id',
+        [cep, log, tipo, bairro, cidadeNorm, eid]
       );
       inseridos++;
     }

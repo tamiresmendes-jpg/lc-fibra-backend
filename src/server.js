@@ -5,6 +5,12 @@ const helmet = require('helmet');
 const rateLimit = require('express-rate-limit');
 const { conectar } = require('./config/database');
 
+// Segredo do JWT é obrigatório — sem ele o controle de acesso é inseguro
+if (!process.env.JWT_SECRET) {
+  console.error('FATAL: variável de ambiente JWT_SECRET não definida. Encerrando.');
+  process.exit(1);
+}
+
 const app = express();
 
 const allowedOrigins = process.env.ALLOWED_ORIGINS
