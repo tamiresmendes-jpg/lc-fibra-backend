@@ -145,11 +145,12 @@ router.put('/:id', async (req, res) => {
       perfilFinal = perfil;
     }
 
-    // E-mail: só admin pode alterar o próprio e-mail
-    if (email && ehAdmin && req.params.id === req.usuario.id) {
-      const emailEmUso = await get('SELECT id FROM usuarios WHERE email = ? AND id != ?', [email.trim(), req.params.id]);
+    // E-mail (login): admin pode alterar o e-mail de qualquer colaborador da empresa.
+    if (email && email.trim() && ehAdmin) {
+      const novoEmail = email.trim();
+      const emailEmUso = await get('SELECT id FROM usuarios WHERE email = ? AND id != ?', [novoEmail, req.params.id]);
       if (emailEmUso) return res.status(400).json({ erro: 'E-mail já está em uso por outro usuário' });
-      await run('UPDATE usuarios SET email = ? WHERE id = ? AND empresa_id = ?', [email.trim(), req.params.id, req.usuario.empresa_id]);
+      await run('UPDATE usuarios SET email = ? WHERE id = ? AND empresa_id = ?', [novoEmail, req.params.id, req.usuario.empresa_id]);
     }
 
     // tipo_usuario (colaborador/administrativo): só muda quando enviado explicitamente.
