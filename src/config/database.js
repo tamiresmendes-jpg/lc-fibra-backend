@@ -846,6 +846,19 @@ async function initSchema() {
       PRIMARY KEY (grupo_id, departamento_id)
     )
   `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS grupo_historico (
+      id TEXT PRIMARY KEY,
+      grupo_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      usuario_nome TEXT,
+      acao TEXT NOT NULL,
+      detalhe TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_grupo_hist ON grupo_historico(grupo_id)`);
 
   // Férias e folgas
   await pool.query(`
