@@ -542,8 +542,16 @@ router.delete('/todos', async (req, res) => {
 // Deletar usuário
 router.delete('/:id', async (req, res) => {
   try {
-    await run('UPDATE usuarios SET ativo=0 WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
-    res.json({ mensagem: 'Usuário desativado' });
+    if (req.params.id === req.usuario.id) {
+      return res.status(400).json({ erro: 'Você não pode excluir o próprio usuário.' });
+    }
+    const alvo = await get('SELECT id FROM usuarios WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    if (!alvo) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    // Remove vínculos diretos para não deixar registros órfãos
+    await run('DELETE FROM grupo_membros WHERE usuario_id=?', [req.params.id]);
+    // Exclusão definitiva do colaborador
+    await run('DELETE FROM usuarios WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    res.json({ mensagem: 'Usuário excluído permanentemente' });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }
