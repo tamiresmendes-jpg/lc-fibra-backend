@@ -330,9 +330,13 @@ router.delete('/:id/hora-extra/:hid', async (req, res) => {
 // Excluir escala
 router.delete('/:id', async (req, res) => {
   try {
+    // Valida que a escala é da empresa ANTES de apagar sub-registros (evita destruição cross-tenant)
+    const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
     await run('DELETE FROM escala_slots WHERE escala_id=?', [req.params.id]);
     await run('DELETE FROM escala_feriados_def WHERE escala_id=?', [req.params.id]);
     await run('DELETE FROM hora_extra WHERE escala_id=?', [req.params.id]);
+    await run('DELETE FROM sobreaviso_entradas WHERE escala_id=?', [req.params.id]);
     await run('DELETE FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
