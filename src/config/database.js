@@ -1321,6 +1321,26 @@ async function initSchema() {
   // Status do colaborador no chat (para distribuição automática)
   await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS chat_status TEXT DEFAULT 'disponivel'`);
 
+  // ── Grupos do chat (criados pelo admin, específicos do chat) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_grupos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      descricao TEXT,
+      cor TEXT DEFAULT '#7B55F1',
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_grupo_membros (
+      grupo_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      adicionado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      PRIMARY KEY (grupo_id, usuario_id)
+    )
+  `);
+
   // ── Módulo de Tarefas (Kanban / Delegação) ──
   // status: a_fazer | em_execucao | aguardando_aprovacao | concluido
   // origem: pessoal | corporativa   |   responsavel_id = a quem pertence o card

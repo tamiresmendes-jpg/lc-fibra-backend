@@ -244,7 +244,105 @@ router.post('/:id/redistribuir', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Excluir (criador ou gestor)
+// ── Grupos do chat (apenas admin principal) ───────────────────
+
+function soAdmin(req, res, next) {
+  if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas o admin pode gerenciar grupos do chat' });
+  next();
+}
+
+// Listar grupos (todos os perfis podem ver)
+router.get('/grupos', async (req, res) => {
+  try {
+    const grupos = await all(
+      `SELECT g.*, COUNT(m.usuario_id) AS total_membros
+         FROM chat_grupos g
+         LEFT JOIN chat_grupo_membros m ON m.grupo_id = g.id
+        WHERE g.empresa_id = ?
+        GROUP BY g.id
+        ORDER BY g.nome`,
+      [eid(req)]
+    );
+    // Busca membros de cada grupo
+    for (const g of grupos) {
+      g.membros = await all(
+        `SELECT u.id, u.nome, u.email_contato, u.cargo
+           FROM chat_grupo_membros m
+           JOIN usuarios u ON u.id = m.usuario_id
+          WHERE m.grupo_id = ?
+          ORDER BY u.nome`,
+        [g.id]
+      );
+    }
+    res.json(grupos);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Criar grupo
+router.post('/grupos', soAdmin, async (req, res) => {
+  try {
+    const { nome, descricao, cor } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const id = uuidv4();
+    await run(
+      `INSERT INTO chat_grupos (id, empresa_id, nome, descricao, cor) VALUES (?,?,?,?,?)`,
+      [id, eid(req), nome.trim(), descricao || null, cor || '#7B55F1']
+    );
+    res.status(201).json(await get('SELECT * FROM chat_grupos WHERE id = ?', [id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Editar grupo
+router.put('/grupos/:id', soAdmin, async (req, res) => {
+  try {
+    const { nome, descricao, cor } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
+    await run(
+      `UPDATE chat_grupos SET nome = ?, descricao = ?, cor = ? WHERE id = ?`,
+      [nome.trim(), descricao || null, cor || '#7B55F1', req.params.id]
+    );
+    res.json(await get('SELECT * FROM chat_grupos WHERE id = ?', [req.params.id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Excluir grupo
+router.delete('/grupos/:id', soAdmin, async (req, res) => {
+  try {
+    const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
+    await run('DELETE FROM chat_grupo_membros WHERE grupo_id = ?', [req.params.id]);
+    await run('DELETE FROM chat_grupos WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Adicionar membro ao grupo
+router.post('/grupos/:id/membros', soAdmin, async (req, res) => {
+  try {
+    const { usuario_id } = req.body;
+    const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
+    const u = await get('SELECT id FROM usuarios WHERE id = ? AND empresa_id = ?', [usuario_id, eid(req)]);
+    if (!u) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    await run(
+      `INSERT INTO chat_grupo_membros (grupo_id, usuario_id) VALUES (?,?) ON CONFLICT DO NOTHING`,
+      [req.params.id, usuario_id]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Remover membro do grupo
+router.delete('/grupos/:id/membros/:uid', soAdmin, async (req, res) => {
+  try {
+    await run('DELETE FROM chat_grupo_membros WHERE grupo_id = ? AND usuario_id = ?', [req.params.id, req.params.uid]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Excluir solicitação (criador ou gestor) ───────────────────
 router.delete('/:id', async (req, res) => {
   try {
     const sol = await get('SELECT * FROM chat_solicitacoes WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
