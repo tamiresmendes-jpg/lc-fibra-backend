@@ -44,6 +44,7 @@ const ROTA_MODULO = {
   '/api/agenda':                 'Agenda',
   '/api/calendario':             'Calendário',
   '/api/interacoes':             'Interações',
+  '/api/chat':                   'Kronos Chat',
   '/api/alteracoes':             'Central de Ciência',
 };
 
@@ -82,7 +83,7 @@ const IGNORAR_URL = [
   '/api/auth', '/api/dashboard', '/api/health', '/uploads',
   '/api/audit-log', '/api/ia', '/api/upload',
 ];
-const IGNORAR_SUFIXO = ['/visualizacoes', '/contador', '/pendentes', '/me'];
+const IGNORAR_SUFIXO = ['/visualizacoes', '/contador', '/pendentes', '/me', '/mensagens', '/meu-status'];
 
 function extrairNome(body, responseBody) {
   if (responseBody) {

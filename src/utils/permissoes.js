@@ -146,6 +146,7 @@ const ROTAS_PESSOAIS = [
   // Recursos PESSOAIS do próprio usuário (as rotas já validam o dono):
   /^\/api\/tarefas(\/|$)/,                                       // kanban de tarefas pessoal
   /^\/api\/anotacoes(\/|$)/,                                     // anotações pessoais
+  /^\/api\/chat(\/|$)/,                                          // Kronos Chat (tickets) — todos usam; rota valida dono/responsável
   /^\/api\/sugestoes\/?$/,                                       // enviar sugestão
   /^\/api\/cultura\/pesquisas\/[^/]+\/responder\/?$/,           // responder pesquisa de clima
   /^\/api\/cultura\/enquetes\/[^/]+\/votar\/?$/,                // votar em enquete

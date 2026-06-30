@@ -84,6 +84,7 @@ app.use('/api/empresa', require('./routes/empresa-extra'));
 app.use('/api/processos', require('./routes/processos-extra'));
 app.use('/api/treinamentos', require('./routes/treinamentos-extra'));
 app.use('/api/gestao', require('./routes/gestao-extra'));
+app.use('/api/chat', require('./routes/chat'));
 app.use('/api/auditoria-extra', require('./routes/auditoria-extra'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 

@@ -1269,6 +1269,58 @@ async function initSchema() {
   // Anexo de imagem (base64) na sugestão
   await pool.query(`ALTER TABLE sugestoes ADD COLUMN IF NOT EXISTS imagem TEXT`);
 
+  // ── Kronos Chat — solicitações (tickets), mensagens e histórico ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_solicitacoes (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      categoria TEXT DEFAULT 'geral',
+      departamento_id TEXT,
+      prioridade TEXT DEFAULT 'media',
+      status TEXT DEFAULT 'nova',
+      criado_por TEXT,
+      criado_por_nome TEXT,
+      responsavel_id TEXT,
+      responsavel_nome TEXT,
+      concluido_em TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_sol_empresa ON chat_solicitacoes(empresa_id, status)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_mensagens (
+      id TEXT PRIMARY KEY,
+      solicitacao_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      usuario_nome TEXT,
+      texto TEXT,
+      anexo TEXT,
+      anexo_nome TEXT,
+      anexo_tipo TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_msg_sol ON chat_mensagens(solicitacao_id)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_historico (
+      id TEXT PRIMARY KEY,
+      solicitacao_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
+      usuario_nome TEXT,
+      acao TEXT,
+      detalhe TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_hist_sol ON chat_historico(solicitacao_id)`);
+  // Status do colaborador no chat (para distribuição automática)
+  await pool.query(`ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS chat_status TEXT DEFAULT 'disponivel'`);
+
   // ── Módulo de Tarefas (Kanban / Delegação) ──
   // status: a_fazer | em_execucao | aguardando_aprovacao | concluido
   // origem: pessoal | corporativa   |   responsavel_id = a quem pertence o card
