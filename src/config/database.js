@@ -1266,6 +1266,8 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+  // Anexo de imagem (base64) na sugestão
+  await pool.query(`ALTER TABLE sugestoes ADD COLUMN IF NOT EXISTS imagem TEXT`);
 
   // ── Módulo de Tarefas (Kanban / Delegação) ──
   // status: a_fazer | em_execucao | aguardando_aprovacao | concluido
