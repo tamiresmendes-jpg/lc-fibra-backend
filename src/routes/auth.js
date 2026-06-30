@@ -75,6 +75,13 @@ router.post('/login', loginLimiter, async (req, res) => {
 // Registrar (criar empresa + admin)
 router.post('/registrar', async (req, res) => {
   try {
+    // Cadastro público desabilitado: usado apenas no bootstrap (1ª empresa).
+    // Com o sistema já em uso, só admin/gestor/líder criam usuários (via /usuarios).
+    const jaExisteEmpresa = await get('SELECT id FROM empresas LIMIT 1');
+    if (jaExisteEmpresa) {
+      return res.status(403).json({ erro: 'Cadastro público desabilitado. Solicite acesso ao administrador.' });
+    }
+
     const { nome_empresa, nome, email, senha } = req.body;
     if (!nome_empresa || !nome || !email || !senha) {
       return res.status(400).json({ erro: 'Todos os campos são obrigatórios' });

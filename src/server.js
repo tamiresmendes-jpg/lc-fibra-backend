@@ -13,6 +13,9 @@ if (!process.env.JWT_SECRET) {
 
 const app = express();
 
+// Atrás do proxy da Railway — necessário para IP real (auditoria) e rate limit corretos
+app.set('trust proxy', 1);
+
 const allowedOrigins = process.env.ALLOWED_ORIGINS
   ? process.env.ALLOWED_ORIGINS.split(',')
   : ['http://localhost:5173'];
