@@ -8,6 +8,18 @@ const { buscarPermsEfetivas } = require('../utils/permissoes');
 
 const rateLimit = require('express-rate-limit');
 const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { erro: 'Muitas tentativas. Tente novamente em 15 minutos.' } });
+const resetLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { erro: 'Muitas tentativas de redefinição. Tente novamente em 15 minutos.' } });
+
+// Normaliza data para comparação (aceita YYYY-MM-DD e DD/MM/YYYY)
+function normalizarDataCmp(s) {
+  if (!s) return '';
+  s = s.toString().trim();
+  let m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return `${m[1]}-${m[2]}-${m[3]}`;
+  m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  return s.slice(0, 10);
+}
 
 const router = express.Router();
 
@@ -134,6 +146,33 @@ router.post('/definir-senha', async (req, res) => {
     res.json({ token, usuario: dadosUsuario });
   } catch(err) {
     res.status(500).json({ erro: err.message });
+  }
+});
+
+// Recuperação de senha self-service: valida e-mail + data de nascimento (sem admin, sem e-mail)
+router.post('/recuperar-senha', resetLimiter, async (req, res) => {
+  try {
+    const { email, data_nascimento, nova_senha } = req.body;
+    if (!email || !data_nascimento || !nova_senha) {
+      return res.status(400).json({ erro: 'Preencha e-mail, data de nascimento e nova senha.' });
+    }
+    if (nova_senha.length < 6) {
+      return res.status(400).json({ erro: 'A senha deve ter no mínimo 6 caracteres.' });
+    }
+    const usuario = await get('SELECT id, data_nascimento FROM usuarios WHERE email = ? AND ativo = 1', [email.trim()]);
+    const erroGenerico = 'Dados não conferem. Verifique o e-mail e a data de nascimento.';
+    if (!usuario) return res.status(400).json({ erro: erroGenerico });
+    if (!usuario.data_nascimento) {
+      return res.status(400).json({ erro: 'Não foi possível validar seus dados (data de nascimento não cadastrada). Procure o administrador.' });
+    }
+    if (normalizarDataCmp(usuario.data_nascimento) !== normalizarDataCmp(data_nascimento)) {
+      return res.status(400).json({ erro: erroGenerico });
+    }
+    const senhaHash = bcrypt.hashSync(nova_senha, 10);
+    await run('UPDATE usuarios SET senha = ?, primeiro_acesso = 0 WHERE id = ?', [senhaHash, usuario.id]);
+    res.json({ ok: true, mensagem: 'Senha redefinida com sucesso! Faça login com a nova senha.' });
+  } catch (err) {
+    res.status(500).json({ erro: 'Erro ao redefinir senha.' });
   }
 });
 
