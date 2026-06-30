@@ -143,6 +143,12 @@ const ROTAS_PESSOAIS = [
   /^\/api\/agenda(\/|$)/,
   /^\/api\/interacoes(\/|$)/,
   /^\/api\/upload(\/|$)/,
+  // Recursos PESSOAIS do próprio usuário (as rotas já validam o dono):
+  /^\/api\/tarefas(\/|$)/,                                       // kanban de tarefas pessoal
+  /^\/api\/anotacoes(\/|$)/,                                     // anotações pessoais
+  /^\/api\/sugestoes\/?$/,                                       // enviar sugestão
+  /^\/api\/cultura\/pesquisas\/[^/]+\/responder\/?$/,           // responder pesquisa de clima
+  /^\/api\/cultura\/enquetes\/[^/]+\/votar\/?$/,                // votar em enquete
   /^\/api\/alteracoes\/[^/]+\/ciente\/?$/,                       // dar ciência
   /^\/api\/treinamentos\/[^/]+\/pops\/[^/]+\/concluir\/?$/,      // concluir treinamento próprio
   // POP — comentar, curtir/reagir e excluir o próprio comentário (resolver continua bloqueado)
