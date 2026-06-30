@@ -16,10 +16,10 @@ const STATUS_VALIDOS = ['nova', 'distribuida', 'em_atendimento', 'aguardando_ret
 const STATUS_ABERTOS = ['nova', 'distribuida', 'em_atendimento', 'aguardando_retorno', 'reaberta'];
 
 const SEL = `
-  SELECT s.*, d.nome AS departamento_nome,
+  SELECT s.*, g.nome AS grupo_nome,
          (SELECT COUNT(*) FROM chat_mensagens m WHERE m.solicitacao_id = s.id) AS total_mensagens
     FROM chat_solicitacoes s
-    LEFT JOIN departamentos d ON d.id = s.departamento_id`;
+    LEFT JOIN chat_grupos g ON g.id = s.grupo_id`;
 
 async function logHist(solId, req, acao, detalhe) {
   try {
@@ -41,14 +41,23 @@ async function notificar(empresaId, usuarioId, titulo, texto) {
   } catch {}
 }
 
-// Distribuição automática: colaborador DISPONÍVEL do departamento com menor carga ativa
-async function distribuir(empresaId, departamentoId) {
-  if (!departamentoId) return null;
+// Distribuição automática pelo grupo: busca membros dos deptos responsáveis com menor carga
+async function distribuir(empresaId, grupoId) {
+  if (!grupoId) return null;
+  // Busca departamentos responsáveis pelo grupo
+  const deptos = await all(
+    `SELECT departamento_id FROM chat_grupo_responsaveis WHERE grupo_id = ?`,
+    [grupoId]
+  );
+  if (!deptos.length) return null;
+  const deptoIds = deptos.map(d => d.departamento_id);
+  // Candidatos: membros ativos e disponíveis dos deptos responsáveis
+  const placeholders = deptoIds.map(() => '?').join(',');
   const candidatos = await all(
     `SELECT id, nome FROM usuarios
-     WHERE empresa_id = ? AND departamento_id = ? AND ativo = 1
+     WHERE empresa_id = ? AND departamento_id IN (${placeholders}) AND ativo = 1
        AND COALESCE(chat_status, 'disponivel') = 'disponivel'`,
-    [empresaId, departamentoId]
+    [empresaId, ...deptoIds]
   );
   if (!candidatos.length) return null;
   let melhor = null, menor = Infinity;
@@ -96,13 +105,12 @@ router.get('/colaboradores', async (req, res) => {
 // ── Fila de solicitações ───────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    const { status, departamento_id, escopo } = req.query;
+    const { status, grupo_id, escopo } = req.query;
     let sql = `${SEL} WHERE s.empresa_id = ?`;
     const params = [eid(req)];
     if (status) { sql += ` AND s.status = ?`; params.push(status); }
-    if (departamento_id) { sql += ` AND s.departamento_id = ?`; params.push(departamento_id); }
+    if (grupo_id) { sql += ` AND s.grupo_id = ?`; params.push(grupo_id); }
     if (escopo === 'minhas') { sql += ` AND (s.criado_por = ? OR s.responsavel_id = ?)`; params.push(uid(req), uid(req)); }
-    // Abertas primeiro, depois mais recentes
     sql += ` ORDER BY CASE WHEN s.status IN ('concluida','cancelada') THEN 1 ELSE 0 END, s.updated_at DESC`;
     res.json(await all(sql, params));
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -119,21 +127,21 @@ router.get('/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Criar solicitação (+ distribuição automática)
+// Criar solicitação (+ distribuição automática pelo grupo)
 router.post('/', async (req, res) => {
   try {
-    const { titulo, descricao, categoria, departamento_id, prioridade, anexo, anexo_nome, anexo_tipo } = req.body;
+    const { titulo, descricao, categoria, grupo_id, prioridade, anexo, anexo_nome, anexo_tipo } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Título é obrigatório' });
     const id = uuidv4();
 
-    const resp = await distribuir(eid(req), departamento_id);
+    const resp = await distribuir(eid(req), grupo_id);
     const status = resp ? 'distribuida' : 'nova';
 
     await run(
       `INSERT INTO chat_solicitacoes
-        (id, empresa_id, titulo, descricao, categoria, departamento_id, prioridade, status, criado_por, criado_por_nome, responsavel_id, responsavel_nome)
+        (id, empresa_id, titulo, descricao, categoria, grupo_id, prioridade, status, criado_por, criado_por_nome, responsavel_id, responsavel_nome)
        VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, eid(req), titulo.trim(), descricao || null, categoria || 'geral', departamento_id || null,
+      [id, eid(req), titulo.trim(), descricao || null, categoria || 'geral', grupo_id || null,
        prioridade || 'media', status, uid(req), unome(req), resp?.id || null, resp?.nome || null]
     );
     await logHist(id, req, 'criada', 'Solicitação aberta');
@@ -251,26 +259,42 @@ function soAdmin(req, res, next) {
   next();
 }
 
+async function carregarGrupoCompleto(grupoId) {
+  const g = await get('SELECT * FROM chat_grupos WHERE id = ?', [grupoId]);
+  if (!g) return null;
+  g.responsaveis = await all(
+    `SELECT d.id, d.nome FROM chat_grupo_responsaveis r
+       JOIN departamentos d ON d.id = r.departamento_id
+      WHERE r.grupo_id = ? ORDER BY d.nome`,
+    [grupoId]
+  );
+  g.participantes = await all(
+    `SELECT u.id, u.nome FROM chat_grupo_participantes p
+       JOIN usuarios u ON u.id = p.usuario_id
+      WHERE p.grupo_id = ? ORDER BY u.nome`,
+    [grupoId]
+  );
+  return g;
+}
+
 // Listar grupos (todos os perfis podem ver)
 router.get('/grupos', async (req, res) => {
   try {
     const grupos = await all(
-      `SELECT g.*, COUNT(m.usuario_id) AS total_membros
-         FROM chat_grupos g
-         LEFT JOIN chat_grupo_membros m ON m.grupo_id = g.id
-        WHERE g.empresa_id = ?
-        GROUP BY g.id
-        ORDER BY g.nome`,
+      `SELECT * FROM chat_grupos WHERE empresa_id = ? ORDER BY nome`,
       [eid(req)]
     );
-    // Busca membros de cada grupo
     for (const g of grupos) {
-      g.membros = await all(
-        `SELECT u.id, u.nome, u.email_contato, u.cargo
-           FROM chat_grupo_membros m
-           JOIN usuarios u ON u.id = m.usuario_id
-          WHERE m.grupo_id = ?
-          ORDER BY u.nome`,
+      g.responsaveis = await all(
+        `SELECT d.id, d.nome FROM chat_grupo_responsaveis r
+           JOIN departamentos d ON d.id = r.departamento_id
+          WHERE r.grupo_id = ? ORDER BY d.nome`,
+        [g.id]
+      );
+      g.participantes = await all(
+        `SELECT u.id, u.nome FROM chat_grupo_participantes p
+           JOIN usuarios u ON u.id = p.usuario_id
+          WHERE p.grupo_id = ? ORDER BY u.nome`,
         [g.id]
       );
     }
@@ -281,29 +305,37 @@ router.get('/grupos', async (req, res) => {
 // Criar grupo
 router.post('/grupos', soAdmin, async (req, res) => {
   try {
-    const { nome, descricao, cor } = req.body;
+    const { nome, descricao, cor, responsaveis, participantes } = req.body;
     if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
     const id = uuidv4();
     await run(
       `INSERT INTO chat_grupos (id, empresa_id, nome, descricao, cor) VALUES (?,?,?,?,?)`,
       [id, eid(req), nome.trim(), descricao || null, cor || '#7B55F1']
     );
-    res.status(201).json(await get('SELECT * FROM chat_grupos WHERE id = ?', [id]));
+    if (Array.isArray(responsaveis)) {
+      for (const did of responsaveis) {
+        await run(`INSERT INTO chat_grupo_responsaveis (grupo_id, departamento_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [id, did]);
+      }
+    }
+    if (Array.isArray(participantes)) {
+      for (const uid2 of participantes) {
+        await run(`INSERT INTO chat_grupo_participantes (grupo_id, usuario_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [id, uid2]);
+      }
+    }
+    res.status(201).json(await carregarGrupoCompleto(id));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Editar grupo
+// Editar grupo (dados básicos)
 router.put('/grupos/:id', soAdmin, async (req, res) => {
   try {
     const { nome, descricao, cor } = req.body;
     if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
     const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
-    await run(
-      `UPDATE chat_grupos SET nome = ?, descricao = ?, cor = ? WHERE id = ?`,
-      [nome.trim(), descricao || null, cor || '#7B55F1', req.params.id]
-    );
-    res.json(await get('SELECT * FROM chat_grupos WHERE id = ?', [req.params.id]));
+    await run(`UPDATE chat_grupos SET nome = ?, descricao = ?, cor = ? WHERE id = ?`,
+      [nome.trim(), descricao || null, cor || '#7B55F1', req.params.id]);
+    res.json(await carregarGrupoCompleto(req.params.id));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -312,32 +344,40 @@ router.delete('/grupos/:id', soAdmin, async (req, res) => {
   try {
     const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
+    await run('DELETE FROM chat_grupo_responsaveis WHERE grupo_id = ?', [req.params.id]);
+    await run('DELETE FROM chat_grupo_participantes WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupo_membros WHERE grupo_id = ?', [req.params.id]);
-    await run('DELETE FROM chat_grupos WHERE id = ?', [req.params.id]);
+    await run('DELETE FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Adicionar membro ao grupo
-router.post('/grupos/:id/membros', soAdmin, async (req, res) => {
+// Adicionar responsável (depto) ao grupo
+router.post('/grupos/:id/responsaveis', soAdmin, async (req, res) => {
+  try {
+    const { departamento_id } = req.body;
+    await run(`INSERT INTO chat_grupo_responsaveis (grupo_id, departamento_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [req.params.id, departamento_id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.delete('/grupos/:id/responsaveis/:did', soAdmin, async (req, res) => {
+  try {
+    await run('DELETE FROM chat_grupo_responsaveis WHERE grupo_id = ? AND departamento_id = ?', [req.params.id, req.params.did]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Adicionar participante (usuário) ao grupo
+router.post('/grupos/:id/participantes', soAdmin, async (req, res) => {
   try {
     const { usuario_id } = req.body;
-    const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
-    if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
-    const u = await get('SELECT id FROM usuarios WHERE id = ? AND empresa_id = ?', [usuario_id, eid(req)]);
-    if (!u) return res.status(404).json({ erro: 'Usuário não encontrado' });
-    await run(
-      `INSERT INTO chat_grupo_membros (grupo_id, usuario_id) VALUES (?,?) ON CONFLICT DO NOTHING`,
-      [req.params.id, usuario_id]
-    );
+    await run(`INSERT INTO chat_grupo_participantes (grupo_id, usuario_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [req.params.id, usuario_id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
-
-// Remover membro do grupo
-router.delete('/grupos/:id/membros/:uid', soAdmin, async (req, res) => {
+router.delete('/grupos/:id/participantes/:uid', soAdmin, async (req, res) => {
   try {
-    await run('DELETE FROM chat_grupo_membros WHERE grupo_id = ? AND usuario_id = ?', [req.params.id, req.params.uid]);
+    await run('DELETE FROM chat_grupo_participantes WHERE grupo_id = ? AND usuario_id = ?', [req.params.id, req.params.uid]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

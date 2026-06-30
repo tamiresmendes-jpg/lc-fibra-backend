@@ -1332,11 +1332,29 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+  // Departamentos responsáveis por responder as solicitações do grupo
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_grupo_responsaveis (
+      grupo_id TEXT NOT NULL,
+      departamento_id TEXT NOT NULL,
+      PRIMARY KEY (grupo_id, departamento_id)
+    )
+  `);
+  // Participantes que podem enviar solicitações para o grupo
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_grupo_participantes (
+      grupo_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      PRIMARY KEY (grupo_id, usuario_id)
+    )
+  `);
+  // Coluna grupo_id nas solicitações (substitui departamento_id como roteamento)
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS grupo_id TEXT`);
+  // Tabela legada — mantida para não quebrar índices existentes
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_grupo_membros (
       grupo_id TEXT NOT NULL,
       usuario_id TEXT NOT NULL,
-      adicionado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
       PRIMARY KEY (grupo_id, usuario_id)
     )
   `);
