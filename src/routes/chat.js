@@ -249,6 +249,16 @@ router.post('/push/inscrever', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Enviar um push de teste para mim mesmo (verificar se o push está ativo)
+router.post('/push/testar', async (req, res) => {
+  try {
+    const subs = await all('SELECT COUNT(*) AS t FROM chat_push_subs WHERE empresa_id = ? AND usuario_id = ?', [eid(req), uid(req)]);
+    const qtd = Number(subs?.[0]?.t || 0);
+    await enviarPush(eid(req), uid(req), { titulo: 'Teste do Kronos', corpo: 'Se você recebeu isto, o push está funcionando! 🎉', solId: '' });
+    res.json({ ok: true, inscricoes: qtd });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Novas demandas atribuídas a mim ainda não avisadas (para o alerta/push)
 router.get('/minhas-novas', async (req, res) => {
   try {
