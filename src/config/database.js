@@ -1329,9 +1329,11 @@ async function initSchema() {
       nome TEXT NOT NULL,
       descricao TEXT,
       cor TEXT DEFAULT '#7B55F1',
+      emoji TEXT DEFAULT '💬',
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+  await pool.query(`ALTER TABLE chat_grupos ADD COLUMN IF NOT EXISTS emoji TEXT DEFAULT '💬'`);
   // Departamentos responsáveis por responder as solicitações do grupo
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_grupo_responsaveis (
