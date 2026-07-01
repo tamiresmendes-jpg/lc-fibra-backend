@@ -3,6 +3,7 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { PUBLIC_KEY: VAPID_PUBLIC, enviarPush } = require('../config/webpush');
 
 router.use(autenticar);
 
@@ -232,6 +233,22 @@ router.get('/dashboard', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── Web Push ──
+router.get('/push/chave', (req, res) => res.json({ chave: VAPID_PUBLIC }));
+router.post('/push/inscrever', async (req, res) => {
+  try {
+    const sub = req.body?.subscription || req.body;
+    if (!sub || !sub.endpoint) return res.status(400).json({ erro: 'Inscrição inválida' });
+    await run(
+      `INSERT INTO chat_push_subs (id, empresa_id, usuario_id, endpoint, sub_json)
+       VALUES (?,?,?,?,?)
+       ON CONFLICT (endpoint) DO UPDATE SET usuario_id = EXCLUDED.usuario_id, sub_json = EXCLUDED.sub_json`,
+      [uuidv4(), eid(req), uid(req), sub.endpoint, JSON.stringify(sub)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Novas demandas atribuídas a mim ainda não avisadas (para o alerta/push)
 router.get('/minhas-novas', async (req, res) => {
   try {
@@ -403,6 +420,7 @@ router.post('/', async (req, res) => {
       await run('UPDATE chat_solicitacoes SET alerta_visto = 0 WHERE id = ?', [id]);
       await logHist(id, req, 'distribuida', `Distribuída automaticamente para ${resp.nome}`);
       await notificar(eid(req), resp.id, 'Nova solicitação', `"${titulo.trim()}" foi atribuída a você`);
+      await enviarPush(eid(req), resp.id, { titulo: 'Nova demanda para você', corpo: titulo.trim(), solId: id });
     }
     // Mensagem inicial opcional (anexo enviado na abertura)
     const temAnexo = anexo && typeof anexo === 'string' && anexo.startsWith('data:');
@@ -498,7 +516,10 @@ router.patch('/:id/responsavel', async (req, res) => {
       [novo?.id || null, novo?.nome || null, novoStatus, alerta, req.params.id]
     );
     await logHist(req.params.id, req, 'reatribuida', novo ? `Atribuída a ${novo.nome}` : 'Removido responsável');
-    if (novo && novo.id !== uid(req)) await notificar(eid(req), novo.id, 'Solicitação atribuída', `"${sol.titulo}" foi atribuída a você`);
+    if (novo && novo.id !== uid(req)) {
+      await notificar(eid(req), novo.id, 'Solicitação atribuída', `"${sol.titulo}" foi atribuída a você`);
+      await enviarPush(eid(req), novo.id, { titulo: 'Nova demanda para você', corpo: sol.titulo, solId: req.params.id });
+    }
     res.json(await get(`${SEL} WHERE s.id = ?`, [req.params.id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -516,7 +537,10 @@ router.post('/:id/redistribuir', async (req, res) => {
       [resp.id, resp.nome, req.params.id]
     );
     await logHist(req.params.id, req, 'distribuida', `Redistribuída para ${resp.nome}`);
-    if (resp.id !== uid(req)) await notificar(eid(req), resp.id, 'Solicitação atribuída', `"${sol.titulo}" foi atribuída a você`);
+    if (resp.id !== uid(req)) {
+      await notificar(eid(req), resp.id, 'Solicitação atribuída', `"${sol.titulo}" foi atribuída a você`);
+      await enviarPush(eid(req), resp.id, { titulo: 'Nova demanda para você', corpo: sol.titulo, solId: req.params.id });
+    }
     res.json(await get(`${SEL} WHERE s.id = ?`, [req.params.id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

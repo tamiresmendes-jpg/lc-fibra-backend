@@ -1374,6 +1374,17 @@ async function initSchema() {
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS topico_nome TEXT`);
   // Alerta de nova demanda para o responsável (0 = precisa avisar / 1 = já avisado)
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS alerta_visto INT DEFAULT 1`);
+  // Inscrições de Web Push (notificação com a aba fechada)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_push_subs (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      endpoint TEXT NOT NULL UNIQUE,
+      sub_json TEXT NOT NULL,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
   // Tabela legada — mantida para não quebrar índices existentes
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_grupo_membros (
