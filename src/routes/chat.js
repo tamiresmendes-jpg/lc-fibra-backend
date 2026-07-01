@@ -399,10 +399,18 @@ router.delete('/grupos/:id/topicos/:tid', soAdmin, async (req, res) => {
 });
 
 // ── Canais de Departamento — DEVE vir antes de /:id ──────────
-// Lista os canais do meu departamento (auto-cria se ainda não existe)
+
+// Verifica se usuário tem acesso ao canal (depto ou membro individual)
+async function temAcessoCanal(req, canal) {
+  if (ehGestor(req)) return true;
+  if (req.usuario.departamento_id === canal.departamento_id) return true;
+  const m = await get('SELECT 1 FROM chat_canal_membros WHERE canal_id = ? AND usuario_id = ?', [canal.id, uid(req)]);
+  return !!m;
+}
+
+// Lista os canais acessíveis ao usuário
 router.get('/canais', async (req, res) => {
   try {
-    const deptoId = req.usuario.departamento_id;
     if (ehGestor(req)) {
       const canais = await all(
         `SELECT c.*, d.nome AS departamento_nome
@@ -413,29 +421,37 @@ router.get('/canais', async (req, res) => {
       );
       return res.json(canais);
     }
-    if (!deptoId) return res.json([]);
 
-    let canal = await get(
-      'SELECT * FROM chat_canais WHERE empresa_id = ? AND departamento_id = ?',
-      [eid(req), deptoId]
-    );
-    if (!canal) {
-      const depto = await get('SELECT nome FROM departamentos WHERE id = ?', [deptoId]);
-      const nome = depto?.nome || 'Meu Departamento';
-      const id = uuidv4();
-      await run(
-        `INSERT INTO chat_canais (id, empresa_id, departamento_id, nome, emoji)
-         VALUES (?, ?, ?, ?, '🏢')`,
-        [id, eid(req), deptoId, nome]
-      );
-      canal = await get('SELECT * FROM chat_canais WHERE id = ?', [id]);
+    const deptoId = req.usuario.departamento_id;
+    // Auto-cria canal do próprio depto se ainda não existe
+    if (deptoId) {
+      const existe = await get('SELECT id FROM chat_canais WHERE empresa_id = ? AND departamento_id = ?', [eid(req), deptoId]);
+      if (!existe) {
+        const depto = await get('SELECT nome FROM departamentos WHERE id = ?', [deptoId]);
+        await run(
+          `INSERT INTO chat_canais (id, empresa_id, departamento_id, nome, emoji) VALUES (?, ?, ?, ?, '🏢')`,
+          [uuidv4(), eid(req), deptoId, depto?.nome || 'Meu Departamento']
+        );
+      }
     }
-    const deptoRow = await get('SELECT nome FROM departamentos WHERE id = ?', [canal.departamento_id]);
-    canal.departamento_nome = deptoRow?.nome || canal.nome;
-    res.json([canal]);
+
+    // Canais do próprio depto + canais onde foi adicionado individualmente
+    const canais = await all(
+      `SELECT DISTINCT c.*, d.nome AS departamento_nome
+         FROM chat_canais c
+         LEFT JOIN departamentos d ON d.id = c.departamento_id
+        WHERE c.empresa_id = ?
+          AND (c.departamento_id = ? OR EXISTS (
+                SELECT 1 FROM chat_canal_membros m WHERE m.canal_id = c.id AND m.usuario_id = ?
+              ))
+        ORDER BY d.nome`,
+      [eid(req), deptoId || '', uid(req)]
+    );
+    res.json(canais);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Criar canal para um departamento (admin)
 router.post('/canais', soAdmin, async (req, res) => {
   try {
     const { departamento_id, nome, emoji } = req.body;
@@ -453,13 +469,54 @@ router.post('/canais', soAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Membros individuais de um canal
+router.get('/canais/:id/membros', soAdmin, async (req, res) => {
+  try {
+    const canal = await get('SELECT * FROM chat_canais WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!canal) return res.status(404).json({ erro: 'Canal não encontrado' });
+    const membros = await all(
+      `SELECT u.id, u.nome, u.avatar, d.nome AS departamento_nome
+         FROM chat_canal_membros m
+         JOIN usuarios u ON u.id = m.usuario_id
+         LEFT JOIN departamentos d ON d.id = u.departamento_id
+        WHERE m.canal_id = ? ORDER BY u.nome`,
+      [req.params.id]
+    );
+    res.json(membros);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Adicionar membro individual ao canal
+router.post('/canais/:id/membros', soAdmin, async (req, res) => {
+  try {
+    const canal = await get('SELECT * FROM chat_canais WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!canal) return res.status(404).json({ erro: 'Canal não encontrado' });
+    const { usuario_id } = req.body;
+    if (!usuario_id) return res.status(400).json({ erro: 'usuario_id é obrigatório' });
+    const u = await get('SELECT id FROM usuarios WHERE id = ? AND empresa_id = ?', [usuario_id, eid(req)]);
+    if (!u) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    await run(
+      `INSERT INTO chat_canal_membros (canal_id, usuario_id, adicionado_por) VALUES (?, ?, ?) ON CONFLICT DO NOTHING`,
+      [req.params.id, usuario_id, uid(req)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Remover membro individual do canal
+router.delete('/canais/:id/membros/:uid', soAdmin, async (req, res) => {
+  try {
+    await run('DELETE FROM chat_canal_membros WHERE canal_id = ? AND usuario_id = ?', [req.params.id, req.params.uid]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Mensagens de um canal
 router.get('/canais/:id/mensagens', async (req, res) => {
   try {
     const canal = await get('SELECT * FROM chat_canais WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     if (!canal) return res.status(404).json({ erro: 'Canal não encontrado' });
-    if (!ehGestor(req) && req.usuario.departamento_id !== canal.departamento_id) {
-      return res.status(403).json({ erro: 'Você não pertence a este departamento' });
-    }
+    if (!await temAcessoCanal(req, canal)) return res.status(403).json({ erro: 'Sem acesso a este canal' });
     const limite = Math.min(Number(req.query.limite) || 50, 200);
     const msgs = await all(
       `SELECT * FROM chat_canal_mensagens WHERE canal_id = ? ORDER BY created_at ASC LIMIT ?`,
@@ -469,13 +526,12 @@ router.get('/canais/:id/mensagens', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Enviar mensagem no canal
 router.post('/canais/:id/mensagens', async (req, res) => {
   try {
     const canal = await get('SELECT * FROM chat_canais WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     if (!canal) return res.status(404).json({ erro: 'Canal não encontrado' });
-    if (!ehGestor(req) && req.usuario.departamento_id !== canal.departamento_id) {
-      return res.status(403).json({ erro: 'Você não pertence a este departamento' });
-    }
+    if (!await temAcessoCanal(req, canal)) return res.status(403).json({ erro: 'Sem acesso a este canal' });
     const { texto, anexo, anexo_nome, anexo_tipo } = req.body;
     if (!texto?.trim() && !anexo) return res.status(400).json({ erro: 'Mensagem vazia' });
     const id = uuidv4();
@@ -489,8 +545,10 @@ router.post('/canais/:id/mensagens', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Excluir canal (admin)
 router.delete('/canais/:id', soAdmin, async (req, res) => {
   try {
+    await run('DELETE FROM chat_canal_membros WHERE canal_id = ?', [req.params.id]);
     await run('DELETE FROM chat_canal_mensagens WHERE canal_id = ?', [req.params.id]);
     await run('DELETE FROM chat_canais WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     res.json({ ok: true });

@@ -1427,6 +1427,16 @@ async function initSchema() {
     )
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_canal_msg ON chat_canal_mensagens(canal_id, created_at)`);
+  // Membros individuais adicionados manualmente a um canal de departamento
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_canal_membros (
+      canal_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      adicionado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      PRIMARY KEY (canal_id, usuario_id)
+    )
+  `);
 
   // ── Módulo de Tarefas (Kanban / Delegação) ──
   // status: a_fazer | em_execucao | aguardando_aprovacao | concluido
