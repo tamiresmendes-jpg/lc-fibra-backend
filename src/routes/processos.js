@@ -8,6 +8,15 @@ router.use(autenticar);
 
 function eid(req) { return req.usuario.empresa_id; }
 
+// Garantir colunas novas (idempotente)
+;(async () => {
+  try {
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS objetivo TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS resultado_esperado TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS pops_relacionados TEXT`);
+  } catch {}
+})();
+
 router.get('/', async (req, res) => {
   try {
     const rows = await all('SELECT * FROM processos WHERE empresa_id=$1 AND excluido_em IS NULL ORDER BY created_at DESC', [eid(req)]);
@@ -17,12 +26,14 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { titulo, descricao, setor, responsavel, status } = req.body;
+    const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(
-      'INSERT INTO processos (id,empresa_id,titulo,descricao,setor,responsavel,status) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-      [id, eid(req), titulo, descricao||null, setor||null, responsavel||null, status||'ativo']
+      `INSERT INTO processos (id,empresa_id,titulo,objetivo,descricao,setor,responsavel,status,resultado_esperado,pops_relacionados)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+      [id, eid(req), titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'ativo',
+       resultado_esperado||null, pops_relacionados||null]
     );
     res.status(201).json({ id, titulo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -30,10 +41,12 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const { titulo, descricao, setor, responsavel, status } = req.body;
+    const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados } = req.body;
     await run(
-      'UPDATE processos SET titulo=$1,descricao=$2,setor=$3,responsavel=$4,status=$5 WHERE id=$6 AND empresa_id=$7',
-      [titulo, descricao||null, setor||null, responsavel||null, status||'ativo', req.params.id, eid(req)]
+      `UPDATE processos SET titulo=$1,objetivo=$2,descricao=$3,setor=$4,responsavel=$5,status=$6,
+       resultado_esperado=$7,pops_relacionados=$8 WHERE id=$9 AND empresa_id=$10`,
+      [titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'ativo',
+       resultado_esperado||null, pops_relacionados||null, req.params.id, eid(req)]
     );
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
