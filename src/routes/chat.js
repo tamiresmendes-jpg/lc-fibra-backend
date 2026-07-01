@@ -344,11 +344,24 @@ router.post('/:id/mensagens', async (req, res) => {
        VALUES (?,?,?,?,?,?,?,?,?)`,
       [mid, req.params.id, eid(req), uid(req), unome(req), texto?.trim() || null, temAnexo ? anexo : null, temAnexo ? (anexo_nome || 'anexo') : null, temAnexo ? (anexo_tipo || null) : null]
     );
-    // Responsável respondeu numa solicitação distribuída → entra em atendimento
+    // Status automático conforme quem respondeu (não mexe em concluída/cancelada)
     let novoStatus = sol.status;
-    if (sol.status === 'distribuida' && sol.responsavel_id === uid(req)) novoStatus = 'em_atendimento';
+    if (!['concluida', 'cancelada'].includes(sol.status)) {
+      if (uid(req) === sol.criado_por && uid(req) !== sol.responsavel_id) {
+        // Solicitante escreveu → bola com o responsável
+        novoStatus = 'em_atendimento';
+      } else {
+        // Responsável (ou atendente) escreveu → aguardando retorno do solicitante
+        novoStatus = 'aguardando_retorno';
+      }
+    }
     await run(`UPDATE chat_solicitacoes SET status = ?, updated_at = ${NOW} WHERE id = ?`, [novoStatus, req.params.id]);
-    if (novoStatus !== sol.status) await logHist(req.params.id, req, 'status', 'Em atendimento');
+    if (novoStatus !== sol.status) {
+      const rotulo = novoStatus === 'aguardando_retorno'
+        ? `Aguardando retorno de ${sol.criado_por_nome || 'solicitante'}`
+        : (novoStatus === 'em_atendimento' ? 'Em atendimento' : novoStatus);
+      await logHist(req.params.id, req, 'status', rotulo);
+    }
     // Notifica a outra parte
     const destino = uid(req) === sol.criado_por ? sol.responsavel_id : sol.criado_por;
     if (destino && destino !== uid(req)) await notificar(eid(req), destino, 'Nova mensagem', `"${sol.titulo}" tem uma nova mensagem`);
