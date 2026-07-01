@@ -89,16 +89,19 @@ router.post('/:id/iniciar', async (req, res) => {
     const solicitacao = await get('SELECT * FROM auditoria_solicitacoes WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
     if (!solicitacao) return res.status(404).json({ erro: 'Solicitação não encontrada' });
 
-    const pop = await get('SELECT titulo FROM pops WHERE id=?', [solicitacao.pop_id]);
+    const scoreNum = score != null ? Math.min(100, Math.max(0, Number(score))) : null;
+
+    const pop = await get('SELECT titulo FROM pops WHERE id=? AND empresa_id=?', [solicitacao.pop_id, req.usuario.empresa_id]);
+    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
 
     // Criar auditoria
     const auditoriaId = uuidv4();
-    const statusAuditoria = score >= 70 ? 'aprovada' : 'rejeitada';
+    const statusAuditoria = scoreNum != null ? (scoreNum >= 70 ? 'aprovada' : 'rejeitada') : 'pendente';
 
     await run(`
       INSERT INTO auditorias (id, empresa_id, tipo, titulo, auditor_id, pop_id, solicitacao_id, score, status, resultado, pendencias, data_auditoria)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
-    `, [auditoriaId, req.usuario.empresa_id, solicitacao.tipo, `Auditoria: ${pop.titulo}`, req.usuario.id, solicitacao.pop_id, solicitacao.id, score || null, statusAuditoria, resultado || null, pendencias || null]);
+    `, [auditoriaId, req.usuario.empresa_id, solicitacao.tipo, `Auditoria: ${pop.titulo}`, req.usuario.id, solicitacao.pop_id, solicitacao.id, scoreNum, statusAuditoria, resultado || null, pendencias || null]);
 
     // Atualizar solicitação
     await run('UPDATE auditoria_solicitacoes SET status=?, auditoria_id=? WHERE id=?', ['concluida', auditoriaId, req.params.id]);

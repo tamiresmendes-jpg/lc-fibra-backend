@@ -113,6 +113,7 @@ const PORT = process.env.PORT || 3001;
 conectar()
   .then(() => {
     app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
+    require('./jobs/chatAceite').iniciarJob();
   })
   .catch((err) => {
     console.error('Falha ao conectar ao banco:', err.message);

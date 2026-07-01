@@ -180,6 +180,8 @@ router.put('/:id/checklist', async (req, res) => {
   try {
     const t = await get('SELECT * FROM tarefas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
     if (!t) return res.status(404).json({ erro: 'Tarefa não encontrada' });
+    if (t.criado_por !== uid(req) && t.responsavel_id !== uid(req) && !ehGestor(req))
+      return res.status(403).json({ erro: 'Sem permissão' });
     await run(`UPDATE tarefas SET checklist=?, updated_at=${NOW} WHERE id=?`, [JSON.stringify(req.body.checklist || []), req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -188,6 +190,10 @@ router.put('/:id/checklist', async (req, res) => {
 // Anexos / evidências
 router.post('/:id/anexos', async (req, res) => {
   try {
+    const t = await get('SELECT * FROM tarefas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!t) return res.status(404).json({ erro: 'Tarefa não encontrada' });
+    if (t.criado_por !== uid(req) && t.responsavel_id !== uid(req) && !ehGestor(req))
+      return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, tipo, url } = req.body;
     if (!nome || !url) return res.status(400).json({ erro: 'Nome e arquivo/link obrigatórios' });
     const id = uuidv4();
@@ -199,7 +205,11 @@ router.post('/:id/anexos', async (req, res) => {
 });
 router.delete('/:id/anexos/:aid', async (req, res) => {
   try {
-    await run('DELETE FROM tarefa_anexos WHERE id=? AND tarefa_id=?', [req.params.aid, req.params.id]);
+    const t = await get('SELECT * FROM tarefas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!t) return res.status(404).json({ erro: 'Tarefa não encontrada' });
+    if (t.criado_por !== uid(req) && t.responsavel_id !== uid(req) && !ehGestor(req))
+      return res.status(403).json({ erro: 'Sem permissão' });
+    await run('DELETE FROM tarefa_anexos WHERE id=? AND tarefa_id=? AND empresa_id=?', [req.params.aid, req.params.id, eid(req)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -207,6 +217,10 @@ router.delete('/:id/anexos/:aid', async (req, res) => {
 // Comentários
 router.post('/:id/comentarios', async (req, res) => {
   try {
+    const t = await get('SELECT * FROM tarefas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!t) return res.status(404).json({ erro: 'Tarefa não encontrada' });
+    if (t.criado_por !== uid(req) && t.responsavel_id !== uid(req) && !ehGestor(req))
+      return res.status(403).json({ erro: 'Sem permissão' });
     const { texto, privado } = req.body;
     if (!texto || !texto.trim()) return res.status(400).json({ erro: 'Comentário vazio' });
     const priv = privado && ehGestor(req) ? 1 : 0; // só gestor cria privado

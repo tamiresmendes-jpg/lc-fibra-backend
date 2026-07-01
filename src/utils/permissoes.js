@@ -122,10 +122,19 @@ const MAPA_PERMISSAO = [
   ['/api/auditorias',                  'auditoria.auditorias'],
   ['/api/auditoria-extra',             'auditoria.auditorias'],
   // Empresa
+  ['/api/empresa-extra/telefones',     'empresa.telefones'],
+  ['/api/empresa-extra/contatos',      'empresa.contatos'],
+  ['/api/empresa-extra/horarios',      'empresa.horarios'],
+  ['/api/empresa-extra/localizacoes',  'empresa.filiais'],
+  ['/api/empresa-extra',               'empresa.filiais'],
   ['/api/unidades',                    'empresa.filiais'],
   ['/api/redes-sociais',               'empresa.redes-sociais'],
   ['/api/feriados',                    'empresa.feriados'],
   ['/api/ceps',                        'empresa.consulta-cep'],
+  // Gestão extra
+  ['/api/gestao-extra/metas',          'gestao.metas'],
+  ['/api/gestao-extra/okrs',           'gestao.okrs'],
+  ['/api/gestao-extra',                'gestao.indicadores'],
 ];
 
 function resolverPermissao(path) {

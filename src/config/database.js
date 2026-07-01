@@ -1374,6 +1374,12 @@ async function initSchema() {
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS topico_nome TEXT`);
   // Alerta de nova demanda para o responsável (0 = precisa avisar / 1 = já avisado)
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS alerta_visto INT DEFAULT 1`);
+  // Fase 2: aceite com prazo — distribuição automática por timeout
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS aceite_prazo TEXT`);
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS aceite_tentativas INT DEFAULT 0`);
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS ultimo_lembrete TEXT`);
+  // Re-alerta quando responsável pediu para aguardar
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS re_alertar_em TEXT`);
   // Inscrições de Web Push (notificação com a aba fechada)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_push_subs (
@@ -1393,6 +1399,34 @@ async function initSchema() {
       PRIMARY KEY (grupo_id, usuario_id)
     )
   `);
+
+  // ── Canais de Departamento (grupos internos automáticos por depto) ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_canais (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      departamento_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      emoji TEXT DEFAULT '🏢',
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      UNIQUE(empresa_id, departamento_id)
+    )
+  `);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_canal_mensagens (
+      id TEXT PRIMARY KEY,
+      canal_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      usuario_nome TEXT NOT NULL,
+      texto TEXT,
+      anexo TEXT,
+      anexo_nome TEXT,
+      anexo_tipo TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_canal_msg ON chat_canal_mensagens(canal_id, created_at)`);
 
   // ── Módulo de Tarefas (Kanban / Delegação) ──
   // status: a_fazer | em_execucao | aguardando_aprovacao | concluido

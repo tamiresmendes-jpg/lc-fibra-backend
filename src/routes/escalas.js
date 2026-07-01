@@ -192,6 +192,8 @@ router.post('/:id/feriados', async (req, res) => {
 // Remover feriado
 router.delete('/:id/feriados/:fid', async (req, res) => {
   try {
+    const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
     await run('DELETE FROM escala_feriados_def WHERE id=? AND escala_id=?', [req.params.fid, req.params.id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -249,6 +251,8 @@ router.post('/:id/sobreaviso', async (req, res) => {
 // Atualizar entrada de sobreaviso
 router.put('/:id/sobreaviso/:sid', async (req, res) => {
   try {
+    const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
     const { data, feriado_nome, tecnico1_id, tecnico2_id, observacao } = req.body;
     await run(
       `UPDATE sobreaviso_entradas
@@ -262,7 +266,7 @@ router.put('/:id/sobreaviso/:sid', async (req, res) => {
        FROM sobreaviso_entradas se
        LEFT JOIN usuarios t1 ON t1.id = se.tecnico1_id
        LEFT JOIN usuarios t2 ON t2.id = se.tecnico2_id
-       WHERE se.id=?`, [req.params.sid]
+       WHERE se.id=? AND se.empresa_id=?`, [req.params.sid, eid(req)]
     );
     res.json(atualizada);
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -305,6 +309,8 @@ router.post('/:id/hora-extra', async (req, res) => {
 // Atualizar entrada de hora extra
 router.put('/:id/hora-extra/:hid', async (req, res) => {
   try {
+    const escala = await get('SELECT id FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
     const { data, tecnicos, cidade, horario_saida_previsto, horario_saida_real, motivo, observacao } = req.body;
     await run(
       `UPDATE hora_extra SET data=?,tecnicos=?,cidade=?,horario_saida_previsto=?,horario_saida_real=?,motivo=?,observacao=?

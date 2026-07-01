@@ -54,10 +54,19 @@ router.get('/:popId/anexos', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Confere se o POP pertence à empresa do usuário
+async function popDaEmpresa(popId, empresaId) {
+  return await get('SELECT id FROM pops WHERE id = $1 AND empresa_id = $2', [popId, empresaId]);
+}
+
 // Upload de arquivo
 router.post('/:popId/anexos/upload', upload.single('arquivo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ erro: 'Arquivo não enviado' });
+    if (!(await popDaEmpresa(req.params.popId, req.usuario.empresa_id))) {
+      try { fs.unlinkSync(path.join(UPLOADS_DIR, req.file.filename)); } catch {}
+      return res.status(404).json({ erro: 'POP não encontrado' });
+    }
     const id = uuidv4();
     await run(`
       INSERT INTO pop_anexos (id, pop_id, empresa_id, usuario_id, nome, tipo, tamanho, caminho)
@@ -80,6 +89,8 @@ router.post('/:popId/anexos/link', async (req, res) => {
   try {
     const { nome, url } = req.body;
     if (!url) return res.status(400).json({ erro: 'URL obrigatória' });
+    if (!/^https?:\/\//i.test(url)) return res.status(400).json({ erro: 'URL deve começar com http:// ou https://' });
+    if (!(await popDaEmpresa(req.params.popId, req.usuario.empresa_id))) return res.status(404).json({ erro: 'POP não encontrado' });
     const id = uuidv4();
     await run(`
       INSERT INTO pop_anexos (id, pop_id, empresa_id, usuario_id, nome, tipo, url_externa)
@@ -108,7 +119,10 @@ router.get('/:popId/anexos/:id/download', (req, res, next) => {
   try {
     const anexo = await get('SELECT * FROM pop_anexos WHERE id = $1 AND empresa_id = $2', [req.params.id, req.usuario.empresa_id]);
     if (!anexo) return res.status(404).json({ erro: 'Anexo não encontrado' });
-    if (anexo.url_externa) return res.redirect(anexo.url_externa);
+    if (anexo.url_externa) {
+      if (!/^https?:\/\//i.test(anexo.url_externa)) return res.status(400).json({ erro: 'Link inválido' });
+      return res.redirect(anexo.url_externa);
+    }
     const filePath = path.join(UPLOADS_DIR, anexo.caminho);
     if (!fs.existsSync(filePath)) return res.status(404).json({ erro: 'Arquivo não encontrado' });
     res.download(filePath, anexo.nome);

@@ -47,6 +47,9 @@ router.post('/', async (req, res) => {
     const { pop_id, texto, tipo, trecho } = req.body;
     if (!pop_id || !texto?.trim()) return res.status(400).json({ erro: 'pop_id e texto são obrigatórios' });
 
+    const pop = await get('SELECT id FROM pops WHERE id = ? AND empresa_id = ?', [pop_id, eid]);
+    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+
     const id = uuidv4();
     await run(`
       INSERT INTO pop_comentarios (id, pop_id, empresa_id, usuario_id, texto, tipo, trecho)
@@ -69,6 +72,10 @@ router.post('/:id/reagir', async (req, res) => {
     const uid = req.usuario.id;
     const cid = req.params.id;
     const { tipo } = req.body; // 'like' ou 'dislike'
+    if (!['like', 'dislike'].includes(tipo)) return res.status(400).json({ erro: 'Tipo inválido' });
+
+    const coment = await get('SELECT id FROM pop_comentarios WHERE id = ? AND empresa_id = ?', [cid, req.usuario.empresa_id]);
+    if (!coment) return res.status(404).json({ erro: 'Comentário não encontrado' });
 
     const existente = await get(
       'SELECT tipo FROM pop_comentario_reacoes WHERE comentario_id = ? AND usuario_id = ?',

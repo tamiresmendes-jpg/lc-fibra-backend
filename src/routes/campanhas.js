@@ -141,7 +141,12 @@ router.post('/:id/encerrar', async (req, res) => {
 // ─── ADICIONAR participante ──────────────────────────────────────────────────
 router.post('/:id/participantes', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const camp = await get('SELECT id FROM campanhas WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
+    if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' });
     const { usuario_id } = req.body;
+    const user = await get('SELECT id FROM usuarios WHERE id=$1 AND empresa_id=$2', [usuario_id, eid(req)]);
+    if (!user) return res.status(404).json({ erro: 'Usuário não encontrado' });
     const existe = await get('SELECT id FROM campanha_participantes WHERE campanha_id=$1 AND usuario_id=$2', [req.params.id, usuario_id]);
     if (existe) return res.json({ ok: true });
     await run('INSERT INTO campanha_participantes (id,campanha_id,usuario_id) VALUES ($1,$2,$3)', [uuidv4(),req.params.id,usuario_id]);
@@ -152,6 +157,8 @@ router.post('/:id/participantes', async (req, res) => {
 // ─── CONFIRMAR LEITURA (participante) ───────────────────────────────────────
 router.post('/:id/confirmar-leitura', async (req, res) => {
   try {
+    const camp = await get('SELECT id FROM campanhas WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
+    if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' });
     await run(
       `UPDATE campanha_participantes SET confirmou_leitura=1, data_leitura=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE campanha_id=$1 AND usuario_id=$2`,
       [req.params.id, req.usuario.id]
@@ -164,6 +171,8 @@ router.post('/:id/confirmar-leitura', async (req, res) => {
 router.put('/:id/resultados', async (req, res) => {
   try {
     if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const camp = await get('SELECT id FROM campanhas WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
+    if (!camp) return res.status(404).json({ erro: 'Campanha não encontrada' });
     const { resultados } = req.body; // [{meta_id, usuario_id, valor_realizado, observacao}]
     for (const r of resultados) {
       const existe = await get('SELECT id FROM campanha_resultados WHERE campanha_id=$1 AND meta_id=$2 AND usuario_id=$3', [req.params.id,r.meta_id,r.usuario_id]);

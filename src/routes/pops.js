@@ -54,7 +54,7 @@ router.get('/proximo-codigo', async (req, res) => {
 
     let sigla = 'GER';
     if (categoria_id) {
-      const cat = await get('SELECT nome FROM categorias_pop WHERE id=$1', [categoria_id]);
+      const cat = await get('SELECT nome FROM categorias_pop WHERE id=$1 AND empresa_id=$2', [categoria_id, req.usuario.empresa_id]);
       if (cat) {
         const palavras = cat.nome.trim().split(/\s+/).filter(Boolean);
         if (palavras.length >= 2) {

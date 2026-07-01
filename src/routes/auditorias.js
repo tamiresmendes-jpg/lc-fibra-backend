@@ -90,10 +90,13 @@ router.put('/:id', async (req, res) => {
 
 router.put('/:id/responder', async (req, res) => {
   try {
+    const auditoria = await get('SELECT id FROM auditorias WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    if (!auditoria) return res.status(404).json({ erro: 'Auditoria não encontrada' });
+
     const { respostas } = req.body; // [{ item_id, resposta, conformidade, observacao }]
 
     for (const r of respostas) {
-      await run('UPDATE auditoria_itens SET resposta=?, conformidade=?, observacao=? WHERE id=?', [r.resposta, r.conformidade, r.observacao || null, r.item_id]);
+      await run('UPDATE auditoria_itens SET resposta=?, conformidade=?, observacao=? WHERE id=? AND auditoria_id=?', [r.resposta, r.conformidade, r.observacao || null, r.item_id, req.params.id]);
     }
 
     // Calcular score
@@ -102,7 +105,7 @@ router.put('/:id/responder', async (req, res) => {
     const conformes = itens.filter(i => i.conformidade === 'conforme').reduce((s, i) => s + i.peso, 0);
     const score = total > 0 ? (conformes / total) * 100 : 0;
 
-    await run('UPDATE auditorias SET score=?, status=? WHERE id=?', [score, 'concluida', req.params.id]);
+    await run('UPDATE auditorias SET score=?, status=? WHERE id=? AND empresa_id=?', [score, 'concluida', req.params.id, req.usuario.empresa_id]);
     res.json({ score, mensagem: 'Auditoria concluída' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

@@ -100,6 +100,8 @@ router.put('/institucional/:tipo', async (req, res) => {
 
 router.post('/institucional/:id/aceitar', async (req, res) => {
   try {
+    const inst = await get('SELECT id FROM cultura_institucional WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!inst) return res.status(404).json({ erro: 'Não encontrado' });
     const id = uuidv4();
     await run(
       'INSERT INTO cultura_institucional_aceites (id,institucional_id,usuario_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
@@ -111,6 +113,8 @@ router.post('/institucional/:id/aceitar', async (req, res) => {
 
 router.get('/institucional/:id/aceites', async (req, res) => {
   try {
+    const inst = await get('SELECT id FROM cultura_institucional WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!inst) return res.status(404).json({ erro: 'Não encontrado' });
     const rows = await all(`
       SELECT a.*, u.nome FROM cultura_institucional_aceites a
       JOIN usuarios u ON a.usuario_id = u.id WHERE a.institucional_id = $1
@@ -308,7 +312,7 @@ router.delete('/pesquisas/:id', async (req, res) => {
 router.post('/pesquisas/:id/responder', async (req, res) => {
   try {
     const { respostas } = req.body;
-    const pesquisa = await get('SELECT * FROM cultura_pesquisas WHERE id=$1', [req.params.id]);
+    const pesquisa = await get('SELECT * FROM cultura_pesquisas WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
     if (!pesquisa) return res.status(404).json({ erro: 'Pesquisa não encontrada' });
     const id = uuidv4();
     const usuarioId = pesquisa.anonima ? null : req.usuario.id;
@@ -322,7 +326,7 @@ router.post('/pesquisas/:id/responder', async (req, res) => {
 
 router.get('/pesquisas/:id/resultados', async (req, res) => {
   try {
-    const pesquisa = await get('SELECT * FROM cultura_pesquisas WHERE id=$1', [req.params.id]);
+    const pesquisa = await get('SELECT * FROM cultura_pesquisas WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
     if (!pesquisa) return res.status(404).json({ erro: 'Pesquisa não encontrada' });
     const respostas = await all('SELECT * FROM cultura_pesquisa_respostas WHERE pesquisa_id=$1', [req.params.id]);
     res.json({ pesquisa, respostas: respostas.map(r => ({ ...r, respostas: JSON.parse(r.respostas||'[]') })) });
@@ -396,6 +400,8 @@ router.get('/comunicados', async (req, res) => {
 
 router.post('/comunicados/:id/curtir', async (req, res) => {
   try {
+    const com = await get('SELECT id FROM comunicados WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!com) return res.status(404).json({ erro: 'Comunicado não encontrado' });
     const existing = await get('SELECT id FROM comunicado_reacoes WHERE comunicado_id=$1 AND usuario_id=$2', [req.params.id, req.usuario.id]);
     if (existing) {
       await run('DELETE FROM comunicado_reacoes WHERE id=$1', [existing.id]);
@@ -409,6 +415,8 @@ router.post('/comunicados/:id/curtir', async (req, res) => {
 
 router.post('/comunicados/:id/confirmar-leitura', async (req, res) => {
   try {
+    const com = await get('SELECT id FROM comunicados WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!com) return res.status(404).json({ erro: 'Comunicado não encontrado' });
     await run(
       'INSERT INTO comunicado_leituras (id,comunicado_id,usuario_id) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING',
       [uuidv4(), req.params.id, req.usuario.id]
@@ -419,6 +427,8 @@ router.post('/comunicados/:id/confirmar-leitura', async (req, res) => {
 
 router.get('/comunicados/:id/comentarios', async (req, res) => {
   try {
+    const com = await get('SELECT id FROM comunicados WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!com) return res.status(404).json({ erro: 'Comunicado não encontrado' });
     const rows = await all('SELECT c.*, u.nome as autor_nome FROM comunicado_comentarios c JOIN usuarios u ON c.usuario_id=u.id WHERE c.comunicado_id=$1 ORDER BY c.created_at ASC', [req.params.id]);
     res.json(rows);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -426,6 +436,8 @@ router.get('/comunicados/:id/comentarios', async (req, res) => {
 
 router.post('/comunicados/:id/comentarios', async (req, res) => {
   try {
+    const com = await get('SELECT id FROM comunicados WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!com) return res.status(404).json({ erro: 'Comunicado não encontrado' });
     const { texto } = req.body;
     const id = uuidv4();
     await run(

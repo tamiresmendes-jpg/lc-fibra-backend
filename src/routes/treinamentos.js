@@ -25,6 +25,10 @@ const SELECT_TREINAMENTO = `
   LEFT JOIN usuarios c ON c.id = t.colaborador_id
 `;
 
+async function trDaEmpresa(id, eid) {
+  return await get('SELECT id FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [id, eid]);
+}
+
 router.get('/', async (req, res) => {
   try {
     const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
@@ -145,6 +149,7 @@ router.put('/:id', async (req, res) => {
 // Atualiza campos de um POP específico na trilha
 router.put('/:id/pops/:pop_id', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { instrutor_id, tempo_estimado, tempo_realizado, topicos, data_prevista, status_pop } = req.body;
     await run(`UPDATE treinamento_pops SET
       instrutor_id=$1, tempo_estimado=$2, tempo_realizado=$3, topicos=$4, data_prevista=$5, status_pop=$6
@@ -157,6 +162,7 @@ router.put('/:id/pops/:pop_id', async (req, res) => {
 // Reordenar POPs da trilha
 router.put('/:id/pops/reordenar', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { ordem } = req.body; // array de pop_ids na nova ordem
     if (!Array.isArray(ordem)) return res.status(400).json({ erro: 'ordem deve ser array' });
     for (const [i, pop_id] of ordem.entries()) {
@@ -169,6 +175,7 @@ router.put('/:id/pops/reordenar', async (req, res) => {
 // Toggle conclusão de um POP
 router.put('/:id/pops/:pop_id/concluir', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const tp = await get('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 AND pop_id=$2', [req.params.id, req.params.pop_id]);
     if (!tp) return res.status(404).json({ erro: 'Não encontrado' });
     const novoConcluido = tp.concluido ? 0 : 1;
@@ -182,6 +189,7 @@ router.put('/:id/pops/:pop_id/concluir', async (req, res) => {
 
 router.post('/:id/avaliacoes', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { titulo, tipo, perguntas, pop_id, obrigatorio, ordem } = req.body;
     if (!titulo || !tipo || !perguntas) return res.status(400).json({ erro: 'Título, tipo e perguntas obrigatórios' });
     const id = uuidv4();
@@ -194,6 +202,7 @@ router.post('/:id/avaliacoes', async (req, res) => {
 
 router.put('/:id/avaliacoes/:av_id', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { titulo, tipo, perguntas, obrigatorio, ordem } = req.body;
     await run('UPDATE treinamento_avaliacoes SET titulo=$1, tipo=$2, perguntas=$3, obrigatorio=$4, ordem=$5 WHERE id=$6 AND treinamento_id=$7',
       [titulo, tipo, JSON.stringify(perguntas), obrigatorio !== false ? 1 : 0, ordem || 0, req.params.av_id, req.params.id]);
@@ -203,6 +212,7 @@ router.put('/:id/avaliacoes/:av_id', async (req, res) => {
 
 router.delete('/:id/avaliacoes/:av_id', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     await run('DELETE FROM treinamento_respostas WHERE avaliacao_id=$1', [req.params.av_id]);
     await run('DELETE FROM treinamento_avaliacoes WHERE id=$1 AND treinamento_id=$2', [req.params.av_id, req.params.id]);
     res.json({ mensagem: 'Removido' });
@@ -211,8 +221,9 @@ router.delete('/:id/avaliacoes/:av_id', async (req, res) => {
 
 router.post('/:id/avaliacoes/:av_id/responder', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { respostas } = req.body;
-    const av = await get('SELECT * FROM treinamento_avaliacoes WHERE id=$1', [req.params.av_id]);
+    const av = await get('SELECT * FROM treinamento_avaliacoes WHERE id=$1 AND treinamento_id=$2', [req.params.av_id, req.params.id]);
     if (!av) return res.status(404).json({ erro: 'Avaliação não encontrada' });
 
     const perguntas = JSON.parse(av.perguntas);
@@ -241,6 +252,7 @@ router.post('/:id/avaliacoes/:av_id/responder', async (req, res) => {
 
 router.get('/:id/anotacoes', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const lista = await all(`
       SELECT ta.*, u.nome AS autor_nome
       FROM treinamento_anotacoes ta
@@ -253,6 +265,7 @@ router.get('/:id/anotacoes', async (req, res) => {
 
 router.post('/:id/anotacoes', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { texto, tipo, pop_id } = req.body;
     if (!texto) return res.status(400).json({ erro: 'Texto obrigatório' });
     const id = uuidv4();
@@ -265,6 +278,7 @@ router.post('/:id/anotacoes', async (req, res) => {
 
 router.delete('/:id/anotacoes/:an_id', async (req, res) => {
   try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     await run('DELETE FROM treinamento_anotacoes WHERE id=$1 AND treinamento_id=$2', [req.params.an_id, req.params.id]);
     res.json({ mensagem: 'Removido' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
