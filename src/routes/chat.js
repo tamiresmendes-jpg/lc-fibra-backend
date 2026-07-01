@@ -232,6 +232,22 @@ router.get('/dashboard', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Novas demandas atribuídas a mim ainda não avisadas (para o alerta/push)
+router.get('/minhas-novas', async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT s.id, s.titulo, s.prioridade, s.topico_nome, s.criado_por_nome, g.nome AS grupo_nome, g.emoji AS grupo_emoji
+         FROM chat_solicitacoes s
+         LEFT JOIN chat_grupos g ON g.id = s.grupo_id
+        WHERE s.empresa_id = ? AND s.responsavel_id = ? AND s.alerta_visto = 0
+          AND s.status NOT IN ('concluida','cancelada')
+        ORDER BY s.updated_at DESC`,
+      [eid(req), uid(req)]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/grupos', async (req, res) => {
   try {
     const grupos = await all(`SELECT * FROM chat_grupos WHERE empresa_id = ? ORDER BY nome`, [eid(req)]);
@@ -384,6 +400,7 @@ router.post('/', async (req, res) => {
     );
     await logHist(id, req, 'criada', 'Solicitação aberta');
     if (resp) {
+      await run('UPDATE chat_solicitacoes SET alerta_visto = 0 WHERE id = ?', [id]);
       await logHist(id, req, 'distribuida', `Distribuída automaticamente para ${resp.nome}`);
       await notificar(eid(req), resp.id, 'Nova solicitação', `"${titulo.trim()}" foi atribuída a você`);
     }
@@ -475,9 +492,10 @@ router.patch('/:id/responsavel', async (req, res) => {
       if (!novo) return res.status(404).json({ erro: 'Colaborador não encontrado' });
     }
     const novoStatus = novo ? (sol.status === 'nova' ? 'distribuida' : sol.status) : 'nova';
+    const alerta = novo && novo.id !== uid(req) ? 0 : 1;
     await run(
-      `UPDATE chat_solicitacoes SET responsavel_id = ?, responsavel_nome = ?, status = ?, updated_at = ${NOW} WHERE id = ?`,
-      [novo?.id || null, novo?.nome || null, novoStatus, req.params.id]
+      `UPDATE chat_solicitacoes SET responsavel_id = ?, responsavel_nome = ?, status = ?, alerta_visto = ?, updated_at = ${NOW} WHERE id = ?`,
+      [novo?.id || null, novo?.nome || null, novoStatus, alerta, req.params.id]
     );
     await logHist(req.params.id, req, 'reatribuida', novo ? `Atribuída a ${novo.nome}` : 'Removido responsável');
     if (novo && novo.id !== uid(req)) await notificar(eid(req), novo.id, 'Solicitação atribuída', `"${sol.titulo}" foi atribuída a você`);
@@ -494,7 +512,7 @@ router.post('/:id/redistribuir', async (req, res) => {
     const resp = await distribuir(eid(req), sol.grupo_id);
     if (!resp) return res.status(400).json({ erro: 'Nenhum colaborador disponível no departamento' });
     await run(
-      `UPDATE chat_solicitacoes SET responsavel_id = ?, responsavel_nome = ?, status = 'distribuida', updated_at = ${NOW} WHERE id = ?`,
+      `UPDATE chat_solicitacoes SET responsavel_id = ?, responsavel_nome = ?, status = 'distribuida', alerta_visto = 0, updated_at = ${NOW} WHERE id = ?`,
       [resp.id, resp.nome, req.params.id]
     );
     await logHist(req.params.id, req, 'distribuida', `Redistribuída para ${resp.nome}`);
@@ -512,6 +530,15 @@ router.delete('/:id', async (req, res) => {
     await run('DELETE FROM chat_mensagens WHERE solicitacao_id = ?', [req.params.id]);
     await run('DELETE FROM chat_historico WHERE solicitacao_id = ?', [req.params.id]);
     await run('DELETE FROM chat_solicitacoes WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Marcar alerta de nova demanda como visto (aceite pelo responsável)
+router.post('/:id/visto', async (req, res) => {
+  try {
+    await run('UPDATE chat_solicitacoes SET alerta_visto = 1 WHERE id = ? AND empresa_id = ? AND responsavel_id = ?',
+      [req.params.id, eid(req), uid(req)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

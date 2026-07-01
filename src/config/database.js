@@ -1372,6 +1372,8 @@ async function initSchema() {
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS grupo_id TEXT`);
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS topico_id TEXT`);
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS topico_nome TEXT`);
+  // Alerta de nova demanda para o responsável (0 = precisa avisar / 1 = já avisado)
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS alerta_visto INT DEFAULT 1`);
   // Tabela legada — mantida para não quebrar índices existentes
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_grupo_membros (
