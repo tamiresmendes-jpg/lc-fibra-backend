@@ -26,7 +26,15 @@ app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
 // Limite alto: o sistema faz polling frequente (fila, novas demandas, notificações).
 // 200 era baixo demais e derrubava usuários ativos com 429 (parecia "senha incorreta").
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 3000, standardHeaders: true, legacyHeaders: false }));
+// IMPORTANTE: as rotas de autenticação (/api/auth) NUNCA entram no limite global,
+// então login/sessão jamais é bloqueado. (O login tem seu próprio limitador só p/ senha errada.)
+app.use(rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 3000,
+  standardHeaders: true,
+  legacyHeaders: false,
+  skip: (req) => req.path.startsWith('/api/auth') || req.path.startsWith('/auth'),
+}));
 
 // autoNotificacao desativado — Central de Ciência é alimentada manualmente
 // app.use(require('./middleware/autoNotificacao'));
