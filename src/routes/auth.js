@@ -7,7 +7,8 @@ const { autenticar } = require('../middleware/auth');
 const { buscarPermsEfetivas } = require('../utils/permissoes');
 
 const rateLimit = require('express-rate-limit');
-const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 10, message: { erro: 'Muitas tentativas. Tente novamente em 15 minutos.' } });
+// Só conta tentativas que FALHARAM (skipSuccessfulRequests) — login certo nunca é bloqueado.
+const loginLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 20, skipSuccessfulRequests: true, standardHeaders: true, legacyHeaders: false, message: { erro: 'Muitas tentativas. Tente novamente em 15 minutos.' } });
 const resetLimiter = rateLimit({ windowMs: 15 * 60 * 1000, max: 5, message: { erro: 'Muitas tentativas de redefinição. Tente novamente em 15 minutos.' } });
 
 // Normaliza data para comparação (aceita YYYY-MM-DD e DD/MM/YYYY)

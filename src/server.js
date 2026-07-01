@@ -24,7 +24,9 @@ app.use(cors({ origin: allowedOrigins, credentials: true }));
 app.use(express.json({ limit: '20mb' }));
 app.use(express.urlencoded({ extended: true, limit: '20mb' }));
 app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
-app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 200, standardHeaders: true, legacyHeaders: false }));
+// Limite alto: o sistema faz polling frequente (fila, novas demandas, notificações).
+// 200 era baixo demais e derrubava usuários ativos com 429 (parecia "senha incorreta").
+app.use(rateLimit({ windowMs: 15 * 60 * 1000, max: 3000, standardHeaders: true, legacyHeaders: false }));
 
 // autoNotificacao desativado — Central de Ciência é alimentada manualmente
 // app.use(require('./middleware/autoNotificacao'));
