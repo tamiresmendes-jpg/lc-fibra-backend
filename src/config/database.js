@@ -1342,12 +1342,20 @@ async function initSchema() {
       PRIMARY KEY (grupo_id, departamento_id)
     )
   `);
-  // Participantes que podem enviar solicitações para o grupo
+  // Participantes que podem enviar solicitações para o grupo (legado: por usuário)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_grupo_participantes (
       grupo_id TEXT NOT NULL,
       usuario_id TEXT NOT NULL,
       PRIMARY KEY (grupo_id, usuario_id)
+    )
+  `);
+  // Departamentos participantes: membros desses deptos podem abrir solicitações no grupo
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_grupo_part_deptos (
+      grupo_id TEXT NOT NULL,
+      departamento_id TEXT NOT NULL,
+      PRIMARY KEY (grupo_id, departamento_id)
     )
   `);
   // Coluna grupo_id nas solicitações (substitui departamento_id como roteamento)

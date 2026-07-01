@@ -133,13 +133,23 @@ async function carregarGrupoCompleto(grupoId) {
     [grupoId]
   );
   g.participantes = await all(
-    `SELECT u.id, u.nome FROM chat_grupo_participantes p
-       JOIN usuarios u ON u.id = p.usuario_id
-      WHERE p.grupo_id = ? ORDER BY u.nome`,
+    `SELECT d.id, d.nome FROM chat_grupo_part_deptos p
+       JOIN departamentos d ON d.id = p.departamento_id
+      WHERE p.grupo_id = ? ORDER BY d.nome`,
     [grupoId]
   );
   return g;
 }
+
+// Lista de departamentos para os seletores do grupo (antes de /:id)
+router.get('/aux/departamentos', async (req, res) => {
+  try {
+    res.json(await all(
+      `SELECT id, nome FROM departamentos WHERE empresa_id = ? AND excluido_em IS NULL ORDER BY nome`,
+      [eid(req)]
+    ));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
 
 router.get('/grupos', async (req, res) => {
   try {
@@ -150,7 +160,7 @@ router.get('/grupos', async (req, res) => {
         [g.id]
       );
       g.participantes = await all(
-        `SELECT u.id, u.nome FROM chat_grupo_participantes p JOIN usuarios u ON u.id = p.usuario_id WHERE p.grupo_id = ? ORDER BY u.nome`,
+        `SELECT d.id, d.nome FROM chat_grupo_part_deptos p JOIN departamentos d ON d.id = p.departamento_id WHERE p.grupo_id = ? ORDER BY d.nome`,
         [g.id]
       );
     }
@@ -170,8 +180,8 @@ router.post('/grupos', soAdmin, async (req, res) => {
         await run(`INSERT INTO chat_grupo_responsaveis (grupo_id, departamento_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [id, did]);
     }
     if (Array.isArray(participantes)) {
-      for (const uid2 of participantes)
-        await run(`INSERT INTO chat_grupo_participantes (grupo_id, usuario_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [id, uid2]);
+      for (const did of participantes)
+        await run(`INSERT INTO chat_grupo_part_deptos (grupo_id, departamento_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [id, did]);
     }
     res.status(201).json(await carregarGrupoCompleto(id));
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -195,6 +205,7 @@ router.delete('/grupos/:id', soAdmin, async (req, res) => {
     if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
     await run('DELETE FROM chat_grupo_responsaveis WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupo_participantes WHERE grupo_id = ?', [req.params.id]);
+    await run('DELETE FROM chat_grupo_part_deptos WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupo_membros WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     res.json({ ok: true });
@@ -217,14 +228,14 @@ router.delete('/grupos/:id/responsaveis/:did', soAdmin, async (req, res) => {
 
 router.post('/grupos/:id/participantes', soAdmin, async (req, res) => {
   try {
-    const { usuario_id } = req.body;
-    await run(`INSERT INTO chat_grupo_participantes (grupo_id, usuario_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [req.params.id, usuario_id]);
+    const { departamento_id } = req.body;
+    await run(`INSERT INTO chat_grupo_part_deptos (grupo_id, departamento_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [req.params.id, departamento_id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
-router.delete('/grupos/:id/participantes/:uid', soAdmin, async (req, res) => {
+router.delete('/grupos/:id/participantes/:did', soAdmin, async (req, res) => {
   try {
-    await run('DELETE FROM chat_grupo_participantes WHERE grupo_id = ? AND usuario_id = ?', [req.params.id, req.params.uid]);
+    await run('DELETE FROM chat_grupo_part_deptos WHERE grupo_id = ? AND departamento_id = ?', [req.params.id, req.params.did]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
