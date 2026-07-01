@@ -160,11 +160,11 @@ router.get('/grupos', async (req, res) => {
 
 router.post('/grupos', soAdmin, async (req, res) => {
   try {
-    const { nome, descricao, cor, responsaveis, participantes } = req.body;
+    const { nome, descricao, cor, emoji, responsaveis, participantes } = req.body;
     if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
     const id = uuidv4();
-    await run(`INSERT INTO chat_grupos (id, empresa_id, nome, descricao, cor) VALUES (?,?,?,?,?)`,
-      [id, eid(req), nome.trim(), descricao || null, cor || '#7B55F1']);
+    await run(`INSERT INTO chat_grupos (id, empresa_id, nome, descricao, cor, emoji) VALUES (?,?,?,?,?,?)`,
+      [id, eid(req), nome.trim(), descricao || null, cor || '#7B55F1', emoji || '💬']);
     if (Array.isArray(responsaveis)) {
       for (const did of responsaveis)
         await run(`INSERT INTO chat_grupo_responsaveis (grupo_id, departamento_id) VALUES (?,?) ON CONFLICT DO NOTHING`, [id, did]);
@@ -179,12 +179,12 @@ router.post('/grupos', soAdmin, async (req, res) => {
 
 router.put('/grupos/:id', soAdmin, async (req, res) => {
   try {
-    const { nome, descricao, cor } = req.body;
+    const { nome, descricao, cor, emoji } = req.body;
     if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome é obrigatório' });
     const g = await get('SELECT id FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     if (!g) return res.status(404).json({ erro: 'Grupo não encontrado' });
-    await run(`UPDATE chat_grupos SET nome = ?, descricao = ?, cor = ? WHERE id = ?`,
-      [nome.trim(), descricao || null, cor || '#7B55F1', req.params.id]);
+    await run(`UPDATE chat_grupos SET nome = ?, descricao = ?, cor = ?, emoji = ? WHERE id = ?`,
+      [nome.trim(), descricao || null, cor || '#7B55F1', emoji || '💬', req.params.id]);
     res.json(await carregarGrupoCompleto(req.params.id));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
