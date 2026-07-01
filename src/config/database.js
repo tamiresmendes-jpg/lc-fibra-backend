@@ -1358,8 +1358,20 @@ async function initSchema() {
       PRIMARY KEY (grupo_id, departamento_id)
     )
   `);
+  // Tópicos (filhos) de um grupo. Ex: grupo "Estoque" → tópicos "Requisição", "Conferência"
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_topicos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      grupo_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
   // Coluna grupo_id nas solicitações (substitui departamento_id como roteamento)
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS grupo_id TEXT`);
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS topico_id TEXT`);
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS topico_nome TEXT`);
   // Tabela legada — mantida para não quebrar índices existentes
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_grupo_membros (

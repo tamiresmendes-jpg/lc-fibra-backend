@@ -138,6 +138,10 @@ async function carregarGrupoCompleto(grupoId) {
       WHERE p.grupo_id = ? ORDER BY d.nome`,
     [grupoId]
   );
+  g.topicos = await all(
+    `SELECT id, nome FROM chat_topicos WHERE grupo_id = ? ORDER BY nome`,
+    [grupoId]
+  );
   return g;
 }
 
@@ -161,6 +165,10 @@ router.get('/grupos', async (req, res) => {
       );
       g.participantes = await all(
         `SELECT d.id, d.nome FROM chat_grupo_part_deptos p JOIN departamentos d ON d.id = p.departamento_id WHERE p.grupo_id = ? ORDER BY d.nome`,
+        [g.id]
+      );
+      g.topicos = await all(
+        `SELECT id, nome FROM chat_topicos WHERE grupo_id = ? ORDER BY nome`,
         [g.id]
       );
     }
@@ -206,6 +214,7 @@ router.delete('/grupos/:id', soAdmin, async (req, res) => {
     await run('DELETE FROM chat_grupo_responsaveis WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupo_participantes WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupo_part_deptos WHERE grupo_id = ?', [req.params.id]);
+    await run('DELETE FROM chat_topicos WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupo_membros WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM chat_grupos WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     res.json({ ok: true });
@@ -240,6 +249,33 @@ router.delete('/grupos/:id/participantes/:did', soAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── Tópicos (filhos) do grupo ──
+router.post('/grupos/:id/topicos', soAdmin, async (req, res) => {
+  try {
+    const { nome } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome do tópico é obrigatório' });
+    await run(`INSERT INTO chat_topicos (id, empresa_id, grupo_id, nome) VALUES (?,?,?,?)`,
+      [uuidv4(), eid(req), req.params.id, nome.trim()]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.put('/grupos/:id/topicos/:tid', soAdmin, async (req, res) => {
+  try {
+    const { nome } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Nome do tópico é obrigatório' });
+    await run('UPDATE chat_topicos SET nome = ? WHERE id = ? AND grupo_id = ? AND empresa_id = ?',
+      [nome.trim(), req.params.tid, req.params.id, eid(req)]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.delete('/grupos/:id/topicos/:tid', soAdmin, async (req, res) => {
+  try {
+    await run('DELETE FROM chat_topicos WHERE id = ? AND grupo_id = ? AND empresa_id = ?',
+      [req.params.tid, req.params.id, eid(req)]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── Detalhe da solicitação (deve vir depois de /grupos) ──
 router.get('/:id', async (req, res) => {
   try {
@@ -254,8 +290,9 @@ router.get('/:id', async (req, res) => {
 // Criar solicitação (+ distribuição automática pelo grupo)
 router.post('/', async (req, res) => {
   try {
-    const { titulo, descricao, categoria, grupo_id, prioridade, anexo, anexo_nome, anexo_tipo } = req.body;
+    const { titulo, descricao, categoria, grupo_id, topico_id, topico_nome, prioridade, anexo, anexo_nome, anexo_tipo } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Título é obrigatório' });
+    if (!grupo_id) return res.status(400).json({ erro: 'Selecione um grupo' });
     const id = uuidv4();
 
     const resp = await distribuir(eid(req), grupo_id);
@@ -263,9 +300,9 @@ router.post('/', async (req, res) => {
 
     await run(
       `INSERT INTO chat_solicitacoes
-        (id, empresa_id, titulo, descricao, categoria, grupo_id, prioridade, status, criado_por, criado_por_nome, responsavel_id, responsavel_nome)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, eid(req), titulo.trim(), descricao || null, categoria || 'geral', grupo_id || null,
+        (id, empresa_id, titulo, descricao, categoria, grupo_id, topico_id, topico_nome, prioridade, status, criado_por, criado_por_nome, responsavel_id, responsavel_nome)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, eid(req), titulo.trim(), descricao || null, categoria || 'geral', grupo_id, topico_id || null, topico_nome || null,
        prioridade || 'media', status, uid(req), unome(req), resp?.id || null, resp?.nome || null]
     );
     await logHist(id, req, 'criada', 'Solicitação aberta');
