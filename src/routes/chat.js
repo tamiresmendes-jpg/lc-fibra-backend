@@ -159,57 +159,65 @@ router.get('/aux/departamentos', async (req, res) => {
 router.get('/dashboard', async (req, res) => {
   try {
     const empresa = eid(req);
+    const depId = req.query.departamento_id || null;
     const ABERTOS = `('nova','distribuida','em_atendimento','aguardando_retorno','reaberta')`;
 
-    const totalRow  = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ?`, [empresa]);
-    const abertasRow = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status IN ${ABERTOS}`, [empresa]);
-    const concRow   = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status = 'concluida'`, [empresa]);
-    const cancRow   = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status = 'cancelada'`, [empresa]);
+    // Filtro por departamento (do responsável que atende). Prefixo = alias da tabela ('' ou 's.')
+    const depClause = (p = '') => depId
+      ? ` AND ${p}responsavel_id IN (SELECT id FROM usuarios WHERE empresa_id = ? AND departamento_id = ?)`
+      : '';
+    const depP = depId ? [empresa, depId] : [];
+
+    const totalRow  = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ?${depClause()}`, [empresa, ...depP]);
+    const abertasRow = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status IN ${ABERTOS}${depClause()}`, [empresa, ...depP]);
+    const concRow   = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status = 'concluida'${depClause()}`, [empresa, ...depP]);
+    const cancRow   = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status = 'cancelada'${depClause()}`, [empresa, ...depP]);
 
     // Tempo médio de conclusão (horas)
     const tmRow = await get(
       `SELECT AVG(EXTRACT(EPOCH FROM (concluido_em::timestamp - created_at::timestamp))) AS seg
          FROM chat_solicitacoes
-        WHERE empresa_id = ? AND status = 'concluida' AND concluido_em IS NOT NULL`,
-      [empresa]
+        WHERE empresa_id = ? AND status = 'concluida' AND concluido_em IS NOT NULL${depClause()}`,
+      [empresa, ...depP]
     );
     const tempoMedioHoras = tmRow?.seg ? Math.round((Number(tmRow.seg) / 3600) * 10) / 10 : null;
 
     const porStatus = await all(
-      `SELECT status, COUNT(*) AS total FROM chat_solicitacoes WHERE empresa_id = ? GROUP BY status`,
-      [empresa]
+      `SELECT status, COUNT(*) AS total FROM chat_solicitacoes WHERE empresa_id = ?${depClause()} GROUP BY status`,
+      [empresa, ...depP]
     );
     const porPrioridade = await all(
       `SELECT prioridade, COUNT(*) AS total FROM chat_solicitacoes
-        WHERE empresa_id = ? AND status IN ${ABERTOS} GROUP BY prioridade`,
-      [empresa]
+        WHERE empresa_id = ? AND status IN ${ABERTOS}${depClause()} GROUP BY prioridade`,
+      [empresa, ...depP]
     );
     const porGrupo = await all(
       `SELECT COALESCE(g.nome,'Sem grupo') AS nome, g.emoji AS emoji, COUNT(*) AS total
          FROM chat_solicitacoes s
          LEFT JOIN chat_grupos g ON g.id = s.grupo_id
-        WHERE s.empresa_id = ?
+        WHERE s.empresa_id = ?${depClause('s.')}
         GROUP BY g.nome, g.emoji ORDER BY total DESC`,
-      [empresa]
+      [empresa, ...depP]
     );
     // Carga por responsável (só abertas)
     const porResponsavel = await all(
       `SELECT COALESCE(responsavel_nome,'Sem responsável') AS nome, COUNT(*) AS total
          FROM chat_solicitacoes
-        WHERE empresa_id = ? AND status IN ${ABERTOS}
+        WHERE empresa_id = ? AND status IN ${ABERTOS}${depClause()}
         GROUP BY responsavel_nome ORDER BY total DESC`,
-      [empresa]
+      [empresa, ...depP]
     );
-    // Últimos 14 dias (abertas por dia)
+    // Últimos 14 dias (por dia)
     const porDia = await all(
       `SELECT TO_CHAR(created_at::timestamp, 'YYYY-MM-DD') AS dia, COUNT(*) AS total
          FROM chat_solicitacoes
-        WHERE empresa_id = ? AND created_at::timestamp >= (NOW() - INTERVAL '14 days')
+        WHERE empresa_id = ? AND created_at::timestamp >= (NOW() - INTERVAL '14 days')${depClause()}
         GROUP BY dia ORDER BY dia`,
-      [empresa]
+      [empresa, ...depP]
     );
 
     res.json({
+      departamento_id: depId,
       total: Number(totalRow?.t || 0),
       abertas: Number(abertasRow?.t || 0),
       concluidas: Number(concRow?.t || 0),
