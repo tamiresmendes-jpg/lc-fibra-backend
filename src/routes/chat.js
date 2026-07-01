@@ -155,6 +155,75 @@ router.get('/aux/departamentos', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Dashboard do Kronos Chat (antes de /:id)
+router.get('/dashboard', async (req, res) => {
+  try {
+    const empresa = eid(req);
+    const ABERTOS = `('nova','distribuida','em_atendimento','aguardando_retorno','reaberta')`;
+
+    const totalRow  = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ?`, [empresa]);
+    const abertasRow = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status IN ${ABERTOS}`, [empresa]);
+    const concRow   = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status = 'concluida'`, [empresa]);
+    const cancRow   = await get(`SELECT COUNT(*) AS t FROM chat_solicitacoes WHERE empresa_id = ? AND status = 'cancelada'`, [empresa]);
+
+    // Tempo médio de conclusão (horas)
+    const tmRow = await get(
+      `SELECT AVG(EXTRACT(EPOCH FROM (concluido_em::timestamp - created_at::timestamp))) AS seg
+         FROM chat_solicitacoes
+        WHERE empresa_id = ? AND status = 'concluida' AND concluido_em IS NOT NULL`,
+      [empresa]
+    );
+    const tempoMedioHoras = tmRow?.seg ? Math.round((Number(tmRow.seg) / 3600) * 10) / 10 : null;
+
+    const porStatus = await all(
+      `SELECT status, COUNT(*) AS total FROM chat_solicitacoes WHERE empresa_id = ? GROUP BY status`,
+      [empresa]
+    );
+    const porPrioridade = await all(
+      `SELECT prioridade, COUNT(*) AS total FROM chat_solicitacoes
+        WHERE empresa_id = ? AND status IN ${ABERTOS} GROUP BY prioridade`,
+      [empresa]
+    );
+    const porGrupo = await all(
+      `SELECT COALESCE(g.nome,'Sem grupo') AS nome, g.emoji AS emoji, COUNT(*) AS total
+         FROM chat_solicitacoes s
+         LEFT JOIN chat_grupos g ON g.id = s.grupo_id
+        WHERE s.empresa_id = ?
+        GROUP BY g.nome, g.emoji ORDER BY total DESC`,
+      [empresa]
+    );
+    // Carga por responsável (só abertas)
+    const porResponsavel = await all(
+      `SELECT COALESCE(responsavel_nome,'Sem responsável') AS nome, COUNT(*) AS total
+         FROM chat_solicitacoes
+        WHERE empresa_id = ? AND status IN ${ABERTOS}
+        GROUP BY responsavel_nome ORDER BY total DESC`,
+      [empresa]
+    );
+    // Últimos 14 dias (abertas por dia)
+    const porDia = await all(
+      `SELECT TO_CHAR(created_at::timestamp, 'YYYY-MM-DD') AS dia, COUNT(*) AS total
+         FROM chat_solicitacoes
+        WHERE empresa_id = ? AND created_at::timestamp >= (NOW() - INTERVAL '14 days')
+        GROUP BY dia ORDER BY dia`,
+      [empresa]
+    );
+
+    res.json({
+      total: Number(totalRow?.t || 0),
+      abertas: Number(abertasRow?.t || 0),
+      concluidas: Number(concRow?.t || 0),
+      canceladas: Number(cancRow?.t || 0),
+      tempoMedioHoras,
+      porStatus,
+      porPrioridade,
+      porGrupo,
+      porResponsavel,
+      porDia,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/grupos', async (req, res) => {
   try {
     const grupos = await all(`SELECT * FROM chat_grupos WHERE empresa_id = ? ORDER BY nome`, [eid(req)]);
