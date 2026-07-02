@@ -7,6 +7,12 @@ const { PUBLIC_KEY: VAPID_PUBLIC, enviarPush } = require('../config/webpush');
 
 router.use(autenticar);
 
+// Migrações de startup — Fase 2
+(async () => {
+  try { await run(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS aceite_prazo TIMESTAMPTZ`); } catch {}
+  try { await run(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS aceite_tentativas INTEGER DEFAULT 0`); } catch {}
+})();
+
 const NOW = `TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')`;
 const eid = (req) => req.usuario.empresa_id;
 const uid = (req) => req.usuario.id;
@@ -555,6 +561,55 @@ router.delete('/canais/:id', soAdmin, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── Verificar prazos de aceite vencidos (polling) — DEVE vir antes de /:id ──
+router.post('/verificar-prazos', async (req, res) => {
+  try {
+    const empresa = eid(req);
+    // Busca tickets distribuídos com prazo vencido desta empresa
+    const vencidos = await all(
+      `SELECT * FROM chat_solicitacoes
+        WHERE empresa_id = ? AND status = 'distribuida' AND aceite_prazo IS NOT NULL AND aceite_prazo < NOW()`,
+      [empresa]
+    );
+    let redistribuidos = 0;
+    for (const sol of vencidos) {
+      const resp = await distribuir(empresa, sol.grupo_id, sol.responsavel_id);
+      if (resp) {
+        await run(
+          `UPDATE chat_solicitacoes SET responsavel_id=?, responsavel_nome=?, status='distribuida',
+           alerta_visto=0, aceite_prazo=NOW() + INTERVAL '2 minutes',
+           aceite_tentativas=COALESCE(aceite_tentativas,0)+1, ultimo_lembrete=NULL, updated_at=${NOW}
+           WHERE id=?`,
+          [resp.id, resp.nome, sol.id]
+        );
+        await run(
+          `INSERT INTO chat_historico (id, solicitacao_id, empresa_id, usuario_id, usuario_nome, acao, detalhe)
+           VALUES (?,?,?,?,?,?,?)`,
+          [uuidv4(), sol.id, empresa, resp.id, resp.nome, 'redistribuida',
+           `Prazo de aceite vencido; redistribuída para ${resp.nome}`]
+        );
+        await notificar(empresa, resp.id, 'Nova solicitação', `"${sol.titulo}" foi atribuída a você`);
+        await enviarPush(empresa, resp.id, { titulo: 'Nova demanda para você', corpo: sol.titulo, solId: sol.id });
+      } else {
+        await run(
+          `UPDATE chat_solicitacoes SET responsavel_id=NULL, responsavel_nome=NULL, status='nova',
+           aceite_prazo=NULL, aceite_tentativas=0, alerta_visto=1, updated_at=${NOW}
+           WHERE id=?`,
+          [sol.id]
+        );
+        await run(
+          `INSERT INTO chat_historico (id, solicitacao_id, empresa_id, usuario_id, usuario_nome, acao, detalhe)
+           VALUES (?,?,?,?,?,?,?)`,
+          [uuidv4(), sol.id, empresa, null, null, 'sem_atendente',
+           'Prazo vencido; nenhum atendente disponível — retornada para fila']
+        );
+      }
+      redistribuidos++;
+    }
+    res.json({ ok: true, redistribuidos });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── Detalhe da solicitação (deve vir depois de /grupos e /canais) ──
 router.get('/:id', async (req, res) => {
   try {
@@ -776,6 +831,57 @@ router.patch('/:id/aguardar', async (req, res) => {
     }
 
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Fase 2: aceitar / recusar ──────────────────────────────────
+
+// POST /:id/aceitar — atendente aceita o ticket formalmente
+router.post('/:id/aceitar', async (req, res) => {
+  try {
+    const sol = await get('SELECT * FROM chat_solicitacoes WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!sol) return res.status(404).json({ erro: 'Solicitação não encontrada' });
+    if (sol.responsavel_id !== uid(req)) return res.status(403).json({ erro: 'Você não é o responsável desta solicitação' });
+    await run(
+      `UPDATE chat_solicitacoes SET status='em_atendimento', alerta_visto=1,
+       aceite_prazo=NULL, ultimo_lembrete=NULL, re_alertar_em=NULL, updated_at=${NOW} WHERE id=?`,
+      [req.params.id]
+    );
+    await logHist(req.params.id, req, 'aceita', 'Atendente aceitou o ticket');
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// POST /:id/recusar — atendente recusa; redistribui para próximo disponível
+router.post('/:id/recusar', async (req, res) => {
+  try {
+    const sol = await get('SELECT * FROM chat_solicitacoes WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
+    if (!sol) return res.status(404).json({ erro: 'Solicitação não encontrada' });
+    if (sol.status !== 'distribuida') return res.status(400).json({ erro: 'Apenas tickets com status "distribuida" podem ser recusados' });
+    if (sol.responsavel_id !== uid(req)) return res.status(403).json({ erro: 'Você não é o responsável desta solicitação' });
+
+    const resp = await distribuir(eid(req), sol.grupo_id, sol.responsavel_id);
+    if (resp) {
+      await run(
+        `UPDATE chat_solicitacoes SET responsavel_id=?, responsavel_nome=?, status='distribuida',
+         alerta_visto=0, aceite_prazo=NOW() + INTERVAL '2 minutes',
+         aceite_tentativas=COALESCE(aceite_tentativas,0)+1, ultimo_lembrete=NULL, updated_at=${NOW}
+         WHERE id=?`,
+        [resp.id, resp.nome, req.params.id]
+      );
+      await logHist(req.params.id, req, 'redistribuida', `Recusado por ${unome(req)}; redistribuída para ${resp.nome}`);
+      await notificar(eid(req), resp.id, 'Nova solicitação', `"${sol.titulo}" foi atribuída a você`);
+      await enviarPush(eid(req), resp.id, { titulo: 'Nova demanda para você', corpo: sol.titulo, solId: req.params.id });
+    } else {
+      await run(
+        `UPDATE chat_solicitacoes SET responsavel_id=NULL, responsavel_nome=NULL, status='nova',
+         aceite_prazo=NULL, aceite_tentativas=0, alerta_visto=1, updated_at=${NOW}
+         WHERE id=?`,
+        [req.params.id]
+      );
+      await logHist(req.params.id, req, 'sem_atendente', `Recusado por ${unome(req)}; nenhum atendente disponível — retornada para fila`);
+    }
+    res.json({ ok: true, redistribuida: !!resp, novo_responsavel: resp ? resp.nome : null });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

@@ -1550,6 +1550,41 @@ async function initSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notificacoes_usuario ON notificacoes(usuario_id, lida)`);
 
+  // Atividades corporativas (Fase 2 – Delegação Corporativa)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atividades (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      criado_por_id TEXT,
+      responsavel_id TEXT,
+      departamento_id TEXT,
+      status TEXT DEFAULT 'em_andamento',
+      data_prazo TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW(),
+      updated_at TIMESTAMPTZ DEFAULT NOW(),
+      excluido_em TIMESTAMPTZ
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atividades_empresa ON atividades(empresa_id, excluido_em)`);
+
+  // Etapas de uma atividade
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS atividade_etapas (
+      id TEXT PRIMARY KEY,
+      atividade_id TEXT NOT NULL,
+      titulo TEXT NOT NULL,
+      descricao TEXT,
+      responsavel_id TEXT,
+      ordem INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'pendente',
+      data_prazo TIMESTAMPTZ,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_atividade_etapas_atividade ON atividade_etapas(atividade_id)`);
+
   // Tabela de controle de migrações one-time
   await pool.query(`
     CREATE TABLE IF NOT EXISTS migracoes_executadas (
