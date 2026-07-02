@@ -26,6 +26,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, departamento_id, responsavel_id } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -42,6 +43,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, departamento_id, responsavel_id } = req.body;
     await run(`
       UPDATE setores SET nome=$1, descricao=$2, departamento_id=$3, responsavel_id=$4
@@ -56,6 +58,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     await run('DELETE FROM setores WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Setor excluído' });
   } catch (e) {

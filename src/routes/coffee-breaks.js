@@ -16,6 +16,7 @@ router.get('/', autenticar, async (req, res) => {
 
 router.post('/', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { unidade, cidade, data, horario, titulo, observacao, imagem } = req.body;
     if (!unidade || !data) return res.status(400).json({ erro: 'Unidade e data são obrigatórios' });
     const id = uuidv4();
@@ -29,6 +30,7 @@ router.post('/', autenticar, async (req, res) => {
 
 router.put('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const existente = await get(`SELECT id FROM coffee_breaks WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!existente) return res.status(404).json({ erro: 'Não encontrado' });
     const { unidade, cidade, data, horario, titulo, observacao, imagem } = req.body;
@@ -42,6 +44,7 @@ router.put('/:id', autenticar, async (req, res) => {
 
 router.delete('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const existente = await get(`SELECT id FROM coffee_breaks WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!existente) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`UPDATE coffee_breaks SET ativo = 0 WHERE id = ?`, [req.params.id]);

@@ -42,6 +42,7 @@ router.get('/arvore', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, cor, parent_id } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -54,6 +55,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, cor, parent_id } = req.body;
     await run('UPDATE categorias_pop SET nome=?, descricao=?, cor=?, parent_id=? WHERE id=? AND empresa_id=?', [
       nome, descricao || null, cor || '#7B55F1', parent_id || null, req.params.id, req.usuario.empresa_id
@@ -64,8 +66,11 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const item = await get('SELECT id FROM categorias_pop WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    if (!item) return res.status(404).json({ erro: 'Não encontrada' });
     // Remove subcategorias junto
-    await run('UPDATE pops SET categoria_id=NULL WHERE categoria_id IN (SELECT id FROM categorias_pop WHERE parent_id=?) AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
+    await run('UPDATE pops SET categoria_id=NULL WHERE categoria_id IN (SELECT id FROM categorias_pop WHERE parent_id=? AND empresa_id=?) AND empresa_id=?', [req.params.id, req.usuario.empresa_id, req.usuario.empresa_id]);
     await run('DELETE FROM categorias_pop WHERE parent_id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
     await run('UPDATE pops SET categoria_id=NULL WHERE categoria_id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
     await run('DELETE FROM categorias_pop WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);

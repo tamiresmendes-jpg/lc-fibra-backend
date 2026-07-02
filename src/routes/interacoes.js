@@ -73,7 +73,7 @@ router.post('/:tipo/:refId/comentar', async (req, res) => {
       `INSERT INTO interacao_comentarios (id, empresa_id, tipo, ref_id, usuario_id, texto) VALUES (?,?,?,?,?,?)`,
       [id, req.usuario.empresa_id, tipo, refId, req.usuario.id, texto.trim()]
     );
-    res.status(201).json(await get(`SELECT * FROM interacao_comentarios WHERE id=?`, [id]));
+    res.status(201).json(await get(`SELECT * FROM interacao_comentarios WHERE id=? AND empresa_id=?`, [id, req.usuario.empresa_id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

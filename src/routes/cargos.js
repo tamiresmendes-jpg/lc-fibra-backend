@@ -1,7 +1,7 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
-const { autenticar } = require('../middleware/auth');
+const { autenticar, autorizar } = require('../middleware/auth');
 
 const router = express.Router();
 router.use(autenticar);
@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, departamento_id, nivel } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -35,6 +36,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, departamento_id, nivel } = req.body;
     await run('UPDATE cargos SET nome=?, departamento_id=?, nivel=? WHERE id=? AND empresa_id=?', [nome, departamento_id || null, nivel || 1, req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Atualizado' });
@@ -45,6 +47,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const item = await get('SELECT nome FROM cargos WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
     if (!item) return res.status(404).json({ erro: 'Não encontrado' });
     await run(

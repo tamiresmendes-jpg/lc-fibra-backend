@@ -90,6 +90,8 @@ router.put('/:id', autenticar, soAdmin, async (req, res) => {
 // Excluir grupo
 router.delete('/:id', autenticar, soAdmin, async (req, res) => {
   try {
+    const grupo = await get('SELECT id FROM grupos_permissao WHERE id = ? AND empresa_id = ?', [req.params.id, req.usuario.empresa_id]);
+    if (!grupo) return res.status(404).json({ erro: 'Grupo não encontrado' });
     await run('DELETE FROM grupo_membros WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM grupo_departamentos WHERE grupo_id = ?', [req.params.id]);
     await run('DELETE FROM grupo_historico WHERE grupo_id = ?', [req.params.id]);

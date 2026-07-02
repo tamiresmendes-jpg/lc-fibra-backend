@@ -27,19 +27,21 @@ router.get('/aprovacoes', autenticar, async (req, res) => {
 
 router.patch('/aprovacoes/:id/aprovar', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM pops WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'POP não encontrado' });
-    await run(`UPDATE pops SET status='ativo', aprovado_por=? WHERE id=?`, [req.usuario.id, req.params.id]);
+    await run(`UPDATE pops SET status='ativo', aprovado_por=? WHERE id=? AND empresa_id=?`, [req.usuario.id, req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao aprovar' }); }
 });
 
 router.patch('/aprovacoes/:id/rejeitar', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM pops WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'POP não encontrado' });
     const { motivo } = req.body;
-    await run(`UPDATE pops SET status='rascunho' WHERE id=?`, [req.params.id]);
+    await run(`UPDATE pops SET status='rascunho' WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     if (motivo) {
       const { v4: uuidv4 } = require('uuid');
       await run(

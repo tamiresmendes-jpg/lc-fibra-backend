@@ -35,6 +35,7 @@ router.get('/metas', autenticar, async (req, res) => {
 
 router.post('/metas', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, valor_meta, valor_atual, unidade, departamento_id, responsavel_id, data_inicio, data_fim, status } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -48,12 +49,13 @@ router.post('/metas', autenticar, async (req, res) => {
 
 router.put('/metas/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM metas WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { titulo, descricao, valor_meta, valor_atual, unidade, departamento_id, responsavel_id, data_inicio, data_fim, status } = req.body;
     await run(
-      `UPDATE metas SET titulo=$1,descricao=$2,valor_meta=$3,valor_atual=$4,unidade=$5,departamento_id=$6,responsavel_id=$7,data_inicio=$8,data_fim=$9,status=$10 WHERE id=$11`,
-      [titulo, descricao || null, valor_meta || 0, valor_atual || 0, unidade || '%', departamento_id || null, responsavel_id || null, data_inicio || null, data_fim || null, status || 'ativa', req.params.id]
+      `UPDATE metas SET titulo=$1,descricao=$2,valor_meta=$3,valor_atual=$4,unidade=$5,departamento_id=$6,responsavel_id=$7,data_inicio=$8,data_fim=$9,status=$10 WHERE id=$11 AND empresa_id=$12`,
+      [titulo, descricao || null, valor_meta || 0, valor_atual || 0, unidade || '%', departamento_id || null, responsavel_id || null, data_inicio || null, data_fim || null, status || 'ativa', req.params.id, req.usuario.empresa_id]
     );
     res.json(await get(`SELECT * FROM metas WHERE id=$1`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar meta' }); }
@@ -65,9 +67,10 @@ router.delete('/metas', autenticar, async (req, res) => {
 
 router.delete('/metas/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM metas WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM metas WHERE id=$1`, [req.params.id]);
+    await run(`DELETE FROM metas WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir meta' }); }
 });
@@ -87,6 +90,7 @@ router.get('/okrs', autenticar, async (req, res) => {
 
 router.post('/okrs', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { objetivo, resultados_chave, responsavel_id, data_inicio, data_fim, ciclo } = req.body;
     if (!objetivo) return res.status(400).json({ erro: 'Objetivo obrigatório' });
     const id = uuidv4();
@@ -100,12 +104,13 @@ router.post('/okrs', autenticar, async (req, res) => {
 
 router.put('/okrs/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM okrs WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { objetivo, resultados_chave, responsavel_id, data_inicio, data_fim, ciclo, status } = req.body;
     await run(
-      `UPDATE okrs SET objetivo=$1,resultados_chave=$2,responsavel_id=$3,data_inicio=$4,data_fim=$5,ciclo=$6,status=$7 WHERE id=$8`,
-      [objetivo, JSON.stringify(resultados_chave || []), responsavel_id || null, data_inicio || null, data_fim || null, ciclo || null, status || 'ativo', req.params.id]
+      `UPDATE okrs SET objetivo=$1,resultados_chave=$2,responsavel_id=$3,data_inicio=$4,data_fim=$5,ciclo=$6,status=$7 WHERE id=$8 AND empresa_id=$9`,
+      [objetivo, JSON.stringify(resultados_chave || []), responsavel_id || null, data_inicio || null, data_fim || null, ciclo || null, status || 'ativo', req.params.id, req.usuario.empresa_id]
     );
     res.json(await get(`SELECT * FROM okrs WHERE id=$1`, [req.params.id]));
   } catch { res.status(500).json({ erro: 'Erro ao atualizar OKR' }); }
@@ -113,9 +118,10 @@ router.put('/okrs/:id', autenticar, async (req, res) => {
 
 router.delete('/okrs/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM okrs WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM okrs WHERE id=$1`, [req.params.id]);
+    await run(`DELETE FROM okrs WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir OKR' }); }
 });

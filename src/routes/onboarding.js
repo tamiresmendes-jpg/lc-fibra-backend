@@ -51,6 +51,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { colaborador_nome, cargo, departamento_id, responsavel_id, data_inicio, observacoes } = req.body;
     if (!colaborador_nome) return res.status(400).json({ erro: 'Nome do colaborador obrigatório' });
     const id = uuidv4();
@@ -91,6 +92,7 @@ router.get('/:id', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { colaborador_nome, cargo, departamento_id, responsavel_id, data_inicio, status, estrutura_apoio, acolhimento, treinamento_funcional, observacoes } = req.body;
     await run(`
       UPDATE onboarding SET
@@ -116,6 +118,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     await run('DELETE FROM onboarding WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Removido' });
   } catch (e) {

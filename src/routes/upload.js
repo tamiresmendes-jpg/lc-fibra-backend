@@ -42,6 +42,7 @@ const upload = multer({
 });
 
 router.post('/', upload.single('arquivo'), (req, res) => {
+  if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
   if (!req.file) return res.status(400).json({ erro: 'Nenhum arquivo enviado' });
   res.json({
     nome:     req.file.originalname,

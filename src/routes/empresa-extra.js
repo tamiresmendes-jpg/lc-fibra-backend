@@ -12,6 +12,7 @@ router.get('/telefones', autenticar, async (req, res) => {
 });
 
 router.post('/telefones', autenticar, async (req, res) => {
+  if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
   try {
     const { descricao, numero, ramal, whatsapp, departamento, observacao } = req.body;
     if (!descricao || !numero) return res.status(400).json({ erro: 'Descrição e número são obrigatórios' });
@@ -26,6 +27,7 @@ router.post('/telefones', autenticar, async (req, res) => {
 
 router.put('/telefones/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM empresa_telefones WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { descricao, numero, ramal, whatsapp, departamento, observacao } = req.body;
@@ -39,9 +41,10 @@ router.put('/telefones/:id', autenticar, async (req, res) => {
 
 router.delete('/telefones/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM empresa_telefones WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM empresa_telefones WHERE id = $1`, [req.params.id]);
+    await run(`DELETE FROM empresa_telefones WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir telefone' }); }
 });
@@ -55,6 +58,7 @@ router.get('/contatos', autenticar, async (req, res) => {
 
 router.post('/contatos', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, cargo, email, telefone, whatsapp, departamento, observacao, foto, fixo } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -68,6 +72,7 @@ router.post('/contatos', autenticar, async (req, res) => {
 
 router.put('/contatos/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM empresa_contatos WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { nome, cargo, email, telefone, whatsapp, departamento, observacao, foto, fixo } = req.body;
@@ -81,9 +86,10 @@ router.put('/contatos/:id', autenticar, async (req, res) => {
 
 router.delete('/contatos/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM empresa_contatos WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM empresa_contatos WHERE id = $1`, [req.params.id]);
+    await run(`DELETE FROM empresa_contatos WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir contato' }); }
 });
@@ -97,6 +103,7 @@ router.get('/horarios', autenticar, async (req, res) => {
 
 router.post('/horarios', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { unidade, periodo, tipo_atendimento, hora_abertura, hora_fechamento, fechado, hora_abertura2, hora_fechamento2, fechado2, observacao } = req.body;
     const id = uuidv4();
     await run(
@@ -109,6 +116,7 @@ router.post('/horarios', autenticar, async (req, res) => {
 
 router.put('/horarios/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM empresa_horarios WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { unidade, periodo, tipo_atendimento, hora_abertura, hora_fechamento, fechado, hora_abertura2, hora_fechamento2, fechado2, observacao } = req.body;
@@ -122,9 +130,10 @@ router.put('/horarios/:id', autenticar, async (req, res) => {
 
 router.delete('/horarios/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM empresa_horarios WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM empresa_horarios WHERE id = $1`, [req.params.id]);
+    await run(`DELETE FROM empresa_horarios WHERE id = $1 AND empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir horário' }); }
 });

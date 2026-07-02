@@ -33,7 +33,7 @@ router.post('/verificar-chave', async (req, res) => {
     if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas administrador' });
     const { chave } = req.body;
     if (!chave) return res.status(400).json({ erro: 'Informe a chave' });
-    const empresa = await get('SELECT chave_sistema FROM empresas WHERE id = ?', [req.usuario.empresa_id]);
+    const empresa = await get('SELECT chave_sistema FROM empresas WHERE id = $1', [req.usuario.empresa_id]);
     if (!empresa?.chave_sistema) {
       // Primeira vez — chave ainda não configurada, libera acesso para definição
       return res.json({ ok: true, primeira_vez: true });
@@ -50,13 +50,13 @@ router.put('/chave', async (req, res) => {
     if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas administrador' });
     const { chave_atual, nova_chave } = req.body;
     if (!nova_chave || nova_chave.length < 6) return res.status(400).json({ erro: 'A chave deve ter ao menos 6 caracteres' });
-    const empresa = await get('SELECT chave_sistema FROM empresas WHERE id = ?', [req.usuario.empresa_id]);
+    const empresa = await get('SELECT chave_sistema FROM empresas WHERE id = $1', [req.usuario.empresa_id]);
     if (empresa?.chave_sistema) {
       if (!chave_atual || !bcrypt.compareSync(chave_atual, empresa.chave_sistema))
         return res.status(401).json({ erro: 'Chave atual incorreta' });
     }
     const hash = bcrypt.hashSync(nova_chave, 10);
-    await run('UPDATE empresas SET chave_sistema = ? WHERE id = ?', [hash, req.usuario.empresa_id]);
+    await run('UPDATE empresas SET chave_sistema = $1 WHERE id = $2', [hash, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

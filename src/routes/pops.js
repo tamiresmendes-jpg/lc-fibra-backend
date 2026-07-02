@@ -110,6 +110,7 @@ router.get('/', async (req, res) => {
 // Criar POP
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const {
       titulo, descricao, conteudo, departamento_id, categoria_id, versao,
       codigo, objetivo, campo_aplicacao, responsabilidade, procedimento,
@@ -187,7 +188,7 @@ router.get('/:id', async (req, res) => {
 
     // Não contabiliza visualização do admin (acesso master)
     if (req.usuario.perfil !== 'admin') {
-      await run('UPDATE pops SET total_visualizacoes = total_visualizacoes + 1 WHERE id=$1', [req.params.id]);
+      await run('UPDATE pops SET total_visualizacoes = total_visualizacoes + 1 WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
       await run('INSERT INTO pop_visualizacoes (id, pop_id, usuario_id) VALUES ($1,$2,$3)', [uuidv4(), req.params.id, req.usuario.id]);
     }
 
@@ -277,6 +278,7 @@ router.post('/:id/converter-padrao', async (req, res) => {
 // Atualizar POP
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const {
       titulo, descricao, conteudo, departamento_id, categoria_id, versao, status, resumo_alteracao,
       tipo_alteracao,
@@ -338,6 +340,7 @@ router.put('/:id', async (req, res) => {
 // Excluir POP (soft delete → vai para lixeira)
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const pop = await get('SELECT titulo FROM pops WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
     if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
     await run(

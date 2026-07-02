@@ -40,9 +40,13 @@ router.get('/', autenticar, async (req, res) => {
 
 router.post('/', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { usuario_id, data_inicio, data_fim, tipo, observacoes } = req.body;
     if (!usuario_id || !data_inicio || !data_fim)
       return res.status(400).json({ erro: 'Colaborador, data início e data fim são obrigatórios' });
+
+    const colab = await get(`SELECT id FROM usuarios WHERE id = ? AND empresa_id = ?`, [usuario_id, req.usuario.empresa_id]);
+    if (!colab) return res.status(404).json({ erro: 'Colaborador não encontrado nesta empresa' });
 
     const id = uuidv4();
     const dias = calcDias(data_inicio, data_fim);
@@ -61,14 +65,15 @@ router.post('/', autenticar, async (req, res) => {
 
 router.put('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM ferias WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
 
     const { usuario_id, data_inicio, data_fim, tipo, status, observacoes } = req.body;
     const dias = calcDias(data_inicio, data_fim);
     await run(
-      `UPDATE ferias SET usuario_id=?,data_inicio=?,data_fim=?,dias=?,tipo=?,status=?,observacoes=? WHERE id=?`,
-      [usuario_id, data_inicio, data_fim, dias, tipo || 'ferias', status || 'solicitado', observacoes || null, req.params.id]
+      `UPDATE ferias SET usuario_id=?,data_inicio=?,data_fim=?,dias=?,tipo=?,status=?,observacoes=? WHERE id=? AND empresa_id=?`,
+      [usuario_id, data_inicio, data_fim, dias, tipo || 'ferias', status || 'solicitado', observacoes || null, req.params.id, req.usuario.empresa_id]
     );
     res.json(await get(BASE_SELECT + ` WHERE f.id = ?`, [req.params.id]));
   } catch (err) {
@@ -79,12 +84,13 @@ router.put('/:id', autenticar, async (req, res) => {
 
 router.patch('/:id/status', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { status } = req.body;
     const exist = await get(`SELECT id FROM ferias WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
 
     const aprovadoPor = ['aprovado', 'rejeitado'].includes(status) ? req.usuario.id : null;
-    await run(`UPDATE ferias SET status=?, aprovado_por=? WHERE id=?`, [status, aprovadoPor, req.params.id]);
+    await run(`UPDATE ferias SET status=?, aprovado_por=? WHERE id=? AND empresa_id=?`, [status, aprovadoPor, req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);
@@ -94,9 +100,10 @@ router.patch('/:id/status', autenticar, async (req, res) => {
 
 router.delete('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM ferias WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM ferias WHERE id = ?`, [req.params.id]);
+    await run(`DELETE FROM ferias WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch (err) {
     console.error(err);

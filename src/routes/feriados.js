@@ -36,6 +36,7 @@ router.get('/', autenticar, async (req, res) => {
 
 router.post('/', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, data, tipo, recorrente, observacao } = req.body;
     if (!nome || !data) return res.status(400).json({ erro: 'Nome e data são obrigatórios' });
 
@@ -56,6 +57,7 @@ router.post('/', autenticar, async (req, res) => {
 
 router.put('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const existente = await get(`SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!existente) return res.status(404).json({ erro: 'Feriado não encontrado' });
 
@@ -103,9 +105,10 @@ router.patch('/:id/validar', autenticar, async (req, res) => {
 
 router.delete('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const existente = await get(`SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!existente) return res.status(404).json({ erro: 'Feriado não encontrado' });
-    await run(`UPDATE feriados SET ativo = 0 WHERE id = ?`, [req.params.id]);
+    await run(`UPDATE feriados SET ativo = 0 WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Feriado removido com sucesso' });
   } catch (err) {
     res.status(500).json({ erro: 'Erro ao remover feriado' });

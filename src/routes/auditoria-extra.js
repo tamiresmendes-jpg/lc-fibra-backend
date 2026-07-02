@@ -21,6 +21,7 @@ router.get('/nao-conformidades', autenticar, async (req, res) => {
 
 router.post('/nao-conformidades', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, auditoria_id, responsavel_id, prazo, gravidade, status } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -34,6 +35,7 @@ router.post('/nao-conformidades', autenticar, async (req, res) => {
 
 router.put('/nao-conformidades/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM auditoria_nao_conformidades WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { titulo, descricao, auditoria_id, responsavel_id, prazo, gravidade, status } = req.body;
@@ -47,9 +49,10 @@ router.put('/nao-conformidades/:id', autenticar, async (req, res) => {
 
 router.delete('/nao-conformidades/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM auditoria_nao_conformidades WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM auditoria_nao_conformidades WHERE id=?`, [req.params.id]);
+    await run(`DELETE FROM auditoria_nao_conformidades WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir' }); }
 });
@@ -85,6 +88,7 @@ router.get('/evidencias', autenticar, async (req, res) => {
 
 router.post('/evidencias', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, auditoria_id, tipo, url } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -98,9 +102,10 @@ router.post('/evidencias', autenticar, async (req, res) => {
 
 router.delete('/evidencias/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM auditoria_evidencias WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    await run(`DELETE FROM auditoria_evidencias WHERE id=?`, [req.params.id]);
+    await run(`DELETE FROM auditoria_evidencias WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir evidência' }); }
 });

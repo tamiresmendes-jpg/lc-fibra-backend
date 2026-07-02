@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, conteudo, tipo, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -39,6 +40,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, conteudo, tipo, ativo, fixado, categoria, tema, data_inicio, data_fim, responsavel, etapa, vagas_limite, imagem } = req.body;
     await run(`UPDATE comunicados SET titulo=$1, conteudo=$2, tipo=$3, ativo=$4, fixado=$5, categoria=$6, tema=$7, data_inicio=$8, data_fim=$9, responsavel=$10, etapa=$11, vagas_limite=$12, imagem=$13 WHERE id=$14 AND empresa_id=$15`,
       [titulo, conteudo||null, tipo||'comunicado', ativo !== undefined ? ativo : 1, fixado?1:0, categoria||'geral', tema||'padrao', data_inicio||null, data_fim||null, responsavel||null, etapa||null, vagas_limite||null, imagem||null, req.params.id, req.usuario.empresa_id]);
@@ -51,6 +53,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     await run('UPDATE comunicados SET ativo=0 WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Removido' });
   } catch (e) {

@@ -23,6 +23,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, sigla } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -36,6 +37,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, sigla } = req.body;
     await run('UPDATE departamentos SET nome=?, descricao=?, sigla=? WHERE id=? AND empresa_id=?', [nome, descricao || null, sigla || null, req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Atualizado' });
@@ -46,6 +48,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const item = await get('SELECT nome FROM departamentos WHERE id=? AND empresa_id=?', [req.params.id, req.usuario.empresa_id]);
     if (!item) return res.status(404).json({ erro: 'Não encontrado' });
     await run(

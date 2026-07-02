@@ -19,6 +19,7 @@ router.get('/eventos', autenticar, async (req, res) => {
 
 router.post('/eventos', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, data_inicio, data_fim, local, tipo, publico, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -33,6 +34,7 @@ router.post('/eventos', autenticar, async (req, res) => {
 
 router.put('/eventos/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_eventos WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { titulo, descricao, data_inicio, data_fim, local, tipo, publico, imagem } = req.body;
@@ -46,6 +48,7 @@ router.put('/eventos/:id', autenticar, async (req, res) => {
 
 router.delete('/eventos/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_eventos WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`DELETE FROM cultura_eventos WHERE id = ?`, [req.params.id]);
@@ -70,6 +73,7 @@ router.get('/enquetes', autenticar, async (req, res) => {
 
 router.post('/enquetes', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, opcoes, data_fim, anonima } = req.body;
     if (!titulo || !opcoes?.length) return res.status(400).json({ erro: 'Título e opções são obrigatórios' });
     const id = uuidv4();
@@ -91,6 +95,7 @@ router.patch('/enquetes/:id/ativa', autenticar, async (req, res) => {
 
 router.delete('/enquetes/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_enquetes WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`DELETE FROM cultura_enquete_respostas WHERE enquete_id = ?`, [req.params.id]);
@@ -117,6 +122,8 @@ router.post('/enquetes/:id/votar', autenticar, async (req, res) => {
 
 router.get('/enquetes/:id/resultados', autenticar, async (req, res) => {
   try {
+    const enquete = await get(`SELECT id FROM cultura_enquetes WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
+    if (!enquete) return res.status(404).json({ erro: 'Não encontrado' });
     const rows = await all(
       `SELECT opcao_index, COUNT(*) AS votos FROM cultura_enquete_respostas WHERE enquete_id = ? GROUP BY opcao_index`,
       [req.params.id]
@@ -162,6 +169,7 @@ router.get('/mural', autenticar, async (req, res) => {
 
 router.post('/mural', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, conteudo, tipo, fixado, data_expiracao, data_agendamento, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -177,6 +185,7 @@ router.post('/mural', autenticar, async (req, res) => {
 
 router.put('/mural/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_mural WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { titulo, conteudo, tipo, fixado, data_expiracao, data_agendamento, imagem } = req.body;
@@ -191,6 +200,7 @@ router.put('/mural/:id', autenticar, async (req, res) => {
 
 router.delete('/mural/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_mural WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`DELETE FROM cultura_mural WHERE id = ?`, [req.params.id]);
@@ -213,6 +223,7 @@ router.get('/campanhas-internas', autenticar, async (req, res) => {
 
 router.post('/campanhas-internas', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, objetivo, data_inicio, data_fim, status, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -227,6 +238,7 @@ router.post('/campanhas-internas', autenticar, async (req, res) => {
 
 router.put('/campanhas-internas/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_campanhas_internas WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { titulo, descricao, objetivo, data_inicio, data_fim, status, imagem } = req.body;
@@ -240,6 +252,7 @@ router.put('/campanhas-internas/:id', autenticar, async (req, res) => {
 
 router.delete('/campanhas-internas/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM cultura_campanhas_internas WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`DELETE FROM cultura_campanhas_internas WHERE id = ?`, [req.params.id]);

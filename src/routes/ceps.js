@@ -17,7 +17,7 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/ceps/importar — importa lista de CEPs (substitui por cidade)
-router.post('/importar', async (req, res) => {
+router.post('/importar', require('../middleware/auth').verificarPerfil(['admin', 'gestor']), async (req, res) => {
   try {
     const { ceps, cidade } = req.body;
     if (!Array.isArray(ceps) || ceps.length === 0) {

@@ -26,6 +26,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, unidade, meta, frequencia, departamento_id } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -68,6 +69,7 @@ router.get('/:id/historico', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, unidade, meta, frequencia, departamento_id, status } = req.body;
     await run('UPDATE indicadores SET nome=$1, descricao=$2, unidade=$3, meta=$4, frequencia=$5, departamento_id=$6, status=$7 WHERE id=$8 AND empresa_id=$9', [nome, descricao||null, unidade||null, meta||null, frequencia||'mensal', departamento_id||null, status||'ativo', req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Atualizado' });
@@ -79,6 +81,9 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const ind = await get('SELECT id FROM indicadores WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    if (!ind) return res.status(404).json({ erro: 'Não encontrado' });
     await run('DELETE FROM indicadores_historico WHERE indicador_id=$1', [req.params.id]);
     await run('DELETE FROM indicadores WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Removido' });

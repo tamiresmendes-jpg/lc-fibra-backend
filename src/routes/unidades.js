@@ -26,6 +26,7 @@ router.get('/', async (req, res) => {
 // POST / — cria nova unidade
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, tipo, cnpj, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel, maps_url } = req.body;
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -48,6 +49,7 @@ router.post('/', async (req, res) => {
 // PUT /:id — atualiza unidade
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, tipo, cnpj, cep, logradouro, numero, complemento, bairro, cidade, estado, telefone, responsavel, maps_url } = req.body;
     await run(`
       UPDATE unidades
@@ -70,6 +72,7 @@ router.put('/:id', async (req, res) => {
 // DELETE /:id — soft delete
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     await run(`
       UPDATE unidades SET ativo = 0 WHERE id=$1 AND empresa_id=$2
     `, [req.params.id, req.usuario.empresa_id]);

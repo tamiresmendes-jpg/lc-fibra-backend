@@ -73,9 +73,9 @@ router.get('/:id', async (req, res) => {
       SELECT h.*, u.nome as usuario_nome
       FROM pop_historico h
       JOIN usuarios u ON u.id = h.usuario_id
-      WHERE h.pop_id = $1
+      WHERE h.pop_id = $1 AND h.empresa_id = $2
       ORDER BY h.created_at DESC
-    `, [item.pop_id]);
+    `, [item.pop_id, req.usuario.empresa_id]);
 
     res.json({ ...item, pop_historico: historico });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -84,6 +84,7 @@ router.get('/:id', async (req, res) => {
 // Iniciar auditoria a partir de solicitação
 router.post('/:id/iniciar', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { pendencias, resultado, score } = req.body;
 
     const solicitacao = await get('SELECT * FROM auditoria_solicitacoes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
@@ -104,7 +105,7 @@ router.post('/:id/iniciar', async (req, res) => {
     `, [auditoriaId, req.usuario.empresa_id, solicitacao.tipo, `Auditoria: ${pop.titulo}`, req.usuario.id, solicitacao.pop_id, solicitacao.id, scoreNum, statusAuditoria, resultado || null, pendencias || null]);
 
     // Atualizar solicitação
-    await run('UPDATE auditoria_solicitacoes SET status=$1, auditoria_id=$2 WHERE id=$3', ['concluida', auditoriaId, req.params.id]);
+    await run('UPDATE auditoria_solicitacoes SET status=$1, auditoria_id=$2 WHERE id=$3 AND empresa_id=$4', ['concluida', auditoriaId, req.params.id, req.usuario.empresa_id]);
 
     res.json({ auditoria_id: auditoriaId, status: statusAuditoria, mensagem: 'Auditoria realizada com sucesso' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -113,7 +114,10 @@ router.post('/:id/iniciar', async (req, res) => {
 // Atualizar status da solicitação
 router.patch('/:id/status', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { status } = req.body;
+    const statusValidos = ['pendente','em_andamento','concluida','cancelada'];
+    if (status && !statusValidos.includes(status)) return res.status(400).json({ erro: 'Status inválido' });
     const solicitacao = await get('SELECT id FROM auditoria_solicitacoes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     if (!solicitacao) return res.status(404).json({ erro: 'Solicitação não encontrada' });
     await run('UPDATE auditoria_solicitacoes SET status=$1 WHERE id=$2 AND empresa_id=$3', [status, req.params.id, req.usuario.empresa_id]);

@@ -39,6 +39,8 @@ router.post('/1a1', async (req, res) => {
 
 router.put('/1a1/:id', async (req, res) => {
   try {
+    const exist = await get('SELECT id FROM reunioes_1_1 WHERE id=$1 AND empresa_id=$2 AND (lider_id=$3 OR liderado_id=$4)', [req.params.id, req.usuario.empresa_id, req.usuario.id, req.usuario.id]);
+    if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     const { data_reuniao, pauta, anotacoes, proximos_passos, status } = req.body;
     await run('UPDATE reunioes_1_1 SET data_reuniao=$1, pauta=$2, anotacoes=$3, proximos_passos=$4, status=$5 WHERE id=$6 AND empresa_id=$7', [data_reuniao||null, pauta||null, anotacoes||null, proximos_passos||null, status||'agendada', req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Atualizado' });
@@ -66,6 +68,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, tipo, data_reuniao, local, pauta } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
@@ -79,6 +82,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, tipo, data_reuniao, local, pauta, ata, status } = req.body;
     await run('UPDATE reunioes SET titulo=$1, tipo=$2, data_reuniao=$3, local=$4, pauta=$5, ata=$6, status=$7 WHERE id=$8 AND empresa_id=$9', [titulo, tipo||'geral', data_reuniao||null, local||null, pauta||null, ata||null, status||'agendada', req.params.id, req.usuario.empresa_id]);
     res.json({ mensagem: 'Atualizado' });
@@ -90,6 +94,7 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const item = await get('SELECT titulo FROM reunioes WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     if (!item) return res.status(404).json({ erro: 'Não encontrado' });
     await run(

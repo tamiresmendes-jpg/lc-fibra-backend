@@ -153,16 +153,7 @@ router.put('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Excluir (soft delete)
-router.delete('/:id', async (req, res) => {
-  try {
-    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    await run('UPDATE alteracoes SET ativo=0 WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
-    res.json({ ok: true });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Limpar todo o histórico (admin apenas)
+// Limpar todo o histórico (admin apenas) — deve ficar ANTES de /:id para não ser capturado por ele
 router.delete('/limpar/historico', async (req, res) => {
   try {
     if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas administradores podem limpar o histórico.' });
@@ -173,9 +164,20 @@ router.delete('/limpar/historico', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Excluir (soft delete)
+router.delete('/:id', async (req, res) => {
+  try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    await run('UPDATE alteracoes SET ativo=0 WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Confirmar ciência
 router.post('/:id/ciente', async (req, res) => {
   try {
+    const alteracao = await get('SELECT id FROM alteracoes WHERE id=? AND empresa_id=? AND ativo=1', [req.params.id, eid(req)]);
+    if (!alteracao) return res.status(404).json({ erro: 'Alteração não encontrada' });
     const existe = await get('SELECT id FROM alteracao_ciencias WHERE alteracao_id=? AND usuario_id=?', [req.params.id, req.usuario.id]);
     if (existe) return res.json({ ok: true, ja_confirmado: true });
     const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null;

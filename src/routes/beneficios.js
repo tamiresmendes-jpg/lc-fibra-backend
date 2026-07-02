@@ -20,6 +20,7 @@ router.get('/', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, icone, imagem, ordem } = req.body;
     if (!nome?.trim()) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
@@ -34,6 +35,7 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { nome, descricao, icone, imagem, ordem } = req.body;
     await run(
       `UPDATE beneficios SET nome=$1, descricao=$2, icone=$3, imagem=$4, ordem=$5,
@@ -41,12 +43,13 @@ router.put('/:id', async (req, res) => {
        WHERE id=$6 AND empresa_id=$7`,
       [nome, descricao || '', icone || '', imagem || '', ordem || 0, req.params.id, eid(req)]
     );
-    res.json(await get('SELECT * FROM beneficios WHERE id=$1', [req.params.id]));
+    res.json(await get('SELECT * FROM beneficios WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     await run('UPDATE beneficios SET ativo=0 WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }

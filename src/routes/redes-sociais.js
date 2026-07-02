@@ -21,6 +21,7 @@ router.get('/', autenticar, async (req, res) => {
 // POST / — cria nova rede social
 router.post('/', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { plataforma, nome, url, descricao } = req.body;
     if (!plataforma) {
       return res.status(400).json({ erro: 'Plataforma é obrigatória' });
@@ -41,6 +42,7 @@ router.post('/', autenticar, async (req, res) => {
 // PUT /:id — atualiza rede social
 router.put('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { plataforma, nome, url, descricao } = req.body;
     const existente = await get(
       `SELECT id FROM redes_sociais WHERE id = ? AND empresa_id = ?`,
@@ -50,8 +52,8 @@ router.put('/:id', autenticar, async (req, res) => {
       return res.status(404).json({ erro: 'Rede social não encontrada' });
     }
     await run(
-      `UPDATE redes_sociais SET plataforma = ?, nome = ?, url = ?, descricao = ? WHERE id = ?`,
-      [plataforma, nome || null, url || null, descricao || null, req.params.id]
+      `UPDATE redes_sociais SET plataforma = ?, nome = ?, url = ?, descricao = ? WHERE id = ? AND empresa_id = ?`,
+      [plataforma, nome || null, url || null, descricao || null, req.params.id, req.usuario.empresa_id]
     );
     const atualizada = await get(`SELECT * FROM redes_sociais WHERE id = ?`, [req.params.id]);
     res.json(atualizada);
@@ -64,6 +66,7 @@ router.put('/:id', autenticar, async (req, res) => {
 // DELETE /:id — soft delete
 router.delete('/:id', autenticar, async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const existente = await get(
       `SELECT id FROM redes_sociais WHERE id = ? AND empresa_id = ?`,
       [req.params.id, req.usuario.empresa_id]
@@ -72,8 +75,8 @@ router.delete('/:id', autenticar, async (req, res) => {
       return res.status(404).json({ erro: 'Rede social não encontrada' });
     }
     await run(
-      `UPDATE redes_sociais SET ativo = 0 WHERE id = ?`,
-      [req.params.id]
+      `UPDATE redes_sociais SET ativo = 0 WHERE id = ? AND empresa_id = ?`,
+      [req.params.id, req.usuario.empresa_id]
     );
     res.json({ mensagem: 'Rede social removida com sucesso' });
   } catch (err) {
