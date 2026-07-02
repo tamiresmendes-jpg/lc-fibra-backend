@@ -82,14 +82,15 @@ router.post('/', async (req, res) => {
     const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id     = uuidv4();
-    const codigo = await proximoCodigo(eid(req));
+    // código só é gerado quando o processo está ativo
+    const codigo = (status === 'ativo') ? await proximoCodigo(eid(req)) : null;
     await run(
       `INSERT INTO processos
          (id,empresa_id,codigo,titulo,objetivo,descricao,setor,responsavel,status,
           resultado_esperado,pops_relacionados,criado_por_id,criado_por_nome)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [id, eid(req), codigo, titulo, objetivo||null, descricao||null, setor||null,
-       responsavel||null, status||'ativo', resultado_esperado||null, pops_relacionados||null,
+       responsavel||null, status||'rascunho', resultado_esperado||null, pops_relacionados||null,
        req.usuario.id, req.usuario.nome]
     );
     await registrarHistorico(id, eid(req), req.usuario, 'criado', { titulo, codigo, status });
@@ -102,23 +103,30 @@ router.put('/:id', async (req, res) => {
     const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados } = req.body;
     const antes = await get('SELECT * FROM processos WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
     if (!antes) return res.status(404).json({ erro: 'Não encontrado' });
+
+    // gera código se está sendo ativado pela primeira vez
+    let codigo = antes.codigo;
+    if (status === 'ativo' && !codigo) {
+      codigo = await proximoCodigo(eid(req));
+    }
+
     await run(
       `UPDATE processos SET titulo=$1,objetivo=$2,descricao=$3,setor=$4,responsavel=$5,status=$6,
-       resultado_esperado=$7,pops_relacionados=$8,updated_at=NOW() WHERE id=$9 AND empresa_id=$10`,
-      [titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'ativo',
-       resultado_esperado||null, pops_relacionados||null, req.params.id, eid(req)]
+       resultado_esperado=$7,pops_relacionados=$8,codigo=$9,updated_at=NOW() WHERE id=$10 AND empresa_id=$11`,
+      [titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'rascunho',
+       resultado_esperado||null, pops_relacionados||null, codigo, req.params.id, eid(req)]
     );
-    // detectar o que mudou para o histórico
     const mudancas = [];
     if (antes.titulo !== titulo)   mudancas.push(`Título: "${antes.titulo}" → "${titulo}"`);
     if (antes.status !== status)   mudancas.push(`Status: ${antes.status} → ${status}`);
+    if (!antes.codigo && codigo)   mudancas.push(`Código gerado: ${codigo}`);
     if (antes.objetivo !== (objetivo||null)) mudancas.push('Objetivo atualizado');
     if (antes.descricao !== (descricao||null)) mudancas.push('Descrição atualizada');
     if (antes.responsavel !== (responsavel||null)) mudancas.push(`Responsável: "${antes.responsavel}" → "${responsavel}"`);
     if (antes.pops_relacionados !== (pops_relacionados||null)) mudancas.push('POPs relacionados atualizados');
     if (antes.resultado_esperado !== (resultado_esperado||null)) mudancas.push('Resultado esperado atualizado');
-    await registrarHistorico(req.params.id, eid(req), req.usuario, 'editado', { mudancas, titulo });
-    res.json({ ok: true });
+    if (mudancas.length) await registrarHistorico(req.params.id, eid(req), req.usuario, 'editado', { mudancas, titulo });
+    res.json({ ok: true, codigo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
