@@ -120,6 +120,8 @@ router.put('/:id', async (req, res) => {
 router.delete('/:id', async (req, res) => {
   try {
     if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const campanha = await get('SELECT id FROM campanhas WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
+    if (!campanha) return res.status(404).json({ erro: 'Campanha não encontrada' });
     await run('DELETE FROM campanha_resultados WHERE campanha_id=$1', [req.params.id]);
     await run('DELETE FROM campanha_participantes WHERE campanha_id=$1', [req.params.id]);
     await run('DELETE FROM campanha_metas WHERE campanha_id=$1', [req.params.id]);

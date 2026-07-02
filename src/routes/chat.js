@@ -885,20 +885,5 @@ router.post('/:id/recusar', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Aceitar formalmente a demanda — cancela o prazo e marca em atendimento
-router.patch('/:id/aceitar', async (req, res) => {
-  try {
-    const sol = await get('SELECT * FROM chat_solicitacoes WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
-    if (!sol) return res.status(404).json({ erro: 'Solicitação não encontrada' });
-    if (sol.responsavel_id !== uid(req)) return res.status(403).json({ erro: 'Você não é o responsável desta solicitação' });
-    await run(
-      `UPDATE chat_solicitacoes SET alerta_visto=1, aceite_prazo=NULL, ultimo_lembrete=NULL,
-       re_alertar_em=NULL, status='em_atendimento', updated_at=${NOW} WHERE id=?`,
-      [req.params.id]
-    );
-    await logHist(req.params.id, req, 'aceita', 'Responsável iniciou o atendimento');
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
 
 module.exports = router;

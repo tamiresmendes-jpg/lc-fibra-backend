@@ -1550,23 +1550,16 @@ async function initSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_notificacoes_usuario ON notificacoes(usuario_id, lida)`);
 
-  // Atividades corporativas (Fase 2 – Delegação Corporativa)
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS atividades (
-      id TEXT PRIMARY KEY,
-      empresa_id TEXT NOT NULL,
-      titulo TEXT NOT NULL,
-      descricao TEXT,
-      criado_por_id TEXT,
-      responsavel_id TEXT,
-      departamento_id TEXT,
-      status TEXT DEFAULT 'em_andamento',
-      data_prazo TIMESTAMPTZ,
-      created_at TIMESTAMPTZ DEFAULT NOW(),
-      updated_at TIMESTAMPTZ DEFAULT NOW(),
-      excluido_em TIMESTAMPTZ
-    )
-  `);
+  // campanha_participantes — garante unicidade (sem duplicate ON CONFLICT funcionar sem ela)
+  try {
+    await pool.query(`ALTER TABLE campanha_participantes ADD CONSTRAINT uq_camp_part UNIQUE (campanha_id, usuario_id)`);
+  } catch {}
+
+  // Atividades Fase 2 — adiciona colunas à tabela existente (safe em produção)
+  await pool.query(`ALTER TABLE atividades ADD COLUMN IF NOT EXISTS criado_por_id TEXT`);
+  await pool.query(`ALTER TABLE atividades ADD COLUMN IF NOT EXISTS responsavel_id TEXT`);
+  await pool.query(`ALTER TABLE atividades ADD COLUMN IF NOT EXISTS data_prazo TIMESTAMPTZ`);
+  await pool.query(`ALTER TABLE atividades ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMPTZ`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_atividades_empresa ON atividades(empresa_id, excluido_em)`);
 
   // Etapas de uma atividade
