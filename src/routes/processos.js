@@ -100,6 +100,8 @@ router.post('/', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
+    if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão para editar processos' });
     const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados } = req.body;
     const antes = await get('SELECT * FROM processos WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
     if (!antes) return res.status(404).json({ erro: 'Não encontrado' });
@@ -132,6 +134,8 @@ router.put('/:id', async (req, res) => {
 
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão para excluir processos' });
     const item = await get('SELECT titulo FROM processos WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
     if (!item) return res.status(404).json({ erro: 'Não encontrado' });
     await run(

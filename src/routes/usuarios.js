@@ -217,6 +217,8 @@ router.put('/:id', async (req, res) => {
 // Atualizar hierarquia (gestor_id) e/ou cor — usado pelo organograma
 router.patch('/:id/organograma', async (req, res) => {
   try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão para editar o organograma' });
     const { gestor_id, cor } = req.body;
     const sets = [];
     const vals = [];
@@ -275,6 +277,8 @@ router.patch('/:id/senha', async (req, res) => {
 // Importar usuários em lote (CSV)
 router.post('/importar', async (req, res) => {
   try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão para importar usuários' });
     const { usuarios, inativarForaDaLista } = req.body;
     if (!Array.isArray(usuarios) || usuarios.length === 0)
       return res.status(400).json({ erro: 'Nenhum usuário enviado' });
@@ -436,6 +440,8 @@ router.post('/importar', async (req, res) => {
 // Importar/atualizar por nome (ex: planilha de aniversários)
 router.post('/importar-por-nome', async (req, res) => {
   try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão para importar usuários' });
     const { usuarios } = req.body;
     if (!Array.isArray(usuarios) || usuarios.length === 0)
       return res.status(400).json({ erro: 'Nenhum registro enviado' });
@@ -542,6 +548,8 @@ router.delete('/todos', async (req, res) => {
 // Deletar usuário
 router.delete('/:id', async (req, res) => {
   try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão para excluir usuários' });
     if (req.params.id === req.usuario.id) {
       return res.status(400).json({ erro: 'Você não pode excluir o próprio usuário.' });
     }

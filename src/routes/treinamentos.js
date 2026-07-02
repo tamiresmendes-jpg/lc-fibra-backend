@@ -279,6 +279,11 @@ router.post('/:id/anotacoes', async (req, res) => {
 router.delete('/:id/anotacoes/:an_id', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const an = await get('SELECT usuario_id FROM treinamento_anotacoes WHERE id=$1 AND treinamento_id=$2', [req.params.an_id, req.params.id]);
+    if (!an) return res.status(404).json({ erro: 'Anotação não encontrada' });
+    const isAdmin = ['admin','gestor'].includes(req.usuario.perfil);
+    if (!isAdmin && an.usuario_id !== req.usuario.id)
+      return res.status(403).json({ erro: 'Sem permissão para remover esta anotação' });
     await run('DELETE FROM treinamento_anotacoes WHERE id=$1 AND treinamento_id=$2', [req.params.an_id, req.params.id]);
     res.json({ mensagem: 'Removido' });
   } catch(e) { res.status(500).json({ erro: e.message }); }

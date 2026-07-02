@@ -38,6 +38,123 @@ const SEL = `
     LEFT JOIN usuarios r ON r.id = t.responsavel_id
     LEFT JOIN atividades a ON a.id = t.atividade_id`;
 
+// ─── ATIVIDADES — rotas específicas ANTES de /:id para evitar shadowing ───────
+
+const SEL_AT = `
+  SELECT a.*,
+         cp.nome AS criador_nome,
+         rp.nome AS responsavel_nome,
+         d.nome  AS departamento_nome
+    FROM atividades a
+    LEFT JOIN usuarios cp ON cp.id = a.criado_por_id
+    LEFT JOIN usuarios rp ON rp.id = a.responsavel_id
+    LEFT JOIN departamentos d ON d.id = a.departamento_id`;
+
+router.get('/atividades', async (req, res) => {
+  try {
+    let rows;
+    if (ehGestor(req)) {
+      rows = await all(`${SEL_AT} WHERE a.empresa_id = ? AND a.excluido_em IS NULL ORDER BY a.created_at DESC`, [eid(req)]);
+    } else {
+      rows = await all(`${SEL_AT} WHERE a.empresa_id = ? AND a.excluido_em IS NULL AND a.responsavel_id = ? ORDER BY a.created_at DESC`, [eid(req), uid(req)]);
+    }
+    // inclui etapas em cada atividade
+    for (const a of rows) {
+      a.etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [a.id]);
+    }
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.post('/atividades', async (req, res) => {
+  try {
+    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem criar atividades' });
+    const { titulo, descricao, responsavel_id, departamento_id, data_prazo, etapas } = req.body;
+    if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Título é obrigatório' });
+    const id = uuidv4();
+    await run(
+      `INSERT INTO atividades (id, empresa_id, titulo, descricao, criado_por_id, responsavel_id, departamento_id, data_prazo)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [id, eid(req), titulo.trim(), descricao || null, uid(req), responsavel_id || null, departamento_id || null, data_prazo || null]
+    );
+    if (Array.isArray(etapas)) {
+      for (let i = 0; i < etapas.length; i++) {
+        const e = etapas[i];
+        if (!e.titulo || !e.titulo.trim()) continue;
+        await run(
+          `INSERT INTO atividade_etapas (id, atividade_id, titulo, descricao, responsavel_id, ordem, data_prazo) VALUES (?,?,?,?,?,?,?)`,
+          [uuidv4(), id, e.titulo.trim(), e.descricao || null, e.responsavel_id || null, i, e.data_prazo || null]
+        );
+      }
+    }
+    const atividade = await get(`${SEL_AT} WHERE a.id = ?`, [id]);
+    atividade.etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [id]);
+    res.status(201).json(atividade);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.get('/atividades/:id', async (req, res) => {
+  try {
+    const a = await get(`${SEL_AT} WHERE a.id = ? AND a.empresa_id = ? AND a.excluido_em IS NULL`, [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    if (!ehGestor(req) && a.responsavel_id !== uid(req)) return res.status(403).json({ erro: 'Sem permissão' });
+    a.etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [req.params.id]);
+    res.json(a);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/atividades/:id', async (req, res) => {
+  try {
+    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem editar atividades' });
+    const a = await get('SELECT * FROM atividades WHERE id = ? AND empresa_id = ? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    const { titulo, descricao, responsavel_id, departamento_id, status, data_prazo } = req.body;
+    await run(
+      `UPDATE atividades SET titulo=?, descricao=?, responsavel_id=?, departamento_id=?, status=?, data_prazo=?, updated_at=NOW() WHERE id=?`,
+      [titulo?.trim() || a.titulo, descricao !== undefined ? descricao : a.descricao, responsavel_id !== undefined ? responsavel_id : a.responsavel_id, departamento_id !== undefined ? departamento_id : a.departamento_id, status || a.status, data_prazo !== undefined ? data_prazo : a.data_prazo, req.params.id]
+    );
+    const updated = await get(`${SEL_AT} WHERE a.id = ?`, [req.params.id]);
+    updated.etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [req.params.id]);
+    res.json(updated);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.delete('/atividades/:id', async (req, res) => {
+  try {
+    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem excluir atividades' });
+    const a = await get('SELECT id FROM atividades WHERE id = ? AND empresa_id = ? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    await run('UPDATE atividades SET excluido_em = NOW(), updated_at = NOW() WHERE id = ?', [req.params.id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/atividades/:id/etapas/:etapa_id', async (req, res) => {
+  try {
+    const a = await get('SELECT * FROM atividades WHERE id = ? AND empresa_id = ? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    if (!ehGestor(req) && a.responsavel_id !== uid(req)) return res.status(403).json({ erro: 'Sem permissão' });
+    const etapa = await get('SELECT * FROM atividade_etapas WHERE id = ? AND atividade_id = ?', [req.params.etapa_id, req.params.id]);
+    if (!etapa) return res.status(404).json({ erro: 'Etapa não encontrada' });
+    const { titulo, descricao, responsavel_id, ordem, status, data_prazo } = req.body;
+    await run(
+      `UPDATE atividade_etapas SET titulo=?, descricao=?, responsavel_id=?, ordem=?, status=?, data_prazo=? WHERE id=?`,
+      [titulo?.trim() || etapa.titulo, descricao !== undefined ? descricao : etapa.descricao, responsavel_id !== undefined ? responsavel_id : etapa.responsavel_id, ordem !== undefined ? ordem : etapa.ordem, status || etapa.status, data_prazo !== undefined ? data_prazo : etapa.data_prazo, req.params.etapa_id]
+    );
+    const todasEtapas = await all('SELECT status FROM atividade_etapas WHERE atividade_id = ?', [req.params.id]);
+    if (todasEtapas.length > 0) {
+      const todas = todasEtapas.map(e => e.status);
+      let novoStatus = 'em_andamento';
+      if (todas.every(s => s === 'concluida')) novoStatus = 'concluida';
+      else if (todas.every(s => s === 'pendente')) novoStatus = 'pendente';
+      await run('UPDATE atividades SET status = ?, updated_at = NOW() WHERE id = ?', [novoStatus, req.params.id]);
+    }
+    res.json(await get('SELECT * FROM atividade_etapas WHERE id = ?', [req.params.etapa_id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─────────────────────────────────────────────────────────────────────────────
+
 // Lista as tarefas do usuário (criadas por ele OU delegadas a ele)
 router.get('/', async (req, res) => {
   try {
@@ -244,149 +361,6 @@ router.delete('/:id', async (req, res) => {
     await run('DELETE FROM tarefa_historico WHERE tarefa_id=?', [req.params.id]);
     await run('DELETE FROM tarefas WHERE id=?', [req.params.id]);
     res.json({ ok: true });
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
-
-// ─── ATIVIDADES (Fase 2 – Delegação Corporativa) ────────────────────────────
-
-const SEL_AT = `
-  SELECT a.*,
-         cp.nome AS criador_nome,
-         rp.nome AS responsavel_nome,
-         d.nome  AS departamento_nome
-    FROM atividades a
-    LEFT JOIN usuarios cp ON cp.id = a.criado_por_id
-    LEFT JOIN usuarios rp ON rp.id = a.responsavel_id
-    LEFT JOIN departamentos d ON d.id = a.departamento_id`;
-
-// Lista atividades
-router.get('/atividades', async (req, res) => {
-  try {
-    let rows;
-    if (ehGestor(req)) {
-      rows = await all(
-        `${SEL_AT} WHERE a.empresa_id = ? AND a.excluido_em IS NULL ORDER BY a.created_at DESC`,
-        [eid(req)]
-      );
-    } else {
-      rows = await all(
-        `${SEL_AT} WHERE a.empresa_id = ? AND a.excluido_em IS NULL AND a.responsavel_id = ? ORDER BY a.created_at DESC`,
-        [eid(req), uid(req)]
-      );
-    }
-    res.json(rows);
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Cria atividade + etapas
-router.post('/atividades', async (req, res) => {
-  try {
-    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem criar atividades' });
-    const { titulo, descricao, responsavel_id, departamento_id, data_prazo, etapas } = req.body;
-    if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Título é obrigatório' });
-    const id = uuidv4();
-    await run(
-      `INSERT INTO atividades (id, empresa_id, titulo, descricao, criado_por_id, responsavel_id, departamento_id, data_prazo)
-       VALUES (?,?,?,?,?,?,?,?)`,
-      [id, eid(req), titulo.trim(), descricao || null, uid(req), responsavel_id || null, departamento_id || null, data_prazo || null]
-    );
-    if (Array.isArray(etapas)) {
-      for (let i = 0; i < etapas.length; i++) {
-        const e = etapas[i];
-        if (!e.titulo || !e.titulo.trim()) continue;
-        await run(
-          `INSERT INTO atividade_etapas (id, atividade_id, titulo, descricao, responsavel_id, ordem, data_prazo)
-           VALUES (?,?,?,?,?,?,?)`,
-          [uuidv4(), id, e.titulo.trim(), e.descricao || null, e.responsavel_id || null, i, e.data_prazo || null]
-        );
-      }
-    }
-    const atividade = await get(`${SEL_AT} WHERE a.id = ?`, [id]);
-    const etapasRows = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [id]);
-    res.status(201).json({ ...atividade, etapas: etapasRows });
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Detalhe com etapas
-router.get('/atividades/:id', async (req, res) => {
-  try {
-    const a = await get(`${SEL_AT} WHERE a.id = ? AND a.empresa_id = ? AND a.excluido_em IS NULL`, [req.params.id, eid(req)]);
-    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
-    if (!ehGestor(req) && a.responsavel_id !== uid(req))
-      return res.status(403).json({ erro: 'Sem permissão' });
-    const etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [req.params.id]);
-    res.json({ ...a, etapas });
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Atualiza atividade (admin/gestor)
-router.put('/atividades/:id', async (req, res) => {
-  try {
-    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem editar atividades' });
-    const a = await get('SELECT * FROM atividades WHERE id = ? AND empresa_id = ? AND excluido_em IS NULL', [req.params.id, eid(req)]);
-    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
-    const { titulo, descricao, responsavel_id, departamento_id, status, data_prazo } = req.body;
-    await run(
-      `UPDATE atividades SET titulo=?, descricao=?, responsavel_id=?, departamento_id=?, status=?, data_prazo=?, updated_at=NOW() WHERE id=?`,
-      [
-        titulo?.trim() || a.titulo,
-        descricao !== undefined ? descricao : a.descricao,
-        responsavel_id !== undefined ? responsavel_id : a.responsavel_id,
-        departamento_id !== undefined ? departamento_id : a.departamento_id,
-        status || a.status,
-        data_prazo !== undefined ? data_prazo : a.data_prazo,
-        req.params.id
-      ]
-    );
-    const updated = await get(`${SEL_AT} WHERE a.id = ?`, [req.params.id]);
-    const etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [req.params.id]);
-    res.json({ ...updated, etapas });
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Soft delete (admin/gestor)
-router.delete('/atividades/:id', async (req, res) => {
-  try {
-    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem excluir atividades' });
-    const a = await get('SELECT id FROM atividades WHERE id = ? AND empresa_id = ? AND excluido_em IS NULL', [req.params.id, eid(req)]);
-    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
-    await run('UPDATE atividades SET excluido_em = NOW(), updated_at = NOW() WHERE id = ?', [req.params.id]);
-    res.json({ ok: true });
-  } catch (e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Atualiza etapa
-router.put('/atividades/:id/etapas/:etapa_id', async (req, res) => {
-  try {
-    const a = await get('SELECT * FROM atividades WHERE id = ? AND empresa_id = ? AND excluido_em IS NULL', [req.params.id, eid(req)]);
-    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
-    if (!ehGestor(req) && a.responsavel_id !== uid(req))
-      return res.status(403).json({ erro: 'Sem permissão' });
-    const etapa = await get('SELECT * FROM atividade_etapas WHERE id = ? AND atividade_id = ?', [req.params.etapa_id, req.params.id]);
-    if (!etapa) return res.status(404).json({ erro: 'Etapa não encontrada' });
-    const { titulo, descricao, responsavel_id, ordem, status, data_prazo } = req.body;
-    await run(
-      `UPDATE atividade_etapas SET titulo=?, descricao=?, responsavel_id=?, ordem=?, status=?, data_prazo=? WHERE id=?`,
-      [
-        titulo?.trim() || etapa.titulo,
-        descricao !== undefined ? descricao : etapa.descricao,
-        responsavel_id !== undefined ? responsavel_id : etapa.responsavel_id,
-        ordem !== undefined ? ordem : etapa.ordem,
-        status || etapa.status,
-        data_prazo !== undefined ? data_prazo : etapa.data_prazo,
-        req.params.etapa_id
-      ]
-    );
-    // Recalcula status da atividade com base nas etapas
-    const todasEtapas = await all('SELECT status FROM atividade_etapas WHERE atividade_id = ?', [req.params.id]);
-    if (todasEtapas.length > 0) {
-      const todas = todasEtapas.map(e => e.status);
-      let novoStatus = 'em_andamento';
-      if (todas.every(s => s === 'concluido')) novoStatus = 'concluido';
-      else if (todas.every(s => s === 'pendente')) novoStatus = 'pendente';
-      await run('UPDATE atividades SET status = ?, updated_at = NOW() WHERE id = ?', [novoStatus, req.params.id]);
-    }
-    res.json(await get('SELECT * FROM atividade_etapas WHERE id = ?', [req.params.etapa_id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

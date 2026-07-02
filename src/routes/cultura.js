@@ -152,6 +152,11 @@ router.post('/reconhecimentos', async (req, res) => {
 
 router.delete('/reconhecimentos/:id', async (req, res) => {
   try {
+    const r = await get('SELECT criado_por FROM cultura_reconhecimentos WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!r) return res.status(404).json({ erro: 'Não encontrado' });
+    const isAdmin = ['admin','gestor'].includes(req.usuario.perfil);
+    if (!isAdmin && r.criado_por !== req.usuario.id)
+      return res.status(403).json({ erro: 'Sem permissão' });
     await run('DELETE FROM cultura_reconhecimentos WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -260,6 +265,11 @@ router.put('/pdis/:id', async (req, res) => {
 
 router.delete('/pdis/:id', async (req, res) => {
   try {
+    const pdi = await get('SELECT criado_por FROM cultura_pdis WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
+    if (!pdi) return res.status(404).json({ erro: 'Não encontrado' });
+    const isAdmin = ['admin','gestor'].includes(req.usuario.perfil);
+    if (!isAdmin && pdi.criado_por !== req.usuario.id)
+      return res.status(403).json({ erro: 'Sem permissão' });
     await run('DELETE FROM cultura_pdis WHERE id=$1 AND empresa_id=$2', [req.params.id, empId(req)]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
