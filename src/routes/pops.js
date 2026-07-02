@@ -40,6 +40,7 @@ router.get('/dashboard', async (req, res) => {
       JOIN pops p ON p.id = h.pop_id
       JOIN usuarios u ON u.id = h.usuario_id
       WHERE p.empresa_id = $1
+        AND p.excluido_em IS NULL
       ORDER BY h.created_at DESC LIMIT 15
     `, [eid]);
 
