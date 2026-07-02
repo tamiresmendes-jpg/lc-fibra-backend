@@ -17,8 +17,9 @@ router.get('/', async (req, res) => {
 });
 
 // POST /api/ceps/importar — importa lista de CEPs (substitui por cidade)
-router.post('/importar', require('../middleware/auth').verificarPerfil(['admin', 'gestor']), async (req, res) => {
+router.post('/importar', async (req, res) => {
   try {
+    if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { ceps, cidade } = req.body;
     if (!Array.isArray(ceps) || ceps.length === 0) {
       return res.status(400).json({ erro: 'Lista de CEPs vazia' });
