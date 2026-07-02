@@ -17,6 +17,12 @@ function eid(req) { return req.usuario.empresa_id; }
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS codigo VARCHAR(20)`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS criado_por_id TEXT`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS criado_por_nome TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS setor TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS responsavel TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_por TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT`);
     await run(`
       CREATE TABLE IF NOT EXISTS processo_historico (
         id TEXT PRIMARY KEY,
