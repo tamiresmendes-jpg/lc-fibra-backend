@@ -268,4 +268,107 @@ function gerarPDFPOP(pop) {
   });
 }
 
-module.exports = { gerarPDFPOP };
+// Converte campo que pode ser JSON (array) em texto com bullets, ou texto puro
+function listaParaBullets(valor, montarLinha) {
+  const arr = parseLista(valor);
+  if (arr) {
+    return arr.map(montarLinha).filter(Boolean).map(l => `• ${l}`).join('\n');
+  }
+  return valor ? String(valor) : '';
+}
+
+/**
+ * Gera o PDF de um Processo e retorna um Buffer.
+ * @param {Object} proc - Objeto do processo (com categoria_nome, criado_por_nome)
+ * @returns {Promise<Buffer>}
+ */
+function gerarPDFProcesso(proc) {
+  return new Promise((resolve, reject) => {
+    const chunks = [];
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 60, bottom: 60, left: 50, right: 50 },
+      info: {
+        Title: `${proc.codigo || 'PROC'} - ${proc.titulo}`,
+        Author: proc.criado_por_nome || 'Sistema LC FIBRA',
+        Subject: 'Processo Organizacional',
+        Creator: 'LC FIBRA - Sistema de Gestão',
+      },
+    });
+
+    doc.on('data', c => chunks.push(c));
+    doc.on('end', () => resolve(Buffer.concat(chunks)));
+    doc.on('error', reject);
+
+    const pageW = doc.page.width;
+    const marginL = doc.page.margins.left;
+    const marginR = doc.page.margins.right;
+
+    // ── CABEÇALHO ──
+    doc.rect(0, 0, pageW, 130).fill(COR_PRIMARIA);
+    doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20)
+      .text('LC FIBRA', marginL, 24, { align: 'left' });
+    if (proc.codigo) {
+      doc.font('Helvetica').fontSize(11)
+        .text(proc.codigo, pageW - marginR - 100, 28, { width: 100, align: 'right' });
+    }
+    doc.font('Helvetica-Bold').fontSize(15)
+      .text(proc.titulo || 'Processo', marginL, 55, { width: pageW - marginL - marginR });
+
+    const statusLabel = {
+      ativo: 'ATIVO', rascunho: 'RASCUNHO', revisao: 'EM REVISÃO', inativo: 'INATIVO'
+    }[proc.status] || (proc.status ? String(proc.status).toUpperCase() : 'RASCUNHO');
+    doc.roundedRect(marginL, 108, 78, 16, 4).fill('rgba(255,255,255,0.25)');
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(8)
+      .text(statusLabel, marginL + 4, 112, { width: 70, align: 'center' });
+
+    // ── 1. IDENTIFICAÇÃO ──
+    const idHeadY = 138;
+    doc.circle(marginL + 10, idHeadY + 8, 10).fill(COR_PRIMARIA);
+    doc.fillColor('#fff').font('Helvetica-Bold').fontSize(9)
+      .text('1', marginL + 6, idHeadY + 4, { width: 8, align: 'center' });
+    doc.fillColor(COR_TEXTO).font('Helvetica-Bold').fontSize(12)
+      .text('Identificação', marginL + 26, idHeadY + 2);
+
+    const gridTop = 162, gridH = 46;
+    doc.rect(marginL, gridTop, pageW - marginL - marginR, gridH)
+      .fill(COR_FUNDO).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
+    const idCols = [
+      { label: 'Responsável', valor: proc.responsavel || '—' },
+      { label: 'Setor',       valor: proc.setor || '—' },
+      { label: 'Categoria',   valor: proc.categoria_nome || '—' },
+      { label: 'Data',        valor: proc.created_at ? new Date(proc.created_at).toLocaleDateString('pt-BR') : '—' },
+    ];
+    const idW = (pageW - marginL - marginR) / idCols.length;
+    idCols.forEach((item, i) => {
+      const x = marginL + i * idW;
+      if (i > 0) doc.moveTo(x, gridTop + 6).lineTo(x, gridTop + gridH - 6).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
+      doc.fillColor(COR_SUBTEXTO).font('Helvetica').fontSize(7).text(item.label.toUpperCase(), x + 6, gridTop + 8, { width: idW - 12 });
+      doc.fillColor(COR_TEXTO).font('Helvetica-Bold').fontSize(9.5).text(item.valor, x + 6, gridTop + 20, { width: idW - 12, ellipsis: true });
+    });
+    doc.y = gridTop + gridH + 20;
+
+    // ── SEÇÕES ──
+    secao(doc, 2, 'Objetivo', proc.objetivo);
+    secao(doc, 3, 'Descrição do Processo', proc.descricao);
+
+    const popsTxt = listaParaBullets(proc.pops_relacionados, p =>
+      (typeof p === 'string') ? p : [p.codigo, p.titulo].filter(Boolean).join(' – '));
+    secao(doc, 4, 'POPs Relacionados', popsTxt);
+
+    const resTxt = listaParaBullets(proc.resultado_esperado, r => (typeof r === 'string' ? r : (r.item || '')));
+    secao(doc, 5, 'Resultado Esperado', resTxt);
+
+    // ── RODAPÉ ──
+    const rodapeY = doc.page.height - 45;
+    doc.rect(0, rodapeY, pageW, 45).fill(COR_FUNDO);
+    doc.moveTo(0, rodapeY).lineTo(pageW, rodapeY).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
+    doc.fillColor(COR_SUBTEXTO).font('Helvetica').fontSize(8)
+      .text(`LC FIBRA — Sistema de Gestão  ·  ${proc.codigo || ''}  ·  Gerado em ${new Date().toLocaleString('pt-BR')}`,
+        marginL, rodapeY + 16, { width: pageW - marginL - marginR, align: 'center' });
+
+    doc.end();
+  });
+}
+
+module.exports = { gerarPDFPOP, gerarPDFProcesso };
