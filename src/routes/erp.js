@@ -229,47 +229,91 @@ router.post('/importar', (req, res) => {
       const resultado = [];
 
       for (const arquivo of req.files) {
-      const wb = XLSX.readFile(arquivo.path);
-      for (const nomePlanilha of wb.SheetNames) {
-        const ws = wb.Sheets[nomePlanilha];
-        const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
-        if (!linhas.length) continue;
+        const wb = XLSX.readFile(arquivo.path);
 
-        const colunas = Object.keys(linhas[0]);
+        for (const nomePlanilha of wb.SheetNames) {
+          const ws = wb.Sheets[nomePlanilha];
+          const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+          if (!linhas.length) continue;
 
-        // detecta automaticamente coluna de nome e de quantidade
-        const colItem = colunas.find(c =>
-          /produto|item|descri|nome|material|equipamento/i.test(c)
-        ) || colunas[0];
-        const colQtd = colunas.find(c =>
-          /qtd|quantidade|quant|total|saida|saída|uso|utiliz/i.test(c)
-        );
+          const colunas = Object.keys(linhas[0]);
 
-        // agrupa por item e soma quantidades
-        const totais = {};
-        for (const linha of linhas) {
-          const item = String(linha[colItem] || '').trim();
-          if (!item) continue;
-          const qtd = colQtd
-            ? (parseFloat(String(linha[colQtd]).replace(',', '.')) || 0)
-            : 1;
-          totais[item] = (totais[item] || 0) + qtd;
+          // Detecta coluna que contém o padrão "NOME (QTD: X UN)"
+          // Prioriza colunas com "produto", "item", "material", "moviment", "descri"
+          // Fallback: primeira coluna cujo conteúdo contenha "(QTD:"
+          let colMovimento = colunas.find(c =>
+            /produto|item|material|moviment|descri|equip/i.test(c)
+          );
+          if (!colMovimento) {
+            colMovimento = colunas.find(c =>
+              linhas.slice(0, 20).some(l => String(l[c]).includes('(QTD:'))
+            );
+          }
+
+          // Padrão: "NOME DO PRODUTO (QTD: 3 UN)" ou "NOME (QTD: 1,5 m)"
+          // Múltiplos itens por célula separados por vírgula
+          const REGEX_ITEM = /([^,]+?)\s*\(QTD:\s*([\d.,]+)\s*([^)]*)\)/gi;
+
+          const totais = {}; // chave = "NOME||unidade"
+          let totalLinhas = 0;
+
+          for (const linha of linhas) {
+            // Varre todas as colunas procurando o padrão (ou só a coluna detectada)
+            const celulas = colMovimento
+              ? [String(linha[colMovimento] || '')]
+              : colunas.map(c => String(linha[c] || ''));
+
+            for (const celula of celulas) {
+              if (!celula.includes('(QTD:')) continue;
+              let match;
+              REGEX_ITEM.lastIndex = 0;
+              while ((match = REGEX_ITEM.exec(celula)) !== null) {
+                const nome = match[1].trim();
+                const qtd  = parseFloat(match[2].replace(',', '.')) || 0;
+                const unid = (match[3] || '').trim().toUpperCase() || 'UN';
+                if (!nome || qtd <= 0) continue;
+                const chave = `${nome}||${unid}`;
+                totais[chave] = (totais[chave] || 0) + qtd;
+                totalLinhas++;
+              }
+            }
+          }
+
+          // Se não encontrou nenhum padrão (QTD:), faz parsing genérico por colunas
+          if (Object.keys(totais).length === 0) {
+            const colItem = colunas.find(c =>
+              /produto|item|descri|nome|material|equipamento/i.test(c)
+            ) || colunas[0];
+            const colQtd = colunas.find(c =>
+              /qtd|quantidade|quant|total|saida|saída|uso|utiliz/i.test(c)
+            );
+
+            for (const linha of linhas) {
+              const nome = String(linha[colItem] || '').trim();
+              if (!nome) continue;
+              const qtd = colQtd
+                ? (parseFloat(String(linha[colQtd]).replace(',', '.')) || 0)
+                : 1;
+              totais[`${nome}||UN`] = (totais[`${nome}||UN`] || 0) + qtd;
+            }
+          }
+
+          const itens = Object.entries(totais)
+            .map(([chave, total]) => {
+              const [nome, unidade] = chave.split('||');
+              return { nome, total, unidade };
+            })
+            .sort((a, b) => b.total - a.total);
+
+          resultado.push({
+            arquivo: arquivo.originalname,
+            planilha: nomePlanilha,
+            total_linhas: linhas.length,
+            coluna_item: colMovimento || '(auto)',
+            colunas_disponiveis: colunas,
+            itens,
+          });
         }
-
-        const itens = Object.entries(totais)
-          .map(([nome, total]) => ({ nome, total }))
-          .sort((a, b) => b.total - a.total);
-
-        resultado.push({
-          arquivo: arquivo.originalname,
-          planilha: nomePlanilha,
-          total_linhas: linhas.length,
-          coluna_item: colItem,
-          coluna_qtd: colQtd || '(contagem de ocorrências)',
-          colunas_disponiveis: colunas,
-          itens,
-        });
-      }
       } // fim loop arquivos
 
       res.json({ planilhas: resultado });
