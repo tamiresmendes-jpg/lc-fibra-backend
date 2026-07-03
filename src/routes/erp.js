@@ -283,10 +283,39 @@ router.post('/importar', (req, res) => {
             /^id$|^id_|_id$|n[ºo]?_?ordem|ordem|protocolo|^os$|_os$|atendimento/i.test(c)
           );
 
-          // Detecta coluna do técnico/responsável pela saída
-          const colTecnico = colunas.find(c =>
+          // Detecta coluna do técnico/responsável pela saída.
+          // 1) por nome; 2) se não achar, usa a coluna que parece nome de pessoa
+          //    (texto curto, sem números, sem "(QTD", valores repetidos) — normalmente a última.
+          let colTecnico = colunas.find(c =>
             /t[ée]cnico|respons[áa]vel|colaborador|funcion[áa]rio|executor|instalador|usuario_saida|usu[áa]rio.*sa[íi]da|atendente/i.test(c)
           ) || colunas.find(c => /usuario|usu[áa]rio/i.test(c));
+
+          if (!colTecnico) {
+            const amostra = linhas.slice(0, 200);
+            let melhor = null, melhorScore = -1;
+            // percorre de trás pra frente (técnico costuma ser a última coluna)
+            for (let idx = colunas.length - 1; idx >= 0; idx--) {
+              const c = colunas[idx];
+              if (c === colMovimento) continue;
+              let ok = 0, total = 0;
+              const distintos = new Set();
+              for (const l of amostra) {
+                const v = String(l[c] || '').trim();
+                if (!v) continue;
+                total++;
+                distintos.add(v);
+                const pareceNome = !/\d/.test(v) && !/\(Q/i.test(v) && v.length <= 40 && /[a-zà-ú]/i.test(v);
+                if (pareceNome) ok++;
+              }
+              if (total < 5) continue;
+              const fracNome = ok / total;
+              const fracRepete = 1 - (distintos.size / total); // nomes se repetem
+              const score = fracNome + fracRepete;
+              // exige que a maioria pareça nome; dá leve preferência às últimas colunas
+              if (fracNome >= 0.7 && score > melhorScore) { melhorScore = score; melhor = c; }
+            }
+            colTecnico = melhor;
+          }
 
           // Valores distintos da coluna de tipo (diagnóstico)
           const valoresTipo = colTipo
