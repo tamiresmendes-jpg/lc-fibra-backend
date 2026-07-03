@@ -317,19 +317,34 @@ router.post('/importar', (req, res) => {
             colTecnico = melhor;
           }
 
-          // Valores distintos da coluna de tipo (diagnóstico)
-          const valoresTipo = colTipo
-            ? [...new Set(linhas.map(l => String(l[colTipo] || '').trim()).filter(Boolean))]
-            : [];
+          // Detecta a coluna de DESTINO (para onde foi a saída).
+          // 1) pelo nome "destino"; 2) pela coluna cujos valores citam CLIENTE.
+          const colDestino = colunas.find(c => /destino/i.test(c))
+            || colunas.find(c =>
+                 linhas.slice(0, 100).filter(l => /cliente/i.test(String(l[c] || ''))).length > 3
+               );
 
-          // Filtra linhas de insumo de cliente (aceita "INSUMO", "CLIENTE: INSUMO", etc.)
-          const FILTRO_INSUMO = /insumo/i;
-          const temMatch = colTipo && linhas.some(l => FILTRO_INSUMO.test(String(l[colTipo] || '')));
-          const linhasFiltradas = temMatch
-            ? linhas.filter(l => FILTRO_INSUMO.test(String(l[colTipo] || '')))
-            : linhas; // se nada bate, processa tudo (não zera o relatório)
-
-          const filtroAplicado = temMatch;
+          // Filtra apenas SAÍDAS PARA CLIENTE:
+          //   mantém linhas cujo destino cita "CLIENTE"/"INSUMO";
+          //   se o destino não citar cliente mas também não for transferência
+          //   entre estoques (não começa com "ESTOQUE"), mantém.
+          //   Exclui transferências estoque→estoque.
+          let linhasFiltradas = linhas;
+          let filtroAplicado = false;
+          if (colDestino) {
+            const ehCliente = (v) => {
+              const s = String(v || '').trim();
+              if (!s) return false;
+              if (/cliente|insumo/i.test(s)) return true;
+              if (/^estoque\b/i.test(s)) return false; // transferência interna
+              return true; // qualquer outro destino não-estoque conta como saída externa
+            };
+            const filtradas = linhas.filter(l => ehCliente(l[colDestino]));
+            if (filtradas.length > 0) {
+              linhasFiltradas = filtradas;
+              filtroAplicado = true;
+            }
+          }
 
           // Conta as saídas individuais: cada linha filtrada = 1 saída para cliente
           // (se houver coluna de ID de saída, conta IDs únicos)
@@ -428,6 +443,8 @@ router.post('/importar', (req, res) => {
             total_saidas: totalSaidas,
             coluna_item: colMovimento || '(auto)',
             coluna_tecnico: colTecnico || '(não encontrada)',
+            coluna_destino: colDestino || '(não encontrada)',
+            filtro_cliente: filtroAplicado,
             itens,
             tecnicos,
           });
