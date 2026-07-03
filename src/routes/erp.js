@@ -238,33 +238,35 @@ router.post('/importar', (req, res) => {
 
           const colunas = Object.keys(linhas[0]);
 
-          // Detecta coluna que contém o padrão "NOME (QTD: X UN)"
-          // Prioriza colunas com "produto", "item", "material", "moviment", "descri"
-          // Fallback: primeira coluna cujo conteúdo contenha "(QTD:"
-          let colMovimento = colunas.find(c =>
-            /produto|item|material|moviment|descri|equip/i.test(c)
-          );
-          if (!colMovimento) {
-            colMovimento = colunas.find(c =>
-              linhas.slice(0, 20).some(l => String(l[c]).includes('(QTD:'))
-            );
-          }
+          // Detecta coluna pelo CONTEÚDO (tem "(QTD:" ou "(QDT:") — mais confiável que pelo nome
+          const REGEX_ITEM = /([^,(]+?)\s*\(\s*QD?T:?\s*([\d.,]+)\s*([^)]*)\)/gi;
 
-          // Padrão: "NOME DO PRODUTO (QTD: 3 UN)" ou "NOME (QTD: 1,5 m)"
-          // Múltiplos itens por célula separados por vírgula
-          const REGEX_ITEM = /([^,]+?)\s*\(QTD:\s*([\d.,]+)\s*([^)]*)\)/gi;
+          let colMovimento = colunas.find(c =>
+            linhas.slice(0, 30).some(l => REGEX_ITEM.test(String(l[c])))
+          );
+          REGEX_ITEM.lastIndex = 0;
+
+          // Fallback: coluna com mais ocorrências de "QTD" ou "QDT" no conteúdo
+          if (!colMovimento) {
+            let max = 0;
+            for (const c of colunas) {
+              const count = linhas.slice(0, 50).filter(l =>
+                /QD?T:/i.test(String(l[c]))
+              ).length;
+              if (count > max) { max = count; colMovimento = c; }
+            }
+          }
 
           const totais = {}; // chave = "NOME||unidade"
           let totalLinhas = 0;
 
           for (const linha of linhas) {
-            // Varre todas as colunas procurando o padrão (ou só a coluna detectada)
             const celulas = colMovimento
               ? [String(linha[colMovimento] || '')]
               : colunas.map(c => String(linha[c] || ''));
 
             for (const celula of celulas) {
-              if (!celula.includes('(QTD:')) continue;
+              if (!/QD?T:/i.test(celula)) continue;
               let match;
               REGEX_ITEM.lastIndex = 0;
               while ((match = REGEX_ITEM.exec(celula)) !== null) {
