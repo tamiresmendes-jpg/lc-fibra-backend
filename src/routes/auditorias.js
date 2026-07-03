@@ -26,11 +26,15 @@ router.get('/', async (req, res) => {
     const itens = await all(`
       SELECT a.*,
              ua.nome as auditado_nome, ub.nome as auditor_nome,
-             p.titulo as pop_titulo
+             p.titulo as pop_titulo,
+             pr.titulo as processo_titulo,
+             COALESCE(p.titulo, pr.titulo) as item_titulo,
+             CASE WHEN a.processo_id IS NOT NULL THEN 'processo' ELSE 'pop' END as origem
       FROM auditorias a
       LEFT JOIN usuarios ua ON ua.id = a.auditado_id
       LEFT JOIN usuarios ub ON ub.id = a.auditor_id
       LEFT JOIN pops p ON p.id = a.pop_id
+      LEFT JOIN processos pr ON pr.id = a.processo_id
       WHERE a.empresa_id = $1
       ORDER BY a.created_at DESC
     `, [req.usuario.empresa_id]);

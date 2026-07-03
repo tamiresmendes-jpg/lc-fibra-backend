@@ -1128,6 +1128,11 @@ async function initSchema() {
     await pool.query(`ALTER TABLE ${t} ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT`);
   }
 
+  // Auditoria também de Processos (além de POPs): pop_id passa a ser opcional
+  await pool.query(`ALTER TABLE auditoria_solicitacoes ADD COLUMN IF NOT EXISTS processo_id TEXT`).catch(() => {});
+  await pool.query(`ALTER TABLE auditoria_solicitacoes ALTER COLUMN pop_id DROP NOT NULL`).catch(() => {});
+  await pool.query(`ALTER TABLE auditorias ADD COLUMN IF NOT EXISTS processo_id TEXT`).catch(() => {});
+
   // Chave de proteção do sistema (acesso exclusivo do dono)
   await pool.query(`ALTER TABLE empresas ADD COLUMN IF NOT EXISTS chave_sistema TEXT`);
 

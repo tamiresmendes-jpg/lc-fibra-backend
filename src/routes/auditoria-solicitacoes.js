@@ -6,42 +6,53 @@ const { autenticar } = require('../middleware/auth');
 const router = express.Router();
 router.use(autenticar);
 
-// Listar solicitações
+// Listar solicitações (POPs e Processos)
 router.get('/', async (req, res) => {
   try {
     const itens = await all(`
       SELECT s.*,
+             CASE WHEN s.processo_id IS NOT NULL THEN 'processo' ELSE 'pop' END as origem,
+             COALESCE(p.titulo, pr.titulo) as item_titulo,
+             COALESCE(p.codigo, pr.codigo) as item_codigo,
              p.titulo as pop_titulo, p.versao as pop_versao, p.conteudo as pop_conteudo,
              p.status as pop_status,
              c.nome as pop_categoria,
+             pr.titulo as processo_titulo, pr.codigo as processo_codigo,
+             pr.status as processo_status,
              u.nome as solicitante_nome, u.email as solicitante_email,
              d.nome as solicitante_departamento
       FROM auditoria_solicitacoes s
-      JOIN pops p ON p.id = s.pop_id
+      LEFT JOIN pops p ON p.id = s.pop_id
+      LEFT JOIN processos pr ON pr.id = s.processo_id
       LEFT JOIN categorias_pop c ON c.id = p.categoria_id
       JOIN usuarios u ON u.id = s.solicitante_id
       LEFT JOIN departamentos d ON d.id = u.departamento_id
-      WHERE s.empresa_id = $1 AND p.excluido_em IS NULL
+      WHERE s.empresa_id = $1 AND COALESCE(p.excluido_em, pr.excluido_em) IS NULL
       ORDER BY s.created_at DESC
     `, [req.usuario.empresa_id]);
     res.json(itens);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Criar solicitação (chamada a partir do POP)
+// Criar solicitação (a partir de um POP ou de um Processo)
 router.post('/', async (req, res) => {
   try {
-    const { pop_id, tipo, descricao } = req.body;
-    if (!pop_id || !tipo) return res.status(400).json({ erro: 'POP e tipo são obrigatórios' });
+    const { pop_id, processo_id, tipo, descricao } = req.body;
+    if ((!pop_id && !processo_id) || !tipo) return res.status(400).json({ erro: 'Item (POP ou Processo) e tipo são obrigatórios' });
 
-    const pop = await get('SELECT id FROM pops WHERE id=$1 AND empresa_id=$2', [pop_id, req.usuario.empresa_id]);
-    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+    if (processo_id) {
+      const proc = await get('SELECT id FROM processos WHERE id=$1 AND empresa_id=$2', [processo_id, req.usuario.empresa_id]);
+      if (!proc) return res.status(404).json({ erro: 'Processo não encontrado' });
+    } else {
+      const pop = await get('SELECT id FROM pops WHERE id=$1 AND empresa_id=$2', [pop_id, req.usuario.empresa_id]);
+      if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+    }
 
     const id = uuidv4();
     await run(`
-      INSERT INTO auditoria_solicitacoes (id, empresa_id, pop_id, solicitante_id, tipo, descricao)
-      VALUES ($1, $2, $3, $4, $5, $6)
-    `, [id, req.usuario.empresa_id, pop_id, req.usuario.id, tipo, descricao || null]);
+      INSERT INTO auditoria_solicitacoes (id, empresa_id, pop_id, processo_id, solicitante_id, tipo, descricao)
+      VALUES ($1, $2, $3, $4, $5, $6, $7)
+    `, [id, req.usuario.empresa_id, pop_id || null, processo_id || null, req.usuario.id, tipo, descricao || null]);
 
     res.status(201).json({ id, mensagem: 'Solicitação enviada com sucesso' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -52,14 +63,20 @@ router.get('/:id', async (req, res) => {
   try {
     const item = await get(`
       SELECT s.*,
+             CASE WHEN s.processo_id IS NOT NULL THEN 'processo' ELSE 'pop' END as origem,
+             COALESCE(p.titulo, pr.titulo) as item_titulo,
+             COALESCE(p.codigo, pr.codigo) as item_codigo,
              p.titulo as pop_titulo, p.versao as pop_versao, p.conteudo as pop_conteudo,
              p.status as pop_status, p.descricao as pop_descricao,
              c.nome as pop_categoria, c.cor as pop_categoria_cor,
+             pr.titulo as processo_titulo, pr.codigo as processo_codigo,
+             pr.status as processo_status, pr.descricao as processo_descricao,
              u.nome as solicitante_nome, u.email as solicitante_email,
              d.nome as solicitante_departamento,
              cr.nome as pop_criado_por_nome
       FROM auditoria_solicitacoes s
-      JOIN pops p ON p.id = s.pop_id
+      LEFT JOIN pops p ON p.id = s.pop_id
+      LEFT JOIN processos pr ON pr.id = s.processo_id
       LEFT JOIN categorias_pop c ON c.id = p.categoria_id
       JOIN usuarios u ON u.id = s.solicitante_id
       LEFT JOIN departamentos d ON d.id = u.departamento_id
@@ -68,14 +85,14 @@ router.get('/:id', async (req, res) => {
     `, [req.params.id, req.usuario.empresa_id]);
     if (!item) return res.status(404).json({ erro: 'Solicitação não encontrada' });
 
-    // Histórico do POP
-    const historico = await all(`
+    // Histórico do POP (quando a solicitação é de um POP)
+    const historico = item.pop_id ? await all(`
       SELECT h.*, u.nome as usuario_nome
       FROM pop_historico h
       JOIN usuarios u ON u.id = h.usuario_id
       WHERE h.pop_id = $1 AND h.empresa_id = $2
       ORDER BY h.created_at DESC
-    `, [item.pop_id, req.usuario.empresa_id]);
+    `, [item.pop_id, req.usuario.empresa_id]) : [];
 
     res.json({ ...item, pop_historico: historico });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -92,17 +109,26 @@ router.post('/:id/iniciar', async (req, res) => {
 
     const scoreNum = score != null ? Math.min(100, Math.max(0, Number(score))) : null;
 
-    const pop = await get('SELECT titulo FROM pops WHERE id=$1 AND empresa_id=$2', [solicitacao.pop_id, req.usuario.empresa_id]);
-    if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+    // Item auditado: POP ou Processo
+    let itemTitulo;
+    if (solicitacao.processo_id) {
+      const proc = await get('SELECT titulo FROM processos WHERE id=$1 AND empresa_id=$2', [solicitacao.processo_id, req.usuario.empresa_id]);
+      if (!proc) return res.status(404).json({ erro: 'Processo não encontrado' });
+      itemTitulo = proc.titulo;
+    } else {
+      const pop = await get('SELECT titulo FROM pops WHERE id=$1 AND empresa_id=$2', [solicitacao.pop_id, req.usuario.empresa_id]);
+      if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
+      itemTitulo = pop.titulo;
+    }
 
     // Criar auditoria
     const auditoriaId = uuidv4();
     const statusAuditoria = scoreNum != null ? (scoreNum >= 70 ? 'aprovada' : 'rejeitada') : 'pendente';
 
     await run(`
-      INSERT INTO auditorias (id, empresa_id, tipo, titulo, auditor_id, pop_id, solicitacao_id, score, status, resultado, pendencias, data_auditoria)
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
-    `, [auditoriaId, req.usuario.empresa_id, solicitacao.tipo, `Auditoria: ${pop.titulo}`, req.usuario.id, solicitacao.pop_id, solicitacao.id, scoreNum, statusAuditoria, resultado || null, pendencias || null]);
+      INSERT INTO auditorias (id, empresa_id, tipo, titulo, auditor_id, pop_id, processo_id, solicitacao_id, score, status, resultado, pendencias, data_auditoria)
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+    `, [auditoriaId, req.usuario.empresa_id, solicitacao.tipo, `Auditoria: ${itemTitulo}`, req.usuario.id, solicitacao.pop_id || null, solicitacao.processo_id || null, solicitacao.id, scoreNum, statusAuditoria, resultado || null, pendencias || null]);
 
     // Atualizar solicitação
     await run('UPDATE auditoria_solicitacoes SET status=$1, auditoria_id=$2 WHERE id=$3 AND empresa_id=$4', ['concluida', auditoriaId, req.params.id, req.usuario.empresa_id]);
