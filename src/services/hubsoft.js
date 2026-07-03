@@ -125,7 +125,7 @@ async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 40 } = {}
       itens_por_pagina: 100,
       data_inicio: dataInicio,
       data_fim: dataFim,
-      relacoes: 'agenda_ordem_servico',
+      relacoes: 'agenda_ordem_servico,tecnicos',
     });
     const arr = d.ordens_servico || d.data || [];
     todas.push(...arr);

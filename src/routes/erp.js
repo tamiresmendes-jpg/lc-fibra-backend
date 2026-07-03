@@ -272,9 +272,14 @@ router.get('/agenda', async (req, res) => {
     const ordens = await hubsoft.listarOrdensServico({ dataInicio, dataFim });
 
     const os = ordens.map((o) => {
+      // técnico(s) reais (relação "tecnicos"); fallback: equipe/carro da agenda
+      const tecnicos = Array.isArray(o.tecnicos)
+        ? o.tecnicos.map(t => t.name || t.display).filter(Boolean)
+        : [];
       const equipe = o.agenda_ordem_servico && !Array.isArray(o.agenda_ordem_servico)
         ? o.agenda_ordem_servico.descricao
         : (Array.isArray(o.agenda_ordem_servico) && o.agenda_ordem_servico[0]?.descricao) || null;
+      const tel = o.dados_cliente?.telefones || {};
       return {
         id: o.id_ordem_servico,
         numero: o.numero,
@@ -283,12 +288,16 @@ router.get('/agenda', async (req, res) => {
         programado_inicio: o.data_inicio_programado,
         programado_fim: o.data_termino_programado,
         disponibilidade: o.disponibilidade,
-        equipe: equipe || 'Sem agenda/equipe',
+        tecnico: tecnicos.join(', ') || equipe || 'Sem técnico',
+        equipe: equipe || null,
         cliente: o.dados_cliente?.nome_razaosocial || o.cliente,
         codigo_cliente: o.dados_cliente?.codigo_cliente,
-        telefone: o.dados_cliente?.telefones?.telefone_primario,
+        telefone: tel.telefone_primario,
+        telefone2: tel.telefone_secundario,
         servico: o.dados_servico?.descricao || o.servico,
         endereco: o.endereco_instalacao,
+        data_abertura: o.data_cadastro,
+        usuario_fechamento: o.usuario_fechamento?.name,
         descricao_abertura: o.descricao_abertura,
         descricao_servico: o.descricao_servico,
         descricao_fechamento: o.descricao_fechamento,
@@ -298,10 +307,10 @@ router.get('/agenda', async (req, res) => {
       };
     });
 
-    // Agrupa por equipe/técnico
+    // Agrupa por técnico
     const porEquipe = {};
     for (const o of os) {
-      (porEquipe[o.equipe] = porEquipe[o.equipe] || []).push(o);
+      (porEquipe[o.tecnico] = porEquipe[o.tecnico] || []).push(o);
     }
 
     res.json({
