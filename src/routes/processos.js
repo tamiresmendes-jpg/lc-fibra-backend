@@ -187,6 +187,23 @@ router.get('/:id/exportar/:formato', async (req, res) => {
   } catch(e) { console.error('[processos exportar]', e.message); res.status(500).json({ erro: 'Erro ao exportar' }); }
 });
 
+// Ativar processo (rascunho → ativo) — gera código se ainda não tiver
+router.post('/:id/ativar', async (req, res) => {
+  try {
+    if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil))
+      return res.status(403).json({ erro: 'Sem permissão' });
+    const proc = await get('SELECT * FROM processos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!proc) return res.status(404).json({ erro: 'Processo não encontrado' });
+    if (proc.status === 'ativo') return res.status(400).json({ erro: 'Processo já está ativo' });
+    let codigo = proc.codigo;
+    if (!codigo) codigo = await proximoCodigo(eid(req), proc.categoria_id || null);
+    await run('UPDATE processos SET status=$1, codigo=$2, updated_at=NOW() WHERE id=$3 AND empresa_id=$4',
+      ['ativo', codigo, req.params.id, eid(req)]);
+    await registrarHistorico(req.params.id, eid(req), req.usuario, 'editado', { mudancas: ['Processo ativado', ...(codigo && !proc.codigo ? [`Código gerado: ${codigo}`] : [])], titulo: proc.titulo });
+    res.json({ ok: true, codigo });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.post('/', async (req, res) => {
   try {
     const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados, categoria_id } = req.body;
