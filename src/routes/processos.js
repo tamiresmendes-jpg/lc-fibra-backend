@@ -1,8 +1,21 @@
 const express = require('express');
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { gerarPDFProcesso } = require('../utils/gerarPDF');
+
+const UPLOADS_DIR = path.join(__dirname, '../../uploads');
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (_) {}
+const uploadProc = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
 
 const router = express.Router();
 router.use(autenticar);
@@ -22,9 +35,22 @@ function eid(req) { return req.usuario.empresa_id; }
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS responsavel TEXT`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS categoria_id TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS versao TEXT DEFAULT '1.0'`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS total_visualizacoes INTEGER DEFAULT 0`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_por TEXT`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT`);
+    await run(`
+      CREATE TABLE IF NOT EXISTS processo_visualizacoes (
+        id TEXT PRIMARY KEY, processo_id TEXT NOT NULL, empresa_id TEXT NOT NULL,
+        usuario_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+      )`);
+    await run(`
+      CREATE TABLE IF NOT EXISTS processo_anexos (
+        id TEXT PRIMARY KEY, processo_id TEXT NOT NULL, empresa_id TEXT NOT NULL,
+        usuario_id TEXT, nome TEXT, tipo TEXT, tamanho INTEGER, caminho TEXT, url_externa TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW()
+      )`);
     await run(`
       CREATE TABLE IF NOT EXISTS processo_historico (
         id TEXT PRIMARY KEY,
@@ -103,6 +129,122 @@ router.get('/proximo-codigo', async (req, res) => {
     const codigo = await proximoCodigo(eid(req), req.query.categoria_id || null);
     res.json({ codigo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Exportar todos (ZIP) ────────────────────────────────────────────────────
+async function todosProcessos(empresa_id) {
+  return all(
+    `SELECT p.*, c.nome as categoria_nome, u.nome as criado_por_nome
+     FROM processos p LEFT JOIN categorias_pop c ON c.id = p.categoria_id
+     LEFT JOIN usuarios u ON u.id = p.criado_por_id
+     WHERE p.empresa_id=$1 AND p.excluido_em IS NULL ORDER BY p.codigo`,
+    [empresa_id]
+  );
+}
+router.get('/exportar-todos/:formato', async (req, res) => {
+  try {
+    const procs = await todosProcessos(eid(req));
+    if (!procs.length) return res.status(404).json({ erro: 'Nenhum processo encontrado' });
+    const archiver = require('archiver');
+    const archive = archiver('zip', { zlib: { level: 6 } });
+    const chunks = [];
+    const isPdf = req.params.formato === 'pdf';
+    await new Promise((resolve, reject) => {
+      archive.on('data', c => chunks.push(c));
+      archive.on('end', resolve); archive.on('error', reject);
+      archive.on('warning', err => { if (err.code !== 'ENOENT') reject(err); });
+      (async () => {
+        for (const proc of procs) {
+          try {
+            const base = `${proc.codigo || 'PROC'}-${String(proc.titulo || 'processo').replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}`;
+            if (isPdf) archive.append(await gerarPDFProcesso(proc), { name: `${base}.pdf` });
+            else archive.append(Buffer.from(gerarWordProcesso(proc), 'utf-8'), { name: `${base}.doc` });
+          } catch (e) { console.error('export proc falhou', proc.codigo, e.message); }
+        }
+        archive.finalize();
+      })().catch(reject);
+    });
+    const zip = Buffer.concat(chunks);
+    res.setHeader('Content-Type', 'application/zip');
+    res.setHeader('Content-Disposition', `attachment; filename="Processos-todos-${isPdf ? 'pdf' : 'word'}.zip"`);
+    res.send(zip);
+  } catch (e) { console.error('[processos exportar-todos]', e.message); res.status(500).json({ erro: 'Erro ao exportar' }); }
+});
+
+// ── Visualizações (quem visualizou) ─────────────────────────────────────────
+router.post('/:id/visualizar', async (req, res) => {
+  try {
+    const proc = await get('SELECT id FROM processos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!proc) return res.status(404).json({ erro: 'Não encontrado' });
+    if (req.usuario.perfil !== 'admin') {
+      await run('UPDATE processos SET total_visualizacoes = COALESCE(total_visualizacoes,0) + 1 WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
+      await run('INSERT INTO processo_visualizacoes (id, processo_id, empresa_id, usuario_id) VALUES ($1,$2,$3,$4)', [uuidv4(), req.params.id, eid(req), req.usuario.id]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.get('/:id/visualizacoes', async (req, res) => {
+  try {
+    const proc = await get('SELECT id FROM processos WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
+    if (!proc) return res.status(404).json({ erro: 'Não encontrado' });
+    const porPessoa = await all(`
+      SELECT COALESCE(u.nome, 'Usuário removido') as usuario_nome, COUNT(*) as total, MAX(v.created_at) as ultimo_acesso
+      FROM processo_visualizacoes v LEFT JOIN usuarios u ON u.id = v.usuario_id
+      WHERE v.processo_id=$1 GROUP BY u.nome ORDER BY total DESC`, [req.params.id]);
+    res.json({ porPessoa });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Anexos ──────────────────────────────────────────────────────────────────
+async function procDaEmpresa(id, empresa_id) { return get('SELECT id FROM processos WHERE id=$1 AND empresa_id=$2', [id, empresa_id]); }
+router.get('/:id/anexos', async (req, res) => {
+  try {
+    const anexos = await all(`SELECT a.*, u.nome as usuario_nome FROM processo_anexos a LEFT JOIN usuarios u ON u.id=a.usuario_id WHERE a.processo_id=$1 AND a.empresa_id=$2 ORDER BY a.created_at DESC`, [req.params.id, eid(req)]);
+    res.json(anexos);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.post('/:id/anexos/upload', uploadProc.single('arquivo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ erro: 'Arquivo não enviado' });
+    if (!(await procDaEmpresa(req.params.id, eid(req)))) { try { fs.unlinkSync(path.join(UPLOADS_DIR, req.file.filename)); } catch {} return res.status(404).json({ erro: 'Processo não encontrado' }); }
+    const id = uuidv4();
+    await run(`INSERT INTO processo_anexos (id,processo_id,empresa_id,usuario_id,nome,tipo,tamanho,caminho) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [id, req.params.id, eid(req), req.usuario.id, req.file.originalname, req.file.mimetype, req.file.size, req.file.filename]);
+    res.status(201).json(await get(`SELECT a.*, u.nome as usuario_nome FROM processo_anexos a LEFT JOIN usuarios u ON u.id=a.usuario_id WHERE a.id=$1`, [id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.post('/:id/anexos/link', async (req, res) => {
+  try {
+    const { nome, url } = req.body;
+    if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ erro: 'URL deve começar com http:// ou https://' });
+    if (!(await procDaEmpresa(req.params.id, eid(req)))) return res.status(404).json({ erro: 'Processo não encontrado' });
+    const id = uuidv4();
+    await run(`INSERT INTO processo_anexos (id,processo_id,empresa_id,usuario_id,nome,tipo,url_externa) VALUES ($1,$2,$3,$4,$5,'link',$6)`,
+      [id, req.params.id, eid(req), req.usuario.id, nome || url, url]);
+    res.status(201).json(await get(`SELECT a.*, u.nome as usuario_nome FROM processo_anexos a LEFT JOIN usuarios u ON u.id=a.usuario_id WHERE a.id=$1`, [id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.get('/:id/anexos/:anexoId/download', (req, res, next) => {
+  if (req.query.token) { try { req.usuario = require('jsonwebtoken').verify(req.query.token, process.env.JWT_SECRET); } catch { return res.status(401).json({ erro: 'Token inválido' }); } }
+  next();
+}, async (req, res) => {
+  try {
+    const anexo = await get('SELECT * FROM processo_anexos WHERE id=$1 AND empresa_id=$2', [req.params.anexoId, req.usuario.empresa_id]);
+    if (!anexo) return res.status(404).json({ erro: 'Anexo não encontrado' });
+    if (anexo.url_externa) return res.redirect(anexo.url_externa);
+    const fp = path.join(UPLOADS_DIR, anexo.caminho);
+    if (!fs.existsSync(fp)) return res.status(404).json({ erro: 'Arquivo não encontrado' });
+    res.download(fp, anexo.nome);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.delete('/:id/anexos/:anexoId', async (req, res) => {
+  try {
+    const anexo = await get('SELECT * FROM processo_anexos WHERE id=$1 AND empresa_id=$2', [req.params.anexoId, eid(req)]);
+    if (!anexo) return res.status(404).json({ erro: 'Anexo não encontrado' });
+    if (anexo.caminho) { const fp = path.join(UPLOADS_DIR, anexo.caminho); if (fs.existsSync(fp)) fs.unlinkSync(fp); }
+    await run('DELETE FROM processo_anexos WHERE id=$1', [req.params.anexoId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 router.get('/:id/historico', async (req, res) => {
@@ -206,7 +348,7 @@ router.post('/:id/ativar', async (req, res) => {
 
 router.post('/', async (req, res) => {
   try {
-    const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados, categoria_id } = req.body;
+    const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados, categoria_id, versao } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id     = uuidv4();
     // usa o código sugerido pelo editor; se estiver ativo e sem código, gera pela categoria
@@ -215,11 +357,11 @@ router.post('/', async (req, res) => {
     await run(
       `INSERT INTO processos
          (id,empresa_id,codigo,titulo,objetivo,descricao,setor,responsavel,status,
-          resultado_esperado,pops_relacionados,categoria_id,criado_por_id,criado_por_nome)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`,
+          resultado_esperado,pops_relacionados,categoria_id,versao,criado_por_id,criado_por_nome)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`,
       [id, eid(req), codigo, titulo, objetivo||null, descricao||null, setor||null,
        responsavel||null, status||'rascunho', resultado_esperado||null, pops_relacionados||null,
-       categoria_id||null, req.usuario.id, req.usuario.nome]
+       categoria_id||null, versao||'1.0', req.usuario.id, req.usuario.nome]
     );
     await registrarHistorico(id, eid(req), req.usuario, 'criado', { titulo, codigo, status });
     res.status(201).json({ id, titulo, codigo });
@@ -230,7 +372,7 @@ router.put('/:id', async (req, res) => {
   try {
     if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil))
       return res.status(403).json({ erro: 'Sem permissão para editar processos' });
-    const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados, categoria_id } = req.body;
+    const { titulo, objetivo, descricao, setor, responsavel, status, resultado_esperado, pops_relacionados, categoria_id, versao } = req.body;
     const antes = await get('SELECT * FROM processos WHERE id=$1 AND empresa_id=$2', [req.params.id, eid(req)]);
     if (!antes) return res.status(404).json({ erro: 'Não encontrado' });
 
@@ -242,10 +384,10 @@ router.put('/:id', async (req, res) => {
 
     await run(
       `UPDATE processos SET titulo=$1,objetivo=$2,descricao=$3,setor=$4,responsavel=$5,status=$6,
-       resultado_esperado=$7,pops_relacionados=$8,codigo=$9,categoria_id=$10,updated_at=NOW()
-       WHERE id=$11 AND empresa_id=$12`,
+       resultado_esperado=$7,pops_relacionados=$8,codigo=$9,categoria_id=$10,versao=$11,updated_at=NOW()
+       WHERE id=$12 AND empresa_id=$13`,
       [titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'rascunho',
-       resultado_esperado||null, pops_relacionados||null, codigo, categoria_id||null, req.params.id, eid(req)]
+       resultado_esperado||null, pops_relacionados||null, codigo, categoria_id||null, versao||antes.versao||'1.0', req.params.id, eid(req)]
     );
     const mudancas = [];
     if (antes.titulo !== titulo)   mudancas.push(`Título: "${antes.titulo}" → "${titulo}"`);

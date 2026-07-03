@@ -860,6 +860,58 @@ router.post('/extrair-documento', async (req, res) => {
   }
 });
 
+// ── Importar documento e extrair estrutura de PROCESSO (IA) ─────────────────────
+router.post('/extrair-processo', async (req, res) => {
+  try {
+    await new Promise((resolve, reject) => { uploadTemp.single('arquivo')(req, res, err => err ? reject(err) : resolve()); });
+  } catch (err) { return res.status(400).json({ erro: 'Erro no upload: ' + err.message }); }
+  if (!req.file) return res.status(400).json({ erro: 'Arquivo não enviado' });
+
+  const filePath = req.file.path;
+  const mime = req.file.mimetype;
+  const nomeBase = req.file.originalname.replace(/\.[^.]+$/, '');
+  try {
+    const buffer = fs.readFileSync(filePath);
+    let texto = '';
+    if (mime === 'application/pdf') {
+      try { texto = await extrairTextoPDF(buffer); } catch { return res.status(422).json({ erro: 'Não foi possível ler o PDF. Tente converter para TXT.' }); }
+    } else if (/spreadsheet|excel/.test(mime) || /\.(xlsx?|ods)$/i.test(req.file.originalname)) {
+      texto = extrairTextoExcel(buffer);
+    } else if (/wordprocessing|msword/.test(mime) || /\.docx?$/i.test(req.file.originalname)) {
+      try { const mammoth = require('mammoth'); texto = (await mammoth.extractRawText({ buffer })).value; } catch { texto = ''; }
+    } else {
+      texto = buffer.toString('utf-8');
+    }
+    if (!texto || texto.trim().length < 20) return res.status(422).json({ erro: 'O arquivo parece vazio ou protegido.' });
+
+    const system = `Você organiza documentos em processos organizacionais. A partir do texto, extraia:
+- titulo: nome curto do processo
+- objetivo: finalidade do processo (1-3 frases)
+- descricao: o passo a passo / funcionamento do processo, preservando as etapas descritas
+- resultado_esperado: lista (array de strings) das entregas finais, se houver
+Retorne EXCLUSIVAMENTE um JSON válido, sem markdown: {"titulo":"...","objetivo":"...","descricao":"...","resultado_esperado":["..."]}`;
+    const client = getClient();
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001', max_tokens: 4000, system,
+      messages: [{ role: 'user', content: texto.substring(0, 12000) }],
+    });
+    let txt = (msg.content[0]?.text || '').trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    const ini = txt.indexOf('{'), fim = txt.lastIndexOf('}');
+    if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+    let dados;
+    try { dados = JSON.parse(txt); } catch { dados = { titulo: nomeBase, descricao: texto.substring(0, 4000) }; }
+    res.json({
+      titulo: dados.titulo || nomeBase,
+      objetivo: dados.objetivo || '',
+      descricao: dados.descricao || '',
+      resultado_esperado: Array.isArray(dados.resultado_esperado) ? dados.resultado_esperado : [],
+    });
+  } catch (e) {
+    console.error('Erro extrair-processo:', e.message);
+    res.status(500).json({ erro: e.message.includes('ANTHROPIC') ? 'IA não configurada no servidor.' : 'Erro ao processar documento' });
+  } finally { try { fs.unlinkSync(filePath); } catch {} }
+});
+
 // ── Gerar fluxograma a partir de uma descrição de processo (IA) ─────────────────
 const MAP_TIPO_FLUXO = { start: 'inicio', inicio: 'inicio', process: 'acao', processo: 'acao', acao: 'acao', task: 'acao', decision: 'decisao', decisao: 'decisao', wait: 'espera', espera: 'espera', end: 'fim', fim: 'fim' };
 
