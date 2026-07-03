@@ -113,4 +113,26 @@ async function listarProdutos() {
   return todos;
 }
 
-module.exports = { apiGet, listarEquipamentos, listarProdutos, getToken };
+// Lista ordens de serviço com a agenda (equipe/técnico) num intervalo de datas.
+// GET /api/v1/integracao/ordem_servico/todos?relacoes=agenda_ordem_servico
+async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 40 } = {}) {
+  const todas = [];
+  let pagina = 1;
+  let ultima = 1;
+  do {
+    const d = await apiGet('/api/v1/integracao/ordem_servico/todos', {
+      pagina,
+      itens_por_pagina: 100,
+      data_inicio: dataInicio,
+      data_fim: dataFim,
+      relacoes: 'agenda_ordem_servico',
+    });
+    const arr = d.ordens_servico || d.data || [];
+    todas.push(...arr);
+    ultima = d.paginacao?.ultima_pagina || pagina;
+    pagina++;
+  } while (pagina <= ultima && pagina <= maxPaginas);
+  return todas;
+}
+
+module.exports = { apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, getToken };

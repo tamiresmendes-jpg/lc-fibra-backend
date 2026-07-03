@@ -261,6 +261,56 @@ router.get('/relatorios', async (req, res) => {
   }
 });
 
+// ── GET /api/erp/agenda — agenda de técnicos (OSs programadas) por intervalo ──
+router.get('/agenda', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(hoje);
+    const dataFim = req.query.data_fim || iso(new Date(hoje.getTime() + 7 * 864e5));
+
+    const ordens = await hubsoft.listarOrdensServico({ dataInicio, dataFim });
+
+    const os = ordens.map((o) => {
+      const equipe = o.agenda_ordem_servico && !Array.isArray(o.agenda_ordem_servico)
+        ? o.agenda_ordem_servico.descricao
+        : (Array.isArray(o.agenda_ordem_servico) && o.agenda_ordem_servico[0]?.descricao) || null;
+      return {
+        id: o.id_ordem_servico,
+        numero: o.numero,
+        tipo: o.tipo,
+        status: o.status,
+        programado_inicio: o.data_inicio_programado,
+        programado_fim: o.data_termino_programado,
+        disponibilidade: o.disponibilidade,
+        equipe: equipe || 'Sem agenda/equipe',
+        cliente: o.dados_cliente?.nome_razaosocial || o.cliente,
+        telefone: o.dados_cliente?.telefones?.telefone_primario,
+        servico: o.dados_servico?.descricao || o.servico,
+        endereco: o.endereco_instalacao,
+      };
+    });
+
+    // Agrupa por equipe/técnico
+    const porEquipe = {};
+    for (const o of os) {
+      (porEquipe[o.equipe] = porEquipe[o.equipe] || []).push(o);
+    }
+
+    res.json({
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      total: os.length,
+      por_equipe: porEquipe,
+      ordens: os,
+    });
+  } catch (e) {
+    console.error('Erro /erp/agenda:', e.message);
+    res.status(500).json({ erro: e.message.includes('HUBSOFT')
+      ? 'Não foi possível consultar a agenda: ' + e.message.replace('HUBSOFT', 'HubSoft')
+      : 'Erro ao buscar a agenda de técnicos.' });
+  }
+});
+
 router.delete('/relatorios/:id', async (req, res) => {
   try {
     await db.run(`DELETE FROM erp_relatorios WHERE id = ? AND empresa_id = ?`,
