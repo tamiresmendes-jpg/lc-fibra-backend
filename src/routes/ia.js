@@ -860,4 +860,117 @@ router.post('/extrair-documento', async (req, res) => {
   }
 });
 
+// ── Gerar fluxograma a partir de uma descrição de processo (IA) ─────────────────
+const MAP_TIPO_FLUXO = { start: 'inicio', inicio: 'inicio', process: 'acao', processo: 'acao', acao: 'acao', task: 'acao', decision: 'decisao', decisao: 'decisao', wait: 'espera', espera: 'espera', end: 'fim', fim: 'fim' };
+
+function layoutFluxo(nodes, edges) {
+  const adj = {};
+  nodes.forEach(n => { adj[n.id] = []; });
+  edges.forEach(e => { if (adj[e.source]) adj[e.source].push(e.target); });
+  const start = nodes.find(n => n.type === 'inicio') || nodes[0];
+  const nivel = {};
+  const fila = start ? [[start.id, 0]] : [];
+  while (fila.length) {
+    const [id, lv] = fila.shift();
+    if (nivel[id] !== undefined) { if (lv > nivel[id]) nivel[id] = lv; continue; }
+    nivel[id] = lv;
+    (adj[id] || []).forEach(t => fila.push([t, lv + 1]));
+  }
+  let maxLv = Math.max(0, ...Object.values(nivel));
+  nodes.forEach(n => { if (nivel[n.id] === undefined) nivel[n.id] = ++maxLv; });
+  const porNivel = {};
+  nodes.forEach(n => { (porNivel[nivel[n.id]] = porNivel[nivel[n.id]] || []).push(n); });
+  const GAP_Y = 130, GAP_X = 240, BASE_X = 280;
+  Object.keys(porNivel).forEach(lv => {
+    const ns = porNivel[lv];
+    ns.forEach((n, i) => { n.position = { x: BASE_X + (i - (ns.length - 1) / 2) * GAP_X, y: 40 + Number(lv) * GAP_Y }; });
+  });
+  return nodes;
+}
+
+function gerarMermaid(nodes, edges) {
+  const linhas = ['flowchart TD'];
+  const shape = (n) => {
+    const t = (n.data?.label || '').replace(/"/g, "'");
+    if (n.type === 'inicio' || n.type === 'fim') return `${n.id}(["${t}"])`;
+    if (n.type === 'decisao') return `${n.id}{"${t}"}`;
+    return `${n.id}["${t}"]`;
+  };
+  nodes.forEach(n => linhas.push('  ' + shape(n)));
+  edges.forEach(e => {
+    const lbl = e.label ? `|${String(e.label).replace(/"/g, "'")}|` : '';
+    linhas.push(`  ${e.source} -->${lbl} ${e.target}`);
+  });
+  return linhas.join('\n');
+}
+
+router.post('/gerar-fluxo', async (req, res) => {
+  try {
+    const { descricao, titulo } = req.body;
+    if (!descricao || !descricao.trim()) return res.status(400).json({ erro: 'Descrição do processo é obrigatória' });
+
+    const system = `Você é um especialista em modelagem de processos (BPM) e fluxogramas.
+Sua função é analisar a descrição de um processo e transformá-la automaticamente em um fluxograma.
+
+Regras obrigatórias:
+1. Identifique: evento inicial, atividades, decisões, ramificações e evento final.
+2. Cada ação vira um bloco "process".
+3. Palavras como: se, caso, quando, houver, não houver, aprovado, reprovado, aceitou, recusou, sim, não → criam um bloco "decision".
+4. Crie automaticamente os caminhos "Sim" e "Não" das decisões.
+5. Nunca invente etapas que não estejam descritas.
+6. Não resuma o processo. Preserve todas as atividades.
+7. Subprocessos ou POPs viram um bloco "process", sem expandir o conteúdo.
+8. O fluxograma deve ter apenas um início e um fim.
+9. Organize o fluxo de cima para baixo.
+10. Caminhos que retornam ao fluxo principal devem ser conectados corretamente.
+11. Etapa que leva ao encerramento conecta ao bloco "end".
+12. Use nomenclaturas claras e objetivas.
+13. Retorne EXCLUSIVAMENTE um JSON válido nesta estrutura (sem texto extra, sem markdown):
+{"nodes":[{"id":"1","type":"start","label":"Início"},{"id":"2","type":"process","label":"Atividade"},{"id":"3","type":"decision","label":"Pergunta?"},{"id":"4","type":"end","label":"Fim"}],"edges":[{"from":"1","to":"2"},{"from":"2","to":"3"},{"from":"3","to":"4","label":"Sim"},{"from":"3","to":"2","label":"Não"}]}
+Tipos permitidos em "type": start, process, decision, end.
+Retorne apenas o JSON.`;
+
+    const client = getClient();
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 4000,
+      system,
+      messages: [{ role: 'user', content: `Descrição do Processo:\n\n${descricao.trim()}` }],
+    });
+
+    let txt = (msg.content[0]?.text || '').trim();
+    // remove cercas de markdown se vierem
+    txt = txt.replace(/^```(json)?/i, '').replace(/```$/,'').trim();
+    const ini = txt.indexOf('{'); const fim = txt.lastIndexOf('}');
+    if (ini > 0 || fim < txt.length - 1) txt = txt.slice(ini, fim + 1);
+    let dados;
+    try { dados = JSON.parse(txt); } catch { return res.status(502).json({ erro: 'A IA não retornou um fluxograma válido. Tente descrever o processo com mais detalhes.' }); }
+
+    const rawNodes = Array.isArray(dados.nodes) ? dados.nodes : [];
+    const rawEdges = Array.isArray(dados.edges) ? dados.edges : [];
+    if (!rawNodes.length) return res.status(502).json({ erro: 'A IA não conseguiu montar o fluxo. Tente reescrever a descrição.' });
+
+    const nodes = rawNodes.map(n => ({
+      id: String(n.id),
+      type: MAP_TIPO_FLUXO[String(n.type || '').toLowerCase()] || 'acao',
+      position: { x: 0, y: 0 },
+      data: { label: n.label || n.texto || 'Etapa' },
+    }));
+    const edges = rawEdges.map((e, i) => ({
+      id: `e${i}`,
+      source: String(e.from ?? e.source),
+      target: String(e.to ?? e.target),
+      ...(e.label ? { label: String(e.label) } : {}),
+    })).filter(e => nodes.some(n => n.id === e.source) && nodes.some(n => n.id === e.target));
+
+    layoutFluxo(nodes, edges);
+    const mermaid = gerarMermaid(nodes, edges);
+
+    res.json({ nodes, edges, mermaid, titulo: titulo || null });
+  } catch (e) {
+    console.error('Erro gerar-fluxo:', e.message);
+    res.status(500).json({ erro: e.message.includes('ANTHROPIC') ? 'IA não configurada no servidor.' : 'Erro ao gerar fluxograma' });
+  }
+});
+
 module.exports = router;
