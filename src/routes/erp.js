@@ -267,13 +267,19 @@ router.post('/importar', (req, res) => {
             /^id$|^id_|_id$|numero|ordem|saida|cod(igo)?/i.test(c)
           ) || colunas[0];
 
-          // Filtra linhas de insumo de cliente
-          const FILTRO_INSUMO = /insumo.*cliente|cliente.*insumo/i;
-          const linhasFiltradas = colTipo
-            ? linhas.filter(l => FILTRO_INSUMO.test(String(l[colTipo] || '')))
-            : linhas; // sem coluna de tipo: processa tudo
+          // Valores distintos da coluna de tipo (diagnóstico)
+          const valoresTipo = colTipo
+            ? [...new Set(linhas.map(l => String(l[colTipo] || '').trim()).filter(Boolean))]
+            : [];
 
-          const filtroAplicado = colTipo && linhasFiltradas.length < linhas.length;
+          // Filtra linhas de insumo de cliente (aceita "INSUMO", "CLIENTE: INSUMO", etc.)
+          const FILTRO_INSUMO = /insumo/i;
+          const temMatch = colTipo && linhas.some(l => FILTRO_INSUMO.test(String(l[colTipo] || '')));
+          const linhasFiltradas = temMatch
+            ? linhas.filter(l => FILTRO_INSUMO.test(String(l[colTipo] || '')))
+            : linhas; // se nada bate, processa tudo (não zera o relatório)
+
+          const filtroAplicado = temMatch;
 
           // Conta atendimentos únicos pelo ID
           const idsUnicos = new Set();
@@ -339,8 +345,14 @@ router.post('/importar', (req, res) => {
             total_linhas: linhas.length,
             linhas_filtradas: linhasFiltradas.length,
             total_atendimentos: totalAtendimentos,
-            filtro_aplicado: filtroAplicado ? `Tipo de destino = INSUMO CLIENTE (col: ${colTipo})` : 'Sem filtro (coluna de tipo não encontrada)',
+            filtro_aplicado: filtroAplicado
+              ? `Filtrado por INSUMO (col: ${colTipo})`
+              : (colTipo
+                  ? `Nenhuma linha "INSUMO" na coluna "${colTipo}" — processando tudo. Valores encontrados: ${valoresTipo.slice(0, 8).join(' | ') || '(vazio)'}`
+                  : 'Sem coluna de tipo — processando tudo'),
             coluna_item: colMovimento || '(auto)',
+            coluna_tipo: colTipo || '(não encontrada)',
+            valores_tipo: valoresTipo.slice(0, 20),
             colunas_disponiveis: colunas,
             itens,
           });
