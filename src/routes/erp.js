@@ -327,6 +327,119 @@ router.get('/agenda', async (req, res) => {
   }
 });
 
+// ── GET /api/erp/financeiro — faturas por vencimento + totais ──
+router.get('/financeiro', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.query.data_fim || iso(new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0));
+
+    const faturas = await hubsoft.listarFaturas({ dataInicio, dataFim });
+    const hojeStr = iso(hoje);
+
+    let totalOriginal = 0, totalPago = 0, qtdPagas = 0, qtdAbertas = 0, qtdVencidas = 0, totalAberto = 0, totalVencido = 0;
+    const lista = faturas.map((f) => {
+      const pago = !!f.data_pagamento;
+      const vencida = !pago && f.data_vencimento && f.data_vencimento < hojeStr;
+      totalOriginal += Number(f.valor_original || f.valor || 0);
+      if (pago) { totalPago += Number(f.valor_pago || 0); qtdPagas++; }
+      else { qtdAbertas++; totalAberto += Number(f.valor || f.valor_original || 0); if (vencida) { qtdVencidas++; totalVencido += Number(f.valor || f.valor_original || 0); } }
+      return {
+        id: f.id_fatura,
+        cliente: f.cliente?.nome_razaosocial || null,
+        codigo_cliente: f.cliente?.codigo_cliente,
+        vencimento: f.data_vencimento,
+        pagamento: f.data_pagamento,
+        valor: Number(f.valor || f.valor_original || 0),
+        valor_pago: Number(f.valor_pago || 0),
+        tipo_cobranca: f.tipo_cobranca,
+        situacao: pago ? 'Paga' : (vencida ? 'Vencida' : 'Em aberto'),
+        link: f.link,
+      };
+    });
+
+    res.json({
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      totais: {
+        qtd: lista.length, valor_total: totalOriginal, valor_pago: totalPago,
+        qtd_pagas: qtdPagas, qtd_abertas: qtdAbertas, qtd_vencidas: qtdVencidas,
+        valor_aberto: totalAberto, valor_vencido: totalVencido,
+      },
+      faturas: lista.sort((a, b) => String(a.vencimento).localeCompare(String(b.vencimento))),
+    });
+  } catch (e) {
+    console.error('Erro /erp/financeiro:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar faturas: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// ── GET /api/erp/atendimentos — chamados por período, agrupados por status/tipo ──
+router.get('/atendimentos', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.query.data_fim || iso(hoje);
+
+    const ats = await hubsoft.listarAtendimentos({ dataInicio, dataFim });
+    const porStatus = {}, porTipo = {};
+    const lista = ats.map((a) => {
+      const status = a.status?.descricao || a.status_fechamento || 'Sem status';
+      const tipo = a.tipo_atendimento?.descricao || 'Sem tipo';
+      porStatus[status] = (porStatus[status] || 0) + 1;
+      porTipo[tipo] = (porTipo[tipo] || 0) + 1;
+      return {
+        id: a.id_atendimento,
+        protocolo: a.protocolo,
+        tipo, status,
+        abertura: a.data_cadastro,
+        fechamento: a.data_fechamento,
+        aberto_por: a.usuario_abertura?.name || a.usuario_abertura?.display,
+        responsavel: a.usuario_responsavel?.name || a.usuario_responsavel?.display,
+        cliente: a.cliente_servico?.nome_razaosocial,
+        descricao: a.descricao_abertura,
+      };
+    });
+
+    res.json({
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      total: lista.length, por_status: porStatus, por_tipo: porTipo,
+      atendimentos: lista.sort((a, b) => String(b.abertura).localeCompare(String(a.abertura))),
+    });
+  } catch (e) {
+    console.error('Erro /erp/atendimentos:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar atendimentos: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// ── GET /api/erp/clientes — busca de clientes ──
+router.get('/clientes', async (req, res) => {
+  try {
+    const busca = (req.query.busca || '').trim();
+    const clientes = await hubsoft.listarClientes(busca ? { busca } : {});
+    const lista = clientes.map((c) => ({
+      id: c.id_cliente,
+      codigo: c.codigo_cliente,
+      nome: c.nome_razaosocial,
+      fantasia: c.nome_fantasia,
+      tipo_pessoa: c.tipo_pessoa,
+      cpf_cnpj: c.cpf_cnpj,
+      telefone: c.telefone_primario,
+      telefone2: c.telefone_secundario,
+      email: c.email_principal,
+      cidade: c.cidade,
+      ativo: c.ativo,
+      origem: c.origem_cliente,
+      data_cadastro: c.data_cadastro,
+    }));
+    res.json({ total: lista.length, clientes: lista });
+  } catch (e) {
+    console.error('Erro /erp/clientes:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar clientes: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
 router.delete('/relatorios/:id', async (req, res) => {
   try {
     await db.run(`DELETE FROM erp_relatorios WHERE id = ? AND empresa_id = ?`,

@@ -135,4 +135,59 @@ async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 40 } = {}
   return todas;
 }
 
-module.exports = { apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, getToken };
+// Paginador genérico para endpoints /todos com data_inicio/data_fim
+async function listarPaginado(caminho, { dataInicio, dataFim, relacoes, extra = {}, chaveArray, maxPaginas = 60 } = {}) {
+  const todos = [];
+  let pagina = 1, ultima = 1;
+  do {
+    const d = await apiGet(caminho, {
+      pagina, itens_por_pagina: 100,
+      data_inicio: dataInicio, data_fim: dataFim,
+      ...(relacoes ? { relacoes } : {}),
+      ...extra,
+    });
+    const key = chaveArray || Object.keys(d).find(k => Array.isArray(d[k]));
+    const arr = key ? d[key] : [];
+    todos.push(...arr);
+    ultima = d.paginacao?.ultima_pagina || pagina;
+    pagina++;
+  } while (pagina <= ultima && pagina <= maxPaginas);
+  return todos;
+}
+
+// Faturas (financeiro) num intervalo de vencimento
+async function listarFaturas({ dataInicio, dataFim } = {}) {
+  return listarPaginado('/api/v1/integracao/financeiro/fatura', {
+    dataInicio, dataFim, relacoes: 'cliente', chaveArray: 'faturas',
+  });
+}
+
+// Atendimentos (chamados) num intervalo
+async function listarAtendimentos({ dataInicio, dataFim } = {}) {
+  return listarPaginado('/api/v1/integracao/atendimento/todos', {
+    dataInicio, dataFim,
+    relacoes: 'tipo_atendimento,atendimento_status,usuario_abertura,usuario_responsavel,cliente_servico',
+    chaveArray: 'atendimentos',
+  });
+}
+
+// Clientes (com busca opcional por nome/CPF/código)
+async function listarClientes({ busca } = {}) {
+  const todos = [];
+  let pagina = 1, ultima = 1;
+  do {
+    const d = await apiGet('/api/v1/integracao/cliente/todos', {
+      pagina, itens_por_pagina: 100, ...(busca ? { busca } : {}),
+    });
+    const arr = d.clientes || d.data || [];
+    todos.push(...arr);
+    ultima = d.paginacao?.ultima_pagina || pagina;
+    pagina++;
+  } while (pagina <= ultima && pagina <= 60);
+  return todos;
+}
+
+module.exports = {
+  apiGet, listarEquipamentos, listarProdutos, listarOrdensServico,
+  listarFaturas, listarAtendimentos, listarClientes, getToken,
+};
