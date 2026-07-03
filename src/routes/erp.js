@@ -283,6 +283,11 @@ router.post('/importar', (req, res) => {
             /^id$|^id_|_id$|n[ºo]?_?ordem|ordem|protocolo|^os$|_os$|atendimento/i.test(c)
           );
 
+          // Detecta coluna do técnico/responsável pela saída
+          const colTecnico = colunas.find(c =>
+            /t[ée]cnico|respons[áa]vel|colaborador|funcion[áa]rio|executor|instalador|usuario_saida|usu[áa]rio.*sa[íi]da|atendente/i.test(c)
+          ) || colunas.find(c => /usuario|usu[áa]rio/i.test(c));
+
           // Valores distintos da coluna de tipo (diagnóstico)
           const valoresTipo = colTipo
             ? [...new Set(linhas.map(l => String(l[colTipo] || '').trim()).filter(Boolean))]
@@ -312,8 +317,13 @@ router.post('/importar', (req, res) => {
           }
 
           const totais = {};
+          const porTecnico = {}; // { tecnico: { chave: qtd } }
 
           for (const linha of linhasFiltradas) {
+            const tecnico = colTecnico
+              ? (String(linha[colTecnico] || '').trim() || '(sem técnico)')
+              : '(sem técnico)';
+
             const celulas = colMovimento
               ? [String(linha[colMovimento] || '')]
               : colunas.map(c => String(linha[c] || ''));
@@ -335,6 +345,9 @@ router.post('/importar', (req, res) => {
                 if (!nome || qtd <= 0) continue;
                 const chave = `${nome}||${unid}`;
                 totais[chave] = (totais[chave] || 0) + qtd;
+
+                if (!porTecnico[tecnico]) porTecnico[tecnico] = {};
+                porTecnico[tecnico][chave] = (porTecnico[tecnico][chave] || 0) + qtd;
               }
             }
           }
@@ -363,9 +376,18 @@ router.post('/importar', (req, res) => {
               const media = totalSaidas > 0
                 ? Math.round((total / totalSaidas) * 1000) / 1000
                 : 0;
-              return { nome, total, unidade, media };
+              return { chave, nome, total, unidade, media };
             })
             .sort((a, b) => b.total - a.total);
+
+          // Lista de técnicos com o mapa de quantidades por produto (chave)
+          const tecnicos = Object.entries(porTecnico)
+            .map(([nome, mapa]) => ({
+              nome,
+              produtos: mapa, // { chave: qtd }
+              total: Object.values(mapa).reduce((s, v) => s + v, 0),
+            }))
+            .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
           resultado.push({
             tipo,
@@ -375,16 +397,10 @@ router.post('/importar', (req, res) => {
             total_linhas: linhas.length,
             linhas_filtradas: linhasFiltradas.length,
             total_saidas: totalSaidas,
-            filtro_aplicado: filtroAplicado
-              ? `Filtrado por INSUMO (col: ${colTipo})`
-              : (colTipo
-                  ? `Nenhuma linha "INSUMO" na coluna "${colTipo}" — processando tudo. Valores encontrados: ${valoresTipo.slice(0, 8).join(' | ') || '(vazio)'}`
-                  : 'Sem coluna de tipo — processando tudo'),
             coluna_item: colMovimento || '(auto)',
-            coluna_tipo: colTipo || '(não encontrada)',
-            valores_tipo: valoresTipo.slice(0, 20),
-            colunas_disponiveis: colunas,
+            coluna_tecnico: colTecnico || '(não encontrada)',
             itens,
+            tecnicos,
           });
         }
       } // fim loop arquivos
