@@ -238,8 +238,10 @@ router.post('/importar', (req, res) => {
 
           const colunas = Object.keys(linhas[0]);
 
-          // Regex para extrair "NOME (QTD: X UN)" — NÃO reutilizar com .test() (flag /g)
-          const REGEX_ITEM = /([^,(]+?)\s*\(\s*QD?T:?\s*([\d.,]+)\s*([^)]*)\)/gi;
+          // Regex que casa APENAS o marcador de quantidade "(QTD: X UN)".
+          // O nome do produto é o texto ENTRE marcadores (pode conter vírgulas,
+          // parênteses e números, ex: "PORTA(1OPT/1LAN)" ou "CABO ... (1.000 METROS)").
+          const REGEX_QTD = /\(\s*QD?T:?\s*([\d.,]+)\s*([^)]*)\)/gi;
 
           // Detecta a coluna dos produtos: a que tem mais células contendo "QTD:" / "QDT:"
           // Usa regex SEM flag /g para .test() (evita bug do lastIndex)
@@ -277,17 +279,18 @@ router.post('/importar', (req, res) => {
 
           const filtroAplicado = temMatch;
 
-          // Conta atendimentos: por ID único se existir coluna de ID; senão cada linha = 1 saída
-          let totalAtendimentos;
+          // Conta as saídas individuais: cada linha filtrada = 1 saída para cliente
+          // (se houver coluna de ID de saída, conta IDs únicos)
+          let totalSaidas;
           if (colId) {
             const idsUnicos = new Set();
             for (const l of linhasFiltradas) {
               const id = String(l[colId] || '').trim();
               if (id) idsUnicos.add(id);
             }
-            totalAtendimentos = idsUnicos.size || linhasFiltradas.length;
+            totalSaidas = idsUnicos.size || linhasFiltradas.length;
           } else {
-            totalAtendimentos = linhasFiltradas.length;
+            totalSaidas = linhasFiltradas.length;
           }
 
           const totais = {};
@@ -300,11 +303,17 @@ router.post('/importar', (req, res) => {
             for (const celula of celulas) {
               if (!/QD?T:/i.test(celula)) continue;
               let match;
-              REGEX_ITEM.lastIndex = 0;
-              while ((match = REGEX_ITEM.exec(celula)) !== null) {
-                const nome = match[1].trim();
-                const qtd  = parseFloat(match[2].replace(',', '.')) || 0;
-                const unid = (match[3] || '').trim().toUpperCase() || 'UN';
+              let ultimoFim = 0;
+              REGEX_QTD.lastIndex = 0;
+              while ((match = REGEX_QTD.exec(celula)) !== null) {
+                // nome = texto entre o fim do marcador anterior e o início deste
+                let nome = celula.substring(ultimoFim, match.index);
+                // remove vírgula/espaços iniciais deixados pelo separador entre produtos
+                nome = nome.replace(/^[\s,;]+/, '').trim();
+                ultimoFim = match.index + match[0].length;
+
+                const qtd  = parseFloat(String(match[1]).replace(',', '.')) || 0;
+                const unid = (match[2] || '').trim().toUpperCase() || 'UN';
                 if (!nome || qtd <= 0) continue;
                 const chave = `${nome}||${unid}`;
                 totais[chave] = (totais[chave] || 0) + qtd;
@@ -333,8 +342,8 @@ router.post('/importar', (req, res) => {
           const itens = Object.entries(totais)
             .map(([chave, total]) => {
               const [nome, unidade] = chave.split('||');
-              const media = totalAtendimentos > 0
-                ? Math.round((total / totalAtendimentos) * 1000) / 1000
+              const media = totalSaidas > 0
+                ? Math.round((total / totalSaidas) * 1000) / 1000
                 : 0;
               return { nome, total, unidade, media };
             })
@@ -345,7 +354,7 @@ router.post('/importar', (req, res) => {
             planilha: nomePlanilha,
             total_linhas: linhas.length,
             linhas_filtradas: linhasFiltradas.length,
-            total_atendimentos: totalAtendimentos,
+            total_saidas: totalSaidas,
             filtro_aplicado: filtroAplicado
               ? `Filtrado por INSUMO (col: ${colTipo})`
               : (colTipo
