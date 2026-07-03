@@ -389,15 +389,12 @@ router.put('/:id', async (req, res) => {
       [titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'rascunho',
        resultado_esperado||null, pops_relacionados||null, codigo, categoria_id||null, versao||antes.versao||'1.0', req.params.id, eid(req)]
     );
+    // Histórico só para eventos relevantes do ciclo de vida (evita spam do autosave a cada 2s).
+    // Edições de conteúdo (objetivo/descrição/etc.) NÃO geram entrada de histórico — igual ao POP.
     const mudancas = [];
-    if (antes.titulo !== titulo)   mudancas.push(`Título: "${antes.titulo}" → "${titulo}"`);
     if (antes.status !== status)   mudancas.push(`Status: ${antes.status} → ${status}`);
     if (!antes.codigo && codigo)   mudancas.push(`Código gerado: ${codigo}`);
-    if (antes.objetivo !== (objetivo||null)) mudancas.push('Objetivo atualizado');
-    if (antes.descricao !== (descricao||null)) mudancas.push('Descrição atualizada');
-    if (antes.responsavel !== (responsavel||null)) mudancas.push(`Responsável: "${antes.responsavel}" → "${responsavel}"`);
-    if (antes.pops_relacionados !== (pops_relacionados||null)) mudancas.push('POPs relacionados atualizados');
-    if (antes.resultado_esperado !== (resultado_esperado||null)) mudancas.push('Resultado esperado atualizado');
+    if (antes.versao !== (versao||antes.versao) && versao) mudancas.push(`Versão: v${antes.versao || '1.0'} → v${versao}`);
     if (mudancas.length) await registrarHistorico(req.params.id, eid(req), req.usuario, 'editado', { mudancas, titulo });
     res.json({ ok: true, codigo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
