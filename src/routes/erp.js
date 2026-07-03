@@ -225,6 +225,8 @@ router.post('/importar', (req, res) => {
     if (!req.files || !req.files.length) return res.status(400).json({ erro: 'Nenhum arquivo enviado.' });
 
     const arquivosParaLimpar = req.files.map(f => f.path);
+    const tipo = String(req.body.tipo || 'estoque').toLowerCase().trim();
+    const mes  = String(req.body.mes || '').trim();
     try {
       const resultado = [];
 
@@ -237,6 +239,22 @@ router.post('/importar', (req, res) => {
           if (!linhas.length) continue;
 
           const colunas = Object.keys(linhas[0]);
+
+          // ── Tipos diferentes de estoque: mostra a tabela do arquivo (genérico) ──
+          if (tipo !== 'estoque') {
+            resultado.push({
+              tipo,
+              mes,
+              arquivo: arquivo.originalname,
+              planilha: nomePlanilha,
+              total_linhas: linhas.length,
+              colunas_disponiveis: colunas,
+              linhas: linhas.slice(0, 2000).map(l => colunas.map(c => l[c])),
+              linhas_truncadas: linhas.length > 2000,
+              generico: true,
+            });
+            continue;
+          }
 
           // Regex que casa APENAS o marcador de quantidade "(QTD: X UN)".
           // O nome do produto é o texto ENTRE marcadores (pode conter vírgulas,
@@ -350,6 +368,8 @@ router.post('/importar', (req, res) => {
             .sort((a, b) => b.total - a.total);
 
           resultado.push({
+            tipo,
+            mes,
             arquivo: arquivo.originalname,
             planilha: nomePlanilha,
             total_linhas: linhas.length,
