@@ -257,10 +257,35 @@ router.post('/importar', (req, res) => {
             }
           }
 
-          const totais = {}; // chave = "NOME||unidade"
-          let totalLinhas = 0;
+          // Detecta coluna de tipo de destino
+          const colTipo = colunas.find(c =>
+            /tipo.*(dest|sai)|dest.*tipo|tipo_mov|tipo_saida|destino/i.test(c)
+          ) || colunas.find(c => /tipo/i.test(c));
 
-          for (const linha of linhas) {
+          // Detecta coluna de ID único da ordem/saída
+          const colId = colunas.find(c =>
+            /^id$|^id_|_id$|numero|ordem|saida|cod(igo)?/i.test(c)
+          ) || colunas[0];
+
+          // Filtra linhas de insumo de cliente
+          const FILTRO_INSUMO = /insumo.*cliente|cliente.*insumo/i;
+          const linhasFiltradas = colTipo
+            ? linhas.filter(l => FILTRO_INSUMO.test(String(l[colTipo] || '')))
+            : linhas; // sem coluna de tipo: processa tudo
+
+          const filtroAplicado = colTipo && linhasFiltradas.length < linhas.length;
+
+          // Conta atendimentos únicos pelo ID
+          const idsUnicos = new Set();
+          for (const l of linhasFiltradas) {
+            const id = String(l[colId] || '').trim();
+            if (id) idsUnicos.add(id);
+          }
+          const totalAtendimentos = idsUnicos.size || linhasFiltradas.length;
+
+          const totais = {};
+
+          for (const linha of linhasFiltradas) {
             const celulas = colMovimento
               ? [String(linha[colMovimento] || '')]
               : colunas.map(c => String(linha[c] || ''));
@@ -276,12 +301,11 @@ router.post('/importar', (req, res) => {
                 if (!nome || qtd <= 0) continue;
                 const chave = `${nome}||${unid}`;
                 totais[chave] = (totais[chave] || 0) + qtd;
-                totalLinhas++;
               }
             }
           }
 
-          // Se não encontrou nenhum padrão (QTD:), faz parsing genérico por colunas
+          // Fallback genérico se não achou padrão QTD
           if (Object.keys(totais).length === 0) {
             const colItem = colunas.find(c =>
               /produto|item|descri|nome|material|equipamento/i.test(c)
@@ -289,8 +313,7 @@ router.post('/importar', (req, res) => {
             const colQtd = colunas.find(c =>
               /qtd|quantidade|quant|total|saida|saída|uso|utiliz/i.test(c)
             );
-
-            for (const linha of linhas) {
+            for (const linha of linhasFiltradas) {
               const nome = String(linha[colItem] || '').trim();
               if (!nome) continue;
               const qtd = colQtd
@@ -303,7 +326,10 @@ router.post('/importar', (req, res) => {
           const itens = Object.entries(totais)
             .map(([chave, total]) => {
               const [nome, unidade] = chave.split('||');
-              return { nome, total, unidade };
+              const media = totalAtendimentos > 0
+                ? Math.round((total / totalAtendimentos) * 1000) / 1000
+                : 0;
+              return { nome, total, unidade, media };
             })
             .sort((a, b) => b.total - a.total);
 
@@ -311,6 +337,9 @@ router.post('/importar', (req, res) => {
             arquivo: arquivo.originalname,
             planilha: nomePlanilha,
             total_linhas: linhas.length,
+            linhas_filtradas: linhasFiltradas.length,
+            total_atendimentos: totalAtendimentos,
+            filtro_aplicado: filtroAplicado ? `Tipo de destino = INSUMO CLIENTE (col: ${colTipo})` : 'Sem filtro (coluna de tipo não encontrada)',
             coluna_item: colMovimento || '(auto)',
             colunas_disponiveis: colunas,
             itens,
