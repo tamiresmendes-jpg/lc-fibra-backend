@@ -285,9 +285,16 @@ router.get('/agenda', async (req, res) => {
         disponibilidade: o.disponibilidade,
         equipe: equipe || 'Sem agenda/equipe',
         cliente: o.dados_cliente?.nome_razaosocial || o.cliente,
+        codigo_cliente: o.dados_cliente?.codigo_cliente,
         telefone: o.dados_cliente?.telefones?.telefone_primario,
         servico: o.dados_servico?.descricao || o.servico,
         endereco: o.endereco_instalacao,
+        descricao_abertura: o.descricao_abertura,
+        descricao_servico: o.descricao_servico,
+        descricao_fechamento: o.descricao_fechamento,
+        executado_inicio: o.data_inicio_executado,
+        executado_fim: o.data_termino_executado,
+        atendimento: o.atendimento?.tipo_atendimento,
       };
     });
 
