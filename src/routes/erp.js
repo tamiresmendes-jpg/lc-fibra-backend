@@ -213,6 +213,74 @@ router.get('/relatorio', async (req, res) => {
   }
 });
 
+// ── POST /api/erp/importar — lê Excel exportado do HubSoft e retorna totais ──
+const multer     = require('multer');
+const XLSX       = require('xlsx');
+const fs         = require('fs');
+const uploadTemp = multer({ dest: require('os').tmpdir() });
+
+router.post('/importar', (req, res) => {
+  uploadTemp.array('arquivos', 50)(req, res, (err) => {
+    if (err) return res.status(400).json({ erro: 'Erro no upload: ' + err.message });
+    if (!req.files || !req.files.length) return res.status(400).json({ erro: 'Nenhum arquivo enviado.' });
+
+    const arquivosParaLimpar = req.files.map(f => f.path);
+    try {
+      const resultado = [];
+
+      for (const arquivo of req.files) {
+      const wb = XLSX.readFile(arquivo.path);
+      for (const nomePlanilha of wb.SheetNames) {
+        const ws = wb.Sheets[nomePlanilha];
+        const linhas = XLSX.utils.sheet_to_json(ws, { defval: '' });
+        if (!linhas.length) continue;
+
+        const colunas = Object.keys(linhas[0]);
+
+        // detecta automaticamente coluna de nome e de quantidade
+        const colItem = colunas.find(c =>
+          /produto|item|descri|nome|material|equipamento/i.test(c)
+        ) || colunas[0];
+        const colQtd = colunas.find(c =>
+          /qtd|quantidade|quant|total|saida|saída|uso|utiliz/i.test(c)
+        );
+
+        // agrupa por item e soma quantidades
+        const totais = {};
+        for (const linha of linhas) {
+          const item = String(linha[colItem] || '').trim();
+          if (!item) continue;
+          const qtd = colQtd
+            ? (parseFloat(String(linha[colQtd]).replace(',', '.')) || 0)
+            : 1;
+          totais[item] = (totais[item] || 0) + qtd;
+        }
+
+        const itens = Object.entries(totais)
+          .map(([nome, total]) => ({ nome, total }))
+          .sort((a, b) => b.total - a.total);
+
+        resultado.push({
+          arquivo: arquivo.originalname,
+          planilha: nomePlanilha,
+          total_linhas: linhas.length,
+          coluna_item: colItem,
+          coluna_qtd: colQtd || '(contagem de ocorrências)',
+          colunas_disponiveis: colunas,
+          itens,
+        });
+      }
+      } // fim loop arquivos
+
+      res.json({ planilhas: resultado });
+    } catch (e) {
+      res.status(422).json({ erro: 'Não foi possível ler o arquivo: ' + e.message });
+    } finally {
+      for (const p of arquivosParaLimpar) { try { fs.unlinkSync(p); } catch {} }
+    }
+  });
+});
+
 router.post('/consultar', async (req, res) => {
   try {
     const { pergunta } = req.body;
