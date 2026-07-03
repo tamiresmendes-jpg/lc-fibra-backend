@@ -1091,6 +1091,21 @@ async function initSchema() {
     )
   `);
 
+  // Relatórios ERP (exportações do HubSoft) — resultado processado salvo por mês/tipo
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS erp_relatorios (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      mes TEXT,
+      arquivo TEXT,
+      dados TEXT,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_erp_relatorios ON erp_relatorios(empresa_id, tipo, created_at DESC)`);
+
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS foto TEXT`);
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS fixo INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS maps_url TEXT`);

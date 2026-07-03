@@ -217,7 +217,60 @@ router.get('/relatorio', async (req, res) => {
 const multer     = require('multer');
 const XLSX       = require('xlsx');
 const fs         = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const db         = require('../config/database');
 const uploadTemp = multer({ dest: require('os').tmpdir() });
+
+// ── Persistência: salvar / listar / excluir relatórios processados ──
+router.post('/relatorios/salvar', async (req, res) => {
+  try {
+    const { tipo, mes, arquivo, dados } = req.body;
+    if (!tipo || !dados) return res.status(400).json({ erro: 'tipo e dados são obrigatórios' });
+    const id = uuidv4();
+    await db.run(
+      `INSERT INTO erp_relatorios (id, empresa_id, tipo, mes, arquivo, dados, criado_por)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.usuario.empresa_id, String(tipo).toLowerCase(), mes || '', arquivo || '',
+       JSON.stringify(dados), req.usuario.id || null]
+    );
+    res.json({ id });
+  } catch (e) {
+    console.error('Erro /erp/relatorios/salvar:', e.message);
+    res.status(500).json({ erro: 'Erro ao salvar relatório.' });
+  }
+});
+
+router.get('/relatorios', async (req, res) => {
+  try {
+    const rows = await db.all(
+      `SELECT id, tipo, mes, arquivo, dados, created_at
+         FROM erp_relatorios
+        WHERE empresa_id = ?
+        ORDER BY created_at DESC`,
+      [req.usuario.empresa_id]
+    );
+    const relatorios = rows.map(r => ({
+      id: r.id, tipo: r.tipo, mes: r.mes, arquivo: r.arquivo,
+      created_at: r.created_at,
+      ...(JSON.parse(r.dados || '{}')),
+    }));
+    res.json({ relatorios });
+  } catch (e) {
+    console.error('Erro /erp/relatorios:', e.message);
+    res.status(500).json({ erro: 'Erro ao listar relatórios.' });
+  }
+});
+
+router.delete('/relatorios/:id', async (req, res) => {
+  try {
+    await db.run(`DELETE FROM erp_relatorios WHERE id = ? AND empresa_id = ?`,
+      [req.params.id, req.usuario.empresa_id]);
+    res.json({ ok: true });
+  } catch (e) {
+    console.error('Erro delete /erp/relatorios:', e.message);
+    res.status(500).json({ erro: 'Erro ao excluir relatório.' });
+  }
+});
 
 router.post('/importar', (req, res) => {
   uploadTemp.array('arquivos', 50)(req, res, (err) => {
@@ -424,13 +477,15 @@ router.post('/importar', (req, res) => {
             })
             .sort((a, b) => b.total - a.total);
 
-          // Lista de técnicos com o mapa de quantidades por produto (chave)
+          // Lista de técnicos com o mapa de quantidades por produto (chave).
+          // Não traz técnico sem registro (sem nome / "(sem técnico)" / total zero).
           const tecnicos = Object.entries(porTecnico)
             .map(([nome, mapa]) => ({
               nome,
               produtos: mapa, // { chave: qtd }
               total: Object.values(mapa).reduce((s, v) => s + v, 0),
             }))
+            .filter(t => t.total > 0 && t.nome && t.nome !== '(sem técnico)')
             .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
 
           resultado.push({
