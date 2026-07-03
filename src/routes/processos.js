@@ -51,6 +51,16 @@ function eid(req) { return req.usuario.empresa_id; }
         usuario_id TEXT, nome TEXT, tipo TEXT, tamanho INTEGER, caminho TEXT, url_externa TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`);
+    // Limpeza única: remove entradas de histórico geradas pelo autosave (edições de conteúdo),
+    // mantendo apenas marcos (status, código, versão, ativação). Igual ao POP.
+    await run(`
+      DELETE FROM processo_historico
+      WHERE acao = 'editado'
+        AND COALESCE(snapshot,'') NOT LIKE '%Status:%'
+        AND COALESCE(snapshot,'') NOT LIKE '%Código gerado%'
+        AND COALESCE(snapshot,'') NOT LIKE '%Vers%o:%'
+        AND COALESCE(snapshot,'') NOT LIKE '%ativado%'
+    `).catch(() => {});
     await run(`
       CREATE TABLE IF NOT EXISTS processo_historico (
         id TEXT PRIMARY KEY,
@@ -341,7 +351,7 @@ router.post('/:id/ativar', async (req, res) => {
     if (!codigo) codigo = await proximoCodigo(eid(req), proc.categoria_id || null);
     await run('UPDATE processos SET status=$1, codigo=$2, updated_at=NOW() WHERE id=$3 AND empresa_id=$4',
       ['ativo', codigo, req.params.id, eid(req)]);
-    await registrarHistorico(req.params.id, eid(req), req.usuario, 'editado', { mudancas: ['Processo ativado', ...(codigo && !proc.codigo ? [`Código gerado: ${codigo}`] : [])], titulo: proc.titulo });
+    await registrarHistorico(req.params.id, eid(req), req.usuario, 'editado', { mudancas: ['Processo ativado e publicado oficialmente', ...(codigo && !proc.codigo ? [`Código gerado: ${codigo}`] : [])], titulo: proc.titulo });
     res.json({ ok: true, codigo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -363,7 +373,7 @@ router.post('/', async (req, res) => {
        responsavel||null, status||'rascunho', resultado_esperado||null, pops_relacionados||null,
        categoria_id||null, versao||'1.0', req.usuario.id, req.usuario.nome]
     );
-    await registrarHistorico(id, eid(req), req.usuario, 'criado', { titulo, codigo, status });
+    await registrarHistorico(id, eid(req), req.usuario, 'criado', { mudancas: [status === 'ativo' ? 'Processo criado e ativado' : 'Processo criado em rascunho'], titulo, codigo, status });
     res.status(201).json({ id, titulo, codigo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
