@@ -62,6 +62,7 @@ app.use('/api/campanhas', require('./routes/campanhas'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/email', require('./routes/email-teste'));
 app.use('/api/ia', require('./routes/ia'));
+app.use('/api/erp', require('./routes/erp'));
 app.use('/api/pop-comentarios', require('./routes/pop-comentarios'));
 app.use('/api/setores', require('./routes/setores'));
 app.use('/api/onboarding', require('./routes/onboarding'));
