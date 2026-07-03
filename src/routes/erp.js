@@ -161,6 +161,16 @@ router.get('/relatorio', async (req, res) => {
       }
     }
 
+    // ── Estoque — detalhes extras ─────────────────────────────────────────────
+    const porTipo = {};
+    let comPatrimonial = 0, comEpi = 0;
+    for (const p of produtos) {
+      const t = p.produto_tipo?.nome || 'Sem tipo';
+      porTipo[t] = (porTipo[t] || 0) + 1;
+      if (p.controle_patrimonial) comPatrimonial++;
+      if (p.epi) comEpi++;
+    }
+
     res.json({
       rede: {
         total: rede.length,
@@ -173,13 +183,25 @@ router.get('/relatorio', async (req, res) => {
       },
       estoque: {
         total: produtos.length,
+        com_controle_patrimonial: comPatrimonial,
+        com_epi: comEpi,
         por_categoria: porCategoria,
         por_marca: porMarca,
+        por_tipo: porTipo,
         produtos: produtos.map((p) => ({
-          id: p.id_produto, nome: p.nome,
+          id: p.id_produto,
+          nome: p.nome,
+          codigo: p.codigo,
           marca: p.produto_marca?.nome,
-          categoria: (p.produto_categoria || [])[0]?.descricao,
+          tipo: p.produto_tipo?.nome,
+          categoria: (p.produto_categoria || []).map(c => c.descricao).join(', '),
           valor_compra: p.valor_compra,
+          valor_venda: p.valor_venda,
+          controle_patrimonial: p.controle_patrimonial,
+          epi: p.epi,
+          unidade: p.unidade_medida?.abreviacao,
+          ncm: p.ncm?.codigo,
+          data_cadastro: p.data_cadastro,
         })),
       },
     });
