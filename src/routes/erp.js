@@ -238,21 +238,17 @@ router.post('/importar', (req, res) => {
 
           const colunas = Object.keys(linhas[0]);
 
-          // Detecta coluna pelo CONTEÚDO (tem "(QTD:" ou "(QDT:") — mais confiável que pelo nome
+          // Regex para extrair "NOME (QTD: X UN)" — NÃO reutilizar com .test() (flag /g)
           const REGEX_ITEM = /([^,(]+?)\s*\(\s*QD?T:?\s*([\d.,]+)\s*([^)]*)\)/gi;
 
-          let colMovimento = colunas.find(c =>
-            linhas.slice(0, 30).some(l => REGEX_ITEM.test(String(l[c])))
-          );
-          REGEX_ITEM.lastIndex = 0;
-
-          // Fallback: coluna com mais ocorrências de "QTD" ou "QDT" no conteúdo
+          // Detecta a coluna dos produtos: a que tem mais células contendo "QTD:" / "QDT:"
+          // Usa regex SEM flag /g para .test() (evita bug do lastIndex)
+          const TESTE_QTD = /QD?T:/i;
+          let colMovimento = colunas.find(c => /produto|item|material/i.test(c));
           if (!colMovimento) {
             let max = 0;
             for (const c of colunas) {
-              const count = linhas.slice(0, 50).filter(l =>
-                /QD?T:/i.test(String(l[c]))
-              ).length;
+              const count = linhas.slice(0, 100).filter(l => TESTE_QTD.test(String(l[c]))).length;
               if (count > max) { max = count; colMovimento = c; }
             }
           }
@@ -262,10 +258,10 @@ router.post('/importar', (req, res) => {
             /tipo.*(dest|sai)|dest.*tipo|tipo_mov|tipo_saida|destino/i.test(c)
           ) || colunas.find(c => /tipo/i.test(c));
 
-          // Detecta coluna de ID único da ordem/saída
+          // Detecta coluna de ID único da ordem/saída (só nomes claros de ID)
           const colId = colunas.find(c =>
-            /^id$|^id_|_id$|numero|ordem|saida|cod(igo)?/i.test(c)
-          ) || colunas[0];
+            /^id$|^id_|_id$|n[ºo]?_?ordem|ordem|protocolo|^os$|_os$|atendimento/i.test(c)
+          );
 
           // Valores distintos da coluna de tipo (diagnóstico)
           const valoresTipo = colTipo
@@ -281,13 +277,18 @@ router.post('/importar', (req, res) => {
 
           const filtroAplicado = temMatch;
 
-          // Conta atendimentos únicos pelo ID
-          const idsUnicos = new Set();
-          for (const l of linhasFiltradas) {
-            const id = String(l[colId] || '').trim();
-            if (id) idsUnicos.add(id);
+          // Conta atendimentos: por ID único se existir coluna de ID; senão cada linha = 1 saída
+          let totalAtendimentos;
+          if (colId) {
+            const idsUnicos = new Set();
+            for (const l of linhasFiltradas) {
+              const id = String(l[colId] || '').trim();
+              if (id) idsUnicos.add(id);
+            }
+            totalAtendimentos = idsUnicos.size || linhasFiltradas.length;
+          } else {
+            totalAtendimentos = linhasFiltradas.length;
           }
-          const totalAtendimentos = idsUnicos.size || linhasFiltradas.length;
 
           const totais = {};
 
