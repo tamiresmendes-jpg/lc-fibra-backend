@@ -241,11 +241,11 @@ router.post('/importar', (req, res) => {
           // Regex que casa APENAS o marcador de quantidade "(QTD: X UN)".
           // O nome do produto é o texto ENTRE marcadores (pode conter vírgulas,
           // parênteses e números, ex: "PORTA(1OPT/1LAN)" ou "CABO ... (1.000 METROS)").
-          const REGEX_QTD = /\(\s*QD?T:?\s*([\d.,]+)\s*([^)]*)\)/gi;
+          const REGEX_QTD = /\(\s*Q[TD]+\s*:?\s*([\d.,]+)\s*([^)]*)\)/gi;
 
-          // Detecta a coluna dos produtos: a que tem mais células contendo "QTD:" / "QDT:"
+          // Detecta a coluna dos produtos: a que tem mais células contendo "QTD:"
           // Usa regex SEM flag /g para .test() (evita bug do lastIndex)
-          const TESTE_QTD = /QD?T:/i;
+          const TESTE_QTD = /Q[TD]+\s*:/i;
           let colMovimento = colunas.find(c => /produto|item|material/i.test(c));
           if (!colMovimento) {
             let max = 0;
@@ -301,7 +301,7 @@ router.post('/importar', (req, res) => {
               : colunas.map(c => String(linha[c] || ''));
 
             for (const celula of celulas) {
-              if (!/QD?T:/i.test(celula)) continue;
+              if (!/Q[TD]+\s*:/i.test(celula)) continue;
               let match;
               let ultimoFim = 0;
               REGEX_QTD.lastIndex = 0;
