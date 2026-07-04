@@ -191,6 +191,40 @@ async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino
   return todos;
 }
 
+// Busca o tipo de várias OSs por ID via GraphQL (em lotes com aliases).
+// Retorna um mapa { id_ordem_servico: tipoDescricao }.
+async function buscarTiposOSPorId(ids = []) {
+  const mapa = {};
+  const unicos = [...new Set(ids.filter(Boolean).map(Number))];
+  if (!unicos.length) return mapa;
+
+  const host = process.env.HUBSOFT_HOST.replace(/^https?:\/\//, '').replace(/\/$/, '');
+  const url = `https://${host}/graphql/v1`;
+  const token = await getToken();
+
+  const LOTE = 50;
+  for (let i = 0; i < unicos.length; i += LOTE) {
+    const chunk = unicos.slice(i, i + LOTE);
+    const campos = chunk
+      .map((id) => `os${id}: ordemServicoById(id_ordem_servico: ${id}) { id_ordem_servico tipo_ordem_servico { descricao } }`)
+      .join('\n');
+    const query = `query { ${campos} }`;
+    try {
+      const resp = await fetch(url, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
+        body: JSON.stringify({ query }),
+      });
+      const json = await resp.json();
+      const data = json.data || {};
+      for (const v of Object.values(data)) {
+        if (v && v.id_ordem_servico) mapa[v.id_ordem_servico] = v.tipo_ordem_servico?.descricao || 'Sem tipo';
+      }
+    } catch { /* ignora lote com erro */ }
+  }
+  return mapa;
+}
+
 // Clientes (com busca opcional por nome/CPF/código)
 async function listarClientes({ busca } = {}) {
   const todos = [];
@@ -209,5 +243,6 @@ async function listarClientes({ busca } = {}) {
 
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico,
-  listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque, getToken,
+  listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
+  buscarTiposOSPorId, getToken,
 };

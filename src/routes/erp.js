@@ -480,6 +480,17 @@ router.get('/analise-produto', async (req, res) => {
     const tipoPorOS = {};
     for (const o of ordens) tipoPorOS[o.id_ordem_servico] = o.tipo || 'Sem tipo';
 
+    // OSs vinculadas aos movimentos que NÃO estão no período (cadastradas antes):
+    // busca o tipo delas por ID via GraphQL.
+    const idsFaltantes = [...new Set(
+      movimentos.filter(m => m.id_ordem_servico && !tipoPorOS[m.id_ordem_servico])
+        .map(m => m.id_ordem_servico)
+    )];
+    if (idsFaltantes.length) {
+      const extra = await hubsoft.buscarTiposOSPorId(idsFaltantes);
+      Object.assign(tipoPorOS, extra);
+    }
+
     const parseProduto = (str) => {
       const s = String(str || '');
       const nome = s.replace(/:\s*[\d.,]+\s+.*$/, '').trim() || s.trim();
