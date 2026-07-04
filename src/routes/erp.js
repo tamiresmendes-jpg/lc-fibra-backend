@@ -399,6 +399,132 @@ router.get('/movimentacao', async (req, res) => {
   }
 });
 
+// ── GET /api/erp/materiais-por-os — cruza materiais usados x tipo de OS ──
+router.get('/materiais-por-os', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.query.data_fim || iso(hoje);
+
+    // Movimentos (saídas p/ cliente) e OSs do período, em paralelo
+    const [movimentos, ordens] = await Promise.all([
+      hubsoft.listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino: 'servico_cliente' }),
+      hubsoft.listarOrdensServico({ dataInicio, dataFim }),
+    ]);
+
+    // mapa id_ordem_servico -> tipo
+    const tipoPorOS = {};
+    for (const o of ordens) tipoPorOS[o.id_ordem_servico] = o.tipo || 'Sem tipo';
+
+    const parseProduto = (str) => {
+      const s = String(str || '');
+      const nome = s.replace(/:\s*[\d.,]+\s+.*$/, '').trim() || s.trim();
+      const un = (s.match(/\(([^)]+)\)\s*$/) || [])[1] || 'UN';
+      return { nome, unidade: un.toUpperCase() };
+    };
+
+    // agrupa por tipo de OS -> produtos
+    const porTipo = {};      // tipoOS -> { chave: {nome, unidade, total} }
+    const osPorTipo = {};    // tipoOS -> Set de id_ordem_servico
+    let semOS = 0, comOS = 0;
+
+    for (const m of movimentos) {
+      if (!m.id_ordem_servico) { semOS++; continue; }
+      comOS++;
+      const tipo = tipoPorOS[m.id_ordem_servico] || 'OS não encontrada no período';
+      if (!porTipo[tipo]) { porTipo[tipo] = {}; osPorTipo[tipo] = new Set(); }
+      osPorTipo[tipo].add(m.id_ordem_servico);
+      for (const p of (m.produtos || [])) {
+        const { nome, unidade } = parseProduto(p.produto);
+        const chave = String(p.id_produto);
+        const qtd = Number(p.quantidade || 0);
+        if (qtd <= 0) continue;
+        if (!porTipo[tipo][chave]) porTipo[tipo][chave] = { nome, unidade, total: 0 };
+        porTipo[tipo][chave].total += qtd;
+      }
+    }
+
+    const tipos = Object.entries(porTipo).map(([tipo, prods]) => ({
+      tipo,
+      qtd_os: osPorTipo[tipo].size,
+      itens: Object.values(prods).sort((a, b) => b.total - a.total),
+    })).sort((a, b) => b.qtd_os - a.qtd_os);
+
+    res.json({
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      total_movimentos: movimentos.length,
+      movimentos_com_os: comOS,
+      movimentos_sem_os: semOS,
+      tipos,
+    });
+  } catch (e) {
+    console.error('Erro /erp/materiais-por-os:', e.message);
+    res.status(500).json({ erro: 'Erro ao cruzar materiais x OS: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// ── GET /api/erp/analise-produto — por produto: total, por técnico, por tipo de OS ──
+router.get('/analise-produto', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.query.data_fim || iso(hoje);
+
+    const [movimentos, ordens] = await Promise.all([
+      hubsoft.listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino: 'servico_cliente' }),
+      hubsoft.listarOrdensServico({ dataInicio, dataFim }),
+    ]);
+
+    const tipoPorOS = {};
+    for (const o of ordens) tipoPorOS[o.id_ordem_servico] = o.tipo || 'Sem tipo';
+
+    const parseProduto = (str) => {
+      const s = String(str || '');
+      const nome = s.replace(/:\s*[\d.,]+\s+.*$/, '').trim() || s.trim();
+      const un = (s.match(/\(([^)]+)\)\s*$/) || [])[1] || 'UN';
+      return { nome, unidade: un.toUpperCase() };
+    };
+
+    // prod[chave] = { nome, unidade, total, tec:{}, tipos:{ tipo:{total, osSet} } }
+    const prod = {};
+    for (const m of movimentos) {
+      const tecnico = m.vinculo_origem?.display || m.origem || '(sem técnico)';
+      const temOS = !!m.id_ordem_servico;
+      const tipoOS = temOS ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período') : 'Sem OS (ex: livro digital)';
+      for (const p of (m.produtos || [])) {
+        const { nome, unidade } = parseProduto(p.produto);
+        const chave = String(p.id_produto);
+        const qtd = Number(p.quantidade || 0);
+        if (qtd <= 0) continue;
+        if (!prod[chave]) prod[chave] = { chave, nome, unidade, total: 0, tec: {}, tipos: {} };
+        const P = prod[chave];
+        P.total += qtd;
+        P.tec[tecnico] = (P.tec[tecnico] || 0) + qtd;
+        if (!P.tipos[tipoOS]) P.tipos[tipoOS] = { total: 0, osSet: new Set() };
+        P.tipos[tipoOS].total += qtd;
+        if (temOS) P.tipos[tipoOS].osSet.add(m.id_ordem_servico);
+      }
+    }
+
+    const produtos = Object.values(prod)
+      .map(P => ({
+        chave: P.chave, nome: P.nome, unidade: P.unidade, total: P.total,
+        por_tecnico: Object.entries(P.tec).map(([nome, total]) => ({ nome, total }))
+          .sort((a, b) => b.total - a.total),
+        por_tipo_os: Object.entries(P.tipos).map(([tipo, v]) => ({ tipo, total: v.total, qtd_os: v.osSet.size }))
+          .sort((a, b) => b.total - a.total),
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    res.json({ periodo: { data_inicio: dataInicio, data_fim: dataFim }, produtos });
+  } catch (e) {
+    console.error('Erro /erp/analise-produto:', e.message);
+    res.status(500).json({ erro: 'Erro ao analisar produto: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
 // ── GET /api/erp/financeiro — faturas por vencimento + totais ──
 router.get('/financeiro', async (req, res) => {
   try {
