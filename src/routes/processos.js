@@ -51,6 +51,11 @@ function eid(req) { return req.usuario.empresa_id; }
         usuario_id TEXT, nome TEXT, tipo TEXT, tamanho INTEGER, caminho TEXT, url_externa TEXT,
         created_at TIMESTAMPTZ DEFAULT NOW()
       )`);
+    await run(`
+      CREATE TABLE IF NOT EXISTS processo_comentarios (
+        id TEXT PRIMARY KEY, processo_id TEXT NOT NULL, empresa_id TEXT NOT NULL,
+        usuario_id TEXT, texto TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+      )`);
     // Limpeza única: remove entradas de histórico geradas pelo autosave (edições de conteúdo),
     // mantendo apenas marcos (status, código, versão, ativação). Igual ao POP.
     await run(`
@@ -253,6 +258,39 @@ router.delete('/:id/anexos/:anexoId', async (req, res) => {
     if (!anexo) return res.status(404).json({ erro: 'Anexo não encontrado' });
     if (anexo.caminho) { const fp = path.join(UPLOADS_DIR, anexo.caminho); if (fs.existsSync(fp)) fs.unlinkSync(fp); }
     await run('DELETE FROM processo_anexos WHERE id=$1', [req.params.anexoId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Comentários do processo ─────────────────────────────────────────────────
+router.get('/:id/comentarios', async (req, res) => {
+  try {
+    const rows = await all(`
+      SELECT c.*, u.nome as usuario_nome,
+             (c.usuario_id = $3) as meu
+      FROM processo_comentarios c LEFT JOIN usuarios u ON u.id = c.usuario_id
+      WHERE c.processo_id=$1 AND c.empresa_id=$2 ORDER BY c.created_at DESC`,
+      [req.params.id, eid(req), req.usuario.id]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.post('/:id/comentarios', async (req, res) => {
+  try {
+    const { texto } = req.body;
+    if (!texto || !texto.trim()) return res.status(400).json({ erro: 'Comentário vazio' });
+    if (!(await procDaEmpresa(req.params.id, eid(req)))) return res.status(404).json({ erro: 'Processo não encontrado' });
+    const id = uuidv4();
+    await run('INSERT INTO processo_comentarios (id, processo_id, empresa_id, usuario_id, texto) VALUES ($1,$2,$3,$4,$5)',
+      [id, req.params.id, eid(req), req.usuario.id, texto.trim()]);
+    res.status(201).json({ id });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.delete('/:id/comentarios/:cid', async (req, res) => {
+  try {
+    const c = await get('SELECT * FROM processo_comentarios WHERE id=$1 AND empresa_id=$2', [req.params.cid, eid(req)]);
+    if (!c) return res.status(404).json({ erro: 'Comentário não encontrado' });
+    if (c.usuario_id !== req.usuario.id && !['admin', 'gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    await run('DELETE FROM processo_comentarios WHERE id=$1', [req.params.cid]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
