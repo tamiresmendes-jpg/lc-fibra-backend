@@ -327,6 +327,75 @@ router.get('/agenda', async (req, res) => {
   }
 });
 
+// ── GET /api/erp/movimentacao — produtos utilizados (saídas p/ cliente) por técnico ──
+router.get('/movimentacao', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.query.data_fim || iso(hoje);
+    const soCliente = req.query.todos !== '1'; // por padrão só saídas para cliente
+
+    const movimentos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
+
+    // parse do campo "produto": "NOME: 2 Unitário - (UN)"
+    const parseProduto = (str) => {
+      const s = String(str || '');
+      const nome = s.replace(/:\s*[\d.,]+\s+.*$/, '').trim() || s.trim();
+      const un = (s.match(/\(([^)]+)\)\s*$/) || [])[1] || 'UN';
+      return { nome, unidade: un.toUpperCase() };
+    };
+
+    const totais = {};       // id_produto -> { nome, unidade, total }
+    const porTecnico = {};   // tecnico -> { id_produto: qtd }
+    let saidasCliente = 0;
+
+    for (const m of movimentos) {
+      const ehSaida = m.tipo === 'saida';
+      const ehCliente = m.vinculo_destino?.tipo_vinculo === 'servico_cliente';
+      if (soCliente && !(ehSaida && ehCliente)) continue;
+
+      const tecnico = m.vinculo_origem?.display || m.origem || '(sem técnico)';
+      if (ehSaida && ehCliente) saidasCliente++;
+
+      for (const p of (m.produtos || [])) {
+        const { nome, unidade } = parseProduto(p.produto);
+        const chave = String(p.id_produto);
+        const qtd = Number(p.quantidade || 0);
+        if (qtd <= 0) continue;
+        if (!totais[chave]) totais[chave] = { nome, unidade, total: 0 };
+        totais[chave].total += qtd;
+        if (!porTecnico[tecnico]) porTecnico[tecnico] = {};
+        porTecnico[tecnico][chave] = (porTecnico[tecnico][chave] || 0) + qtd;
+      }
+    }
+
+    const denom = saidasCliente || movimentos.length || 1;
+    const itens = Object.entries(totais)
+      .map(([chave, v]) => ({
+        chave, nome: v.nome, unidade: v.unidade, total: v.total,
+        media: Math.round((v.total / denom) * 1000) / 1000,
+      }))
+      .sort((a, b) => b.total - a.total);
+
+    const tecnicos = Object.entries(porTecnico)
+      .map(([nome, mapa]) => ({ nome, produtos: mapa, total: Object.values(mapa).reduce((s, x) => s + x, 0) }))
+      .filter(t => t.total > 0 && t.nome && t.nome !== '(sem técnico)')
+      .sort((a, b) => a.nome.localeCompare(b.nome, 'pt-BR'));
+
+    res.json({
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      total_movimentos: movimentos.length,
+      total_saidas: saidasCliente,
+      so_cliente: soCliente,
+      itens, tecnicos,
+    });
+  } catch (e) {
+    console.error('Erro /erp/movimentacao:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar movimentação: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
 // ── GET /api/erp/financeiro — faturas por vencimento + totais ──
 router.get('/financeiro', async (req, res) => {
   try {

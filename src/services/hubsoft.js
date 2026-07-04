@@ -171,6 +171,23 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
   });
 }
 
+// Movimentos de estoque (entradas/saídas) num intervalo. itens_por_pagina máx 500.
+async function listarMovimentosEstoque({ dataInicio, dataFim, maxPaginas = 300 } = {}) {
+  const todos = [];
+  let pagina = 1, ultima = 1;
+  do {
+    const d = await apiGet('/api/v1/integracao/estoque/movimento_estoque', {
+      pagina, itens_por_pagina: 500,
+      data_inicio: dataInicio, data_fim: dataFim,
+    });
+    const arr = d.movimentos_estoque || d.data || [];
+    todos.push(...arr);
+    ultima = d.paginacao?.ultima_pagina || pagina;
+    pagina++;
+  } while (pagina <= ultima && pagina <= maxPaginas);
+  return todos;
+}
+
 // Clientes (com busca opcional por nome/CPF/código)
 async function listarClientes({ busca } = {}) {
   const todos = [];
@@ -189,5 +206,5 @@ async function listarClientes({ busca } = {}) {
 
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico,
-  listarFaturas, listarAtendimentos, listarClientes, getToken,
+  listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque, getToken,
 };
