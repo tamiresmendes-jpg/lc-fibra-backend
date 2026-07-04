@@ -336,10 +336,7 @@ router.get('/movimentacao', async (req, res) => {
     const dataFim = req.query.data_fim || iso(hoje);
     const soCliente = req.query.todos !== '1'; // por padrão só saídas para cliente
 
-    const movimentos = await hubsoft.listarMovimentosEstoque({
-      dataInicio, dataFim,
-      tipoVinculoDestino: soCliente ? 'servico_cliente' : undefined,
-    });
+    const movimentos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
 
     // parse do campo "produto": "NOME: 2 Unitário - (UN)"
     const parseProduto = (str) => {
@@ -472,10 +469,12 @@ router.get('/analise-produto', async (req, res) => {
     const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
     const dataFim = req.query.data_fim || iso(hoje);
 
-    const [movimentos, ordens] = await Promise.all([
-      hubsoft.listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino: 'servico_cliente' }),
+    const [movTodos, ordens] = await Promise.all([
+      hubsoft.listarMovimentosEstoque({ dataInicio, dataFim }),
       hubsoft.listarOrdensServico({ dataInicio, dataFim }),
     ]);
+    // considera só as SAÍDAS (consumo); entradas/retornos ficam de fora
+    const movimentos = movTodos.filter(m => m.tipo === 'saida');
 
     const tipoPorOS = {};
     for (const o of ordens) tipoPorOS[o.id_ordem_servico] = o.tipo || 'Sem tipo';

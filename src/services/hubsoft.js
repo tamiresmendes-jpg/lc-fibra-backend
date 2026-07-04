@@ -101,8 +101,8 @@ async function listarEquipamentos() {
 // GET /api/v1/integracao/estoque/produto?pagina=N
 async function listarProdutos() {
   const todos = [];
-  let pagina = 1;
-  let ultima = 1;
+  let pagina = 0;
+  let ultima = 0;
   do {
     const d = await apiGet('/api/v1/integracao/estoque/produto', { pagina });
     const arr = d.produtos || d.data || [];
@@ -117,8 +117,8 @@ async function listarProdutos() {
 // GET /api/v1/integracao/ordem_servico/todos?relacoes=agenda_ordem_servico
 async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 40 } = {}) {
   const todas = [];
-  let pagina = 1;
-  let ultima = 1;
+  let pagina = 0;
+  let ultima = 0;
   do {
     const d = await apiGet('/api/v1/integracao/ordem_servico/todos', {
       pagina,
@@ -138,7 +138,7 @@ async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 40 } = {}
 // Paginador genérico para endpoints /todos com data_inicio/data_fim
 async function listarPaginado(caminho, { dataInicio, dataFim, relacoes, extra = {}, chaveArray, maxPaginas = 60 } = {}) {
   const todos = [];
-  let pagina = 1, ultima = 1;
+  let pagina = 0, ultima = 0;
   do {
     const d = await apiGet(caminho, {
       pagina, itens_por_pagina: 100,
@@ -175,7 +175,7 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
 // tipoVinculoDestino: filtra no servidor (ex: 'servico_cliente' = só saídas p/ cliente)
 async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300 } = {}) {
   const todos = [];
-  let pagina = 1, ultima = 1;
+  let pagina = 0, ultima = 0;
   do {
     const d = await apiGet('/api/v1/integracao/estoque/movimento_estoque', {
       pagina, itens_por_pagina: 500,
@@ -228,7 +228,7 @@ async function buscarTiposOSPorId(ids = []) {
 // Clientes (com busca opcional por nome/CPF/código)
 async function listarClientes({ busca } = {}) {
   const todos = [];
-  let pagina = 1, ultima = 1;
+  let pagina = 0, ultima = 0;
   do {
     const d = await apiGet('/api/v1/integracao/cliente/todos', {
       pagina, itens_por_pagina: 100, ...(busca ? { busca } : {}),
