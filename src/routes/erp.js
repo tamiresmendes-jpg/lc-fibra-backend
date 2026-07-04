@@ -461,68 +461,115 @@ router.get('/materiais-por-os', async (req, res) => {
   }
 });
 
-// ── GET /api/erp/analise-produto — por produto: total, por técnico, por tipo de OS ──
+// Lógica pesada da análise de produto (saídas para o cliente por técnico e tipo de OS).
+async function calcularAnaliseProduto(dataInicio, dataFim) {
+  const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
+
+  // PADRÃO ÚNICO: "saída para o cliente".
+  const movimentos = movTodos.filter(m =>
+    m.tipo === 'saida' && m.vinculo_destino?.tipo_vinculo === 'servico_cliente'
+  );
+
+  const idsOS = [...new Set(movimentos.map(m => m.id_ordem_servico).filter(Boolean))];
+  const tipoPorOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS) : {};
+
+  const parseProduto = (str) => {
+    const s = String(str || '');
+    const nome = s.replace(/:\s*[\d.,]+\s+.*$/, '').trim() || s.trim();
+    const un = (s.match(/\(([^)]+)\)\s*$/) || [])[1] || 'UN';
+    return { nome, unidade: un.toUpperCase() };
+  };
+
+  const prod = {};
+  for (const m of movimentos) {
+    const tecnico = m.vinculo_origem?.tipo_vinculo === 'usuario'
+      ? (m.vinculo_origem.display || 'Sem técnico')
+      : 'Direto do estoque';
+    const tipoOS = m.id_ordem_servico
+      ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período')
+      : 'Sem O.S.';
+    for (const p of (m.produtos || [])) {
+      const { nome, unidade } = parseProduto(p.produto);
+      const chave = String(p.id_produto);
+      const qtd = Number(p.quantidade || 0);
+      if (qtd <= 0) continue;
+      if (!prod[chave]) prod[chave] = { chave, nome, unidade, combos: new Map() };
+      const k = `${tecnico}||${tipoOS}`;
+      let c = prod[chave].combos.get(k);
+      if (!c) { c = { tecnico, tipo: tipoOS, qtd: 0, os: new Set() }; prod[chave].combos.set(k, c); }
+      c.qtd += qtd;
+      if (m.id_ordem_servico) c.os.add(m.id_ordem_servico);
+    }
+  }
+
+  const produtos = Object.values(prod).map(P => {
+    const combos = [...P.combos.values()].map(c => ({
+      tecnico: c.tecnico, tipo: c.tipo, qtd: c.qtd, os: [...c.os],
+    }));
+    const total = combos.reduce((s, c) => s + c.qtd, 0);
+    return { chave: P.chave, nome: P.nome, unidade: P.unidade, total, combos };
+  }).sort((a, b) => b.total - a.total);
+
+  return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, produtos };
+}
+
+// Processa em segundo plano e grava no cache (não bloqueia a resposta HTTP).
+async function processarCacheAnalise(id, empresaId, dataInicio, dataFim) {
+  try {
+    const resultado = await calcularAnaliseProduto(dataInicio, dataFim);
+    await db.run(
+      `UPDATE erp_analise_cache SET status='pronto', dados=?, erro=NULL,
+         updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=?`,
+      [JSON.stringify(resultado), id]
+    );
+  } catch (e) {
+    console.error('Erro ao processar análise em background:', e.message);
+    await db.run(
+      `UPDATE erp_analise_cache SET status='erro', erro=?,
+         updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=?`,
+      [e.message.replace('HUBSOFT', 'HubSoft'), id]
+    ).catch(() => {});
+  }
+}
+
+// ── GET /api/erp/analise-produto — com cache + processamento em segundo plano ──
+// Respostas: { status:'pronto', ...dados } | { status:'processando' } | { status:'erro', erro }
 router.get('/analise-produto', async (req, res) => {
   try {
     const hoje = new Date();
     const iso = (d) => d.toISOString().slice(0, 10);
     const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
     const dataFim = req.query.data_fim || iso(hoje);
+    const forcar = req.query.forcar === '1';
+    const empresaId = req.usuario.empresa_id;
 
-    // Só busca os movimentos (rápido). As OSs NÃO são todas baixadas — o tipo de
-    // cada OS é resolvido depois, por GraphQL, apenas para as que aparecem.
-    const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
-
-    // PADRÃO ÚNICO da análise: "saída para o cliente".
-    const movimentos = movTodos.filter(m =>
-      m.tipo === 'saida' &&
-      m.vinculo_destino?.tipo_vinculo === 'servico_cliente'
+    const cache = await db.get(
+      `SELECT * FROM erp_analise_cache WHERE empresa_id=? AND data_inicio=? AND data_fim=?`,
+      [empresaId, dataInicio, dataFim]
     );
 
-    // Resolve o tipo das OSs que aparecem, direto por GraphQL (bem mais leve).
-    const idsOS = [...new Set(movimentos.map(m => m.id_ordem_servico).filter(Boolean))];
-    const tipoPorOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS) : {};
-
-    const parseProduto = (str) => {
-      const s = String(str || '');
-      const nome = s.replace(/:\s*[\d.,]+\s+.*$/, '').trim() || s.trim();
-      const un = (s.match(/\(([^)]+)\)\s*$/) || [])[1] || 'UN';
-      return { nome, unidade: un.toUpperCase() };
-    };
-
-    // prod[chave] = { nome, unidade, combos: Map "tecnico||tipo" -> {tecnico, tipo, qtd, os:Set} }
-    const prod = {};
-    for (const m of movimentos) {
-      const tecnico = m.vinculo_origem?.tipo_vinculo === 'usuario'
-        ? (m.vinculo_origem.display || 'Sem técnico')
-        : 'Direto do estoque';
-      const tipoOS = m.id_ordem_servico
-        ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período')
-        : 'Sem O.S.';
-      for (const p of (m.produtos || [])) {
-        const { nome, unidade } = parseProduto(p.produto);
-        const chave = String(p.id_produto);
-        const qtd = Number(p.quantidade || 0);
-        if (qtd <= 0) continue;
-        if (!prod[chave]) prod[chave] = { chave, nome, unidade, combos: new Map() };
-        const k = `${tecnico}||${tipoOS}`;
-        let c = prod[chave].combos.get(k);
-        if (!c) { c = { tecnico, tipo: tipoOS, qtd: 0, os: new Set() }; prod[chave].combos.set(k, c); }
-        c.qtd += qtd;
-        if (m.id_ordem_servico) c.os.add(m.id_ordem_servico);
-      }
+    // Já pronto (e sem forçar) → devolve na hora
+    if (cache && cache.status === 'pronto' && !forcar) {
+      return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
     }
 
-    // devolve as combinações técnico×tipo (o frontend filtra instantâneo)
-    const produtos = Object.values(prod).map(P => {
-      const combos = [...P.combos.values()].map(c => ({
-        tecnico: c.tecnico, tipo: c.tipo, qtd: c.qtd, os: [...c.os],
-      }));
-      const total = combos.reduce((s, c) => s + c.qtd, 0);
-      return { chave: P.chave, nome: P.nome, unidade: P.unidade, total, combos };
-    }).sort((a, b) => b.total - a.total);
+    // Processando: se travou há mais de 10 min, reprocessa; senão, avisa
+    if (cache && cache.status === 'processando' && !forcar) {
+      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 10 * 60 * 1000;
+      if (!velho) return res.json({ status: 'processando' });
+    }
 
-    res.json({ periodo: { data_inicio: dataInicio, data_fim: dataFim }, produtos });
+    // Cria/atualiza a linha como "processando" e dispara o processamento
+    const id = cache?.id || uuidv4();
+    if (cache) {
+      await db.run(`UPDATE erp_analise_cache SET status='processando', erro=NULL,
+         updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=?`, [id]);
+    } else {
+      await db.run(`INSERT INTO erp_analise_cache (id, empresa_id, data_inicio, data_fim, status)
+         VALUES (?, ?, ?, ?, 'processando')`, [id, empresaId, dataInicio, dataFim]);
+    }
+    processarCacheAnalise(id, empresaId, dataInicio, dataFim); // sem await (background)
+    res.json({ status: 'processando' });
   } catch (e) {
     console.error('Erro /erp/analise-produto:', e.message);
     res.status(500).json({ erro: 'Erro ao analisar produto: ' + e.message.replace('HUBSOFT', 'HubSoft') });
