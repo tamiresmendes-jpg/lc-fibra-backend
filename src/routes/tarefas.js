@@ -1,8 +1,37 @@
 const express = require('express');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+
+const UPLOADS_DIR = path.join(__dirname, '../../uploads');
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (_) {}
+const uploadAtiv = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  }),
+  limits: { fileSize: 20 * 1024 * 1024 },
+});
+
+// Migrações idempotentes das melhorias de delegação
+;(async () => {
+  try {
+    await run(`ALTER TABLE atividades ADD COLUMN IF NOT EXISTS obs_devolucao TEXT`);
+    await run(`CREATE TABLE IF NOT EXISTS atividade_comentarios (
+      id TEXT PRIMARY KEY, atividade_id TEXT NOT NULL, empresa_id TEXT NOT NULL,
+      usuario_id TEXT, texto TEXT NOT NULL, created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+    await run(`CREATE TABLE IF NOT EXISTS atividade_anexos (
+      id TEXT PRIMARY KEY, atividade_id TEXT NOT NULL, empresa_id TEXT NOT NULL,
+      usuario_id TEXT, nome TEXT, tipo TEXT, tamanho INTEGER, caminho TEXT,
+      created_at TIMESTAMPTZ DEFAULT NOW()
+    )`);
+  } catch {}
+})();
 
 router.use(autenticar);
 const NOW = `TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')`;
@@ -87,9 +116,31 @@ router.post('/atividades', async (req, res) => {
         );
       }
     }
+    if (responsavel_id && responsavel_id !== uid(req)) {
+      await notificar(eid(req), responsavel_id, 'Nova atividade delegada', `${req.usuario.nome} delegou "${titulo.trim()}" para você`);
+    }
     const atividade = await get(`${SEL_AT} WHERE a.id = ?`, [id]);
     atividade.etapas = await all('SELECT * FROM atividade_etapas WHERE atividade_id = ? ORDER BY ordem', [id]);
     res.status(201).json(atividade);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Relatório por colaborador (antes de /:id para não dar shadowing)
+router.get('/atividades/relatorio', async (req, res) => {
+  try {
+    if (!ehGestor(req)) return res.status(403).json({ erro: 'Sem permissão' });
+    const rows = await all(`
+      SELECT u.id, u.nome,
+        COUNT(a.id) AS total,
+        COUNT(*) FILTER (WHERE a.status = 'concluida') AS concluidas,
+        COUNT(*) FILTER (WHERE a.status <> 'concluida') AS pendentes,
+        COUNT(*) FILTER (WHERE a.status <> 'concluida' AND a.data_prazo IS NOT NULL AND a.data_prazo < TO_CHAR(NOW() - INTERVAL '3 hours','YYYY-MM-DD')) AS atrasadas
+      FROM usuarios u
+      JOIN atividades a ON a.responsavel_id = u.id AND a.empresa_id = $1 AND a.excluido_em IS NULL
+      WHERE u.empresa_id = $1
+      GROUP BY u.id, u.nome
+      ORDER BY total DESC, u.nome`, [eid(req)]);
+    res.json(rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -150,6 +201,104 @@ router.put('/atividades/:id/etapas/:etapa_id', async (req, res) => {
       await run('UPDATE atividades SET status = ?, updated_at = NOW() WHERE id = ?', [novoStatus, req.params.id]);
     }
     res.json(await get('SELECT * FROM atividade_etapas WHERE id = ?', [req.params.etapa_id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Reatribuir (gestor troca o responsável)
+router.patch('/atividades/:id/reatribuir', async (req, res) => {
+  try {
+    if (!ehGestor(req)) return res.status(403).json({ erro: 'Apenas gestores podem reatribuir' });
+    const a = await get('SELECT * FROM atividades WHERE id=? AND empresa_id=? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    const { responsavel_id } = req.body;
+    if (!responsavel_id) return res.status(400).json({ erro: 'Responsável obrigatório' });
+    await run(`UPDATE atividades SET responsavel_id=?, obs_devolucao=NULL, updated_at=NOW() WHERE id=?`, [responsavel_id, req.params.id]);
+    if (responsavel_id !== uid(req)) await notificar(eid(req), responsavel_id, 'Atividade atribuída a você', `${req.usuario.nome} atribuiu "${a.titulo}" para você`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Devolver (responsável devolve ao gestor com motivo)
+router.patch('/atividades/:id/devolver', async (req, res) => {
+  try {
+    const a = await get('SELECT * FROM atividades WHERE id=? AND empresa_id=? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    if (a.responsavel_id !== uid(req) && !ehGestor(req)) return res.status(403).json({ erro: 'Apenas o responsável pode devolver' });
+    const { motivo } = req.body;
+    await run(`UPDATE atividades SET status='devolvida', obs_devolucao=?, updated_at=NOW() WHERE id=?`, [motivo || null, req.params.id]);
+    if (a.criado_por_id) await notificar(eid(req), a.criado_por_id, 'Atividade devolvida', `${req.usuario.nome} devolveu "${a.titulo}"${motivo ? ': ' + motivo : ''}`);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Comentários da atividade
+router.get('/atividades/:id/comentarios', async (req, res) => {
+  try {
+    const rows = await all(`SELECT c.*, u.nome AS usuario_nome, (c.usuario_id=$3) AS meu
+      FROM atividade_comentarios c LEFT JOIN usuarios u ON u.id=c.usuario_id
+      WHERE c.atividade_id=$1 AND c.empresa_id=$2 ORDER BY c.created_at DESC`, [req.params.id, eid(req), uid(req)]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.post('/atividades/:id/comentarios', async (req, res) => {
+  try {
+    const { texto } = req.body;
+    if (!texto || !texto.trim()) return res.status(400).json({ erro: 'Comentário vazio' });
+    const a = await get('SELECT id FROM atividades WHERE id=? AND empresa_id=? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) return res.status(404).json({ erro: 'Atividade não encontrada' });
+    const id = uuidv4();
+    await run('INSERT INTO atividade_comentarios (id, atividade_id, empresa_id, usuario_id, texto) VALUES (?,?,?,?,?)', [id, req.params.id, eid(req), uid(req), texto.trim()]);
+    res.status(201).json({ id });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.delete('/atividades/:id/comentarios/:cid', async (req, res) => {
+  try {
+    const c = await get('SELECT * FROM atividade_comentarios WHERE id=? AND empresa_id=?', [req.params.cid, eid(req)]);
+    if (!c) return res.status(404).json({ erro: 'Comentário não encontrado' });
+    if (c.usuario_id !== uid(req) && !ehGestor(req)) return res.status(403).json({ erro: 'Sem permissão' });
+    await run('DELETE FROM atividade_comentarios WHERE id=?', [req.params.cid]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Anexos da atividade
+router.get('/atividades/:id/anexos', async (req, res) => {
+  try {
+    const rows = await all(`SELECT a.*, u.nome AS usuario_nome FROM atividade_anexos a LEFT JOIN usuarios u ON u.id=a.usuario_id WHERE a.atividade_id=? AND a.empresa_id=? ORDER BY a.created_at DESC`, [req.params.id, eid(req)]);
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.post('/atividades/:id/anexos/upload', uploadAtiv.single('arquivo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ erro: 'Arquivo não enviado' });
+    const a = await get('SELECT id FROM atividades WHERE id=? AND empresa_id=? AND excluido_em IS NULL', [req.params.id, eid(req)]);
+    if (!a) { try { fs.unlinkSync(path.join(UPLOADS_DIR, req.file.filename)); } catch {} return res.status(404).json({ erro: 'Atividade não encontrada' }); }
+    const id = uuidv4();
+    await run('INSERT INTO atividade_anexos (id, atividade_id, empresa_id, usuario_id, nome, tipo, tamanho, caminho) VALUES (?,?,?,?,?,?,?,?)',
+      [id, req.params.id, eid(req), uid(req), req.file.originalname, req.file.mimetype, req.file.size, req.file.filename]);
+    res.status(201).json(await get(`SELECT a.*, u.nome AS usuario_nome FROM atividade_anexos a LEFT JOIN usuarios u ON u.id=a.usuario_id WHERE a.id=?`, [id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.get('/atividades/:id/anexos/:aid/download', (req, res, next) => {
+  if (req.query.token) { try { req.usuario = require('jsonwebtoken').verify(req.query.token, process.env.JWT_SECRET); } catch { return res.status(401).json({ erro: 'Token inválido' }); } }
+  next();
+}, async (req, res) => {
+  try {
+    const anexo = await get('SELECT * FROM atividade_anexos WHERE id=? AND empresa_id=?', [req.params.aid, req.usuario.empresa_id]);
+    if (!anexo) return res.status(404).json({ erro: 'Anexo não encontrado' });
+    const fp = path.join(UPLOADS_DIR, anexo.caminho);
+    if (!fs.existsSync(fp)) return res.status(404).json({ erro: 'Arquivo não encontrado' });
+    res.download(fp, anexo.nome);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.delete('/atividades/:id/anexos/:aid', async (req, res) => {
+  try {
+    const anexo = await get('SELECT * FROM atividade_anexos WHERE id=? AND empresa_id=?', [req.params.aid, eid(req)]);
+    if (!anexo) return res.status(404).json({ erro: 'Anexo não encontrado' });
+    if (anexo.usuario_id !== uid(req) && !ehGestor(req)) return res.status(403).json({ erro: 'Sem permissão' });
+    if (anexo.caminho) { const fp = path.join(UPLOADS_DIR, anexo.caminho); if (fs.existsSync(fp)) fs.unlinkSync(fp); }
+    await run('DELETE FROM atividade_anexos WHERE id=?', [req.params.aid]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
