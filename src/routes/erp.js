@@ -336,7 +336,10 @@ router.get('/movimentacao', async (req, res) => {
     const dataFim = req.query.data_fim || iso(hoje);
     const soCliente = req.query.todos !== '1'; // por padrão só saídas para cliente
 
-    const movimentos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
+    const movimentos = await hubsoft.listarMovimentosEstoque({
+      dataInicio, dataFim,
+      tipoVinculoDestino: soCliente ? 'servico_cliente' : undefined,
+    });
 
     // parse do campo "produto": "NOME: 2 Unitário - (UN)"
     const parseProduto = (str) => {

@@ -172,13 +172,16 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
 }
 
 // Movimentos de estoque (entradas/saídas) num intervalo. itens_por_pagina máx 500.
-async function listarMovimentosEstoque({ dataInicio, dataFim, maxPaginas = 300 } = {}) {
+// tipoVinculoDestino: filtra no servidor (ex: 'servico_cliente' = só saídas p/ cliente)
+async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300 } = {}) {
   const todos = [];
   let pagina = 1, ultima = 1;
   do {
     const d = await apiGet('/api/v1/integracao/estoque/movimento_estoque', {
       pagina, itens_por_pagina: 500,
       data_inicio: dataInicio, data_fim: dataFim,
+      tipo_data: 'movimento',
+      ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
     });
     const arr = d.movimentos_estoque || d.data || [];
     todos.push(...arr);
