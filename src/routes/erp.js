@@ -469,31 +469,19 @@ router.get('/analise-produto', async (req, res) => {
     const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
     const dataFim = req.query.data_fim || iso(hoje);
 
-    const [movTodos, ordens] = await Promise.all([
-      hubsoft.listarMovimentosEstoque({ dataInicio, dataFim }),
-      hubsoft.listarOrdensServico({ dataInicio, dataFim }),
-    ]);
+    // Só busca os movimentos (rápido). As OSs NÃO são todas baixadas — o tipo de
+    // cada OS é resolvido depois, por GraphQL, apenas para as que aparecem.
+    const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
+
     // PADRÃO ÚNICO da análise: "saída para o cliente".
-    // = movimento de SAÍDA cujo destino é o serviço do cliente.
-    // Todas as seções (total, por técnico, por tipo de OS) usam este mesmo critério.
     const movimentos = movTodos.filter(m =>
       m.tipo === 'saida' &&
       m.vinculo_destino?.tipo_vinculo === 'servico_cliente'
     );
 
-    const tipoPorOS = {};
-    for (const o of ordens) tipoPorOS[o.id_ordem_servico] = o.tipo || 'Sem tipo';
-
-    // OSs vinculadas aos movimentos que NÃO estão no período (cadastradas antes):
-    // busca o tipo delas por ID via GraphQL.
-    const idsFaltantes = [...new Set(
-      movimentos.filter(m => m.id_ordem_servico && !tipoPorOS[m.id_ordem_servico])
-        .map(m => m.id_ordem_servico)
-    )];
-    if (idsFaltantes.length) {
-      const extra = await hubsoft.buscarTiposOSPorId(idsFaltantes);
-      Object.assign(tipoPorOS, extra);
-    }
+    // Resolve o tipo das OSs que aparecem, direto por GraphQL (bem mais leve).
+    const idsOS = [...new Set(movimentos.map(m => m.id_ordem_servico).filter(Boolean))];
+    const tipoPorOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS) : {};
 
     const parseProduto = (str) => {
       const s = String(str || '');
@@ -502,14 +490,12 @@ router.get('/analise-produto', async (req, res) => {
       return { nome, unidade: un.toUpperCase() };
     };
 
-    // prod[chave] = { nome, unidade, total, tec:{}, tipos:{ tipo:{total, osSet} } }
+    // prod[chave] = { nome, unidade, combos: Map "tecnico||tipo" -> {tecnico, tipo, qtd, os:Set} }
     const prod = {};
     for (const m of movimentos) {
-      // Técnico só quando a ORIGEM é um usuário; se a origem é um local de
-      // estoque, não conta como técnico.
       const tecnico = m.vinculo_origem?.tipo_vinculo === 'usuario'
-        ? (m.vinculo_origem.display || '(sem técnico)')
-        : null;
+        ? (m.vinculo_origem.display || 'Sem técnico')
+        : 'Direto do estoque';
       const tipoOS = m.id_ordem_servico
         ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período')
         : 'Sem O.S.';
@@ -518,25 +504,23 @@ router.get('/analise-produto', async (req, res) => {
         const chave = String(p.id_produto);
         const qtd = Number(p.quantidade || 0);
         if (qtd <= 0) continue;
-        if (!prod[chave]) prod[chave] = { chave, nome, unidade, total: 0, tec: {}, tipos: {} };
-        const P = prod[chave];
-        P.total += qtd;
-        if (tecnico) P.tec[tecnico] = (P.tec[tecnico] || 0) + qtd;
-        if (!P.tipos[tipoOS]) P.tipos[tipoOS] = { total: 0, osSet: new Set() };
-        P.tipos[tipoOS].total += qtd;
-        if (m.id_ordem_servico) P.tipos[tipoOS].osSet.add(m.id_ordem_servico);
+        if (!prod[chave]) prod[chave] = { chave, nome, unidade, combos: new Map() };
+        const k = `${tecnico}||${tipoOS}`;
+        let c = prod[chave].combos.get(k);
+        if (!c) { c = { tecnico, tipo: tipoOS, qtd: 0, os: new Set() }; prod[chave].combos.set(k, c); }
+        c.qtd += qtd;
+        if (m.id_ordem_servico) c.os.add(m.id_ordem_servico);
       }
     }
 
-    const produtos = Object.values(prod)
-      .map(P => ({
-        chave: P.chave, nome: P.nome, unidade: P.unidade, total: P.total,
-        por_tecnico: Object.entries(P.tec).map(([nome, total]) => ({ nome, total }))
-          .sort((a, b) => b.total - a.total),
-        por_tipo_os: Object.entries(P.tipos).map(([tipo, v]) => ({ tipo, total: v.total, qtd_os: v.osSet.size }))
-          .sort((a, b) => b.total - a.total),
-      }))
-      .sort((a, b) => b.total - a.total);
+    // devolve as combinações técnico×tipo (o frontend filtra instantâneo)
+    const produtos = Object.values(prod).map(P => {
+      const combos = [...P.combos.values()].map(c => ({
+        tecnico: c.tecnico, tipo: c.tipo, qtd: c.qtd, os: [...c.os],
+      }));
+      const total = combos.reduce((s, c) => s + c.qtd, 0);
+      return { chave: P.chave, nome: P.nome, unidade: P.unidade, total, combos };
+    }).sort((a, b) => b.total - a.total);
 
     res.json({ periodo: { data_inicio: dataInicio, data_fim: dataFim }, produtos });
   } catch (e) {

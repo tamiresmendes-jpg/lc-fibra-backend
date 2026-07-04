@@ -115,23 +115,25 @@ async function listarProdutos() {
 
 // Lista ordens de serviço com a agenda (equipe/técnico) num intervalo de datas.
 // GET /api/v1/integracao/ordem_servico/todos?relacoes=agenda_ordem_servico
-async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 40 } = {}) {
-  const todas = [];
-  let pagina = 0;
-  let ultima = 0;
-  do {
-    const d = await apiGet('/api/v1/integracao/ordem_servico/todos', {
-      pagina,
-      itens_por_pagina: 100,
-      data_inicio: dataInicio,
-      data_fim: dataFim,
-      relacoes: 'agenda_ordem_servico,tecnicos',
-    });
-    const arr = d.ordens_servico || d.data || [];
-    todas.push(...arr);
-    ultima = d.paginacao?.ultima_pagina || pagina;
-    pagina++;
-  } while (pagina <= ultima && pagina <= maxPaginas);
+async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 60 } = {}) {
+  const buscarPagina = (pagina) => apiGet('/api/v1/integracao/ordem_servico/todos', {
+    pagina, itens_por_pagina: 100,
+    data_inicio: dataInicio, data_fim: dataFim,
+    relacoes: 'agenda_ordem_servico,tecnicos',
+  });
+
+  const primeira = await buscarPagina(0);
+  const todas = [...(primeira.ordens_servico || primeira.data || [])];
+  const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
+
+  const restantes = [];
+  for (let p = 1; p <= ultima; p++) restantes.push(p);
+  const CONC = 6;
+  for (let i = 0; i < restantes.length; i += CONC) {
+    const lote = restantes.slice(i, i + CONC);
+    const resultados = await Promise.all(lote.map(buscarPagina));
+    for (const d of resultados) todas.push(...(d.ordens_servico || d.data || []));
+  }
   return todas;
 }
 
@@ -174,20 +176,26 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
 // Movimentos de estoque (entradas/saídas) num intervalo. itens_por_pagina máx 500.
 // tipoVinculoDestino: filtra no servidor (ex: 'servico_cliente' = só saídas p/ cliente)
 async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300 } = {}) {
-  const todos = [];
-  let pagina = 0, ultima = 0;
-  do {
-    const d = await apiGet('/api/v1/integracao/estoque/movimento_estoque', {
-      pagina, itens_por_pagina: 500,
-      data_inicio: dataInicio, data_fim: dataFim,
-      tipo_data: 'movimento',
-      ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
-    });
-    const arr = d.movimentos_estoque || d.data || [];
-    todos.push(...arr);
-    ultima = d.paginacao?.ultima_pagina || pagina;
-    pagina++;
-  } while (pagina <= ultima && pagina <= maxPaginas);
+  const buscarPagina = (pagina) => apiGet('/api/v1/integracao/estoque/movimento_estoque', {
+    pagina, itens_por_pagina: 500,
+    data_inicio: dataInicio, data_fim: dataFim,
+    tipo_data: 'movimento',
+    ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
+  });
+
+  const primeira = await buscarPagina(0);
+  const todos = [...(primeira.movimentos_estoque || primeira.data || [])];
+  const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
+
+  // demais páginas em paralelo (lotes de 6 para não sobrecarregar a API)
+  const restantes = [];
+  for (let p = 1; p <= ultima; p++) restantes.push(p);
+  const CONC = 6;
+  for (let i = 0; i < restantes.length; i += CONC) {
+    const lote = restantes.slice(i, i + CONC);
+    const resultados = await Promise.all(lote.map(buscarPagina));
+    for (const d of resultados) todos.push(...(d.movimentos_estoque || d.data || []));
+  }
   return todos;
 }
 
