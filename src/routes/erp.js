@@ -500,13 +500,16 @@ router.get('/analise-produto', async (req, res) => {
     // prod[chave] = { nome, unidade, total, tec:{}, tipos:{ tipo:{total, osSet} } }
     const prod = {};
     for (const m of movimentos) {
+      // Só material lançado através de uma OS (ignora livros digitais,
+      // transferências entre estoques e outras saídas sem ordem de serviço).
+      if (!m.id_ordem_servico) continue;
+
       // Técnico só quando a ORIGEM é um usuário; se a origem é um local de
-      // estoque (transferência/saída de estoque), não conta como técnico.
+      // estoque, não conta como técnico.
       const tecnico = m.vinculo_origem?.tipo_vinculo === 'usuario'
         ? (m.vinculo_origem.display || '(sem técnico)')
         : null;
-      const temOS = !!m.id_ordem_servico;
-      const tipoOS = temOS ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período') : 'Sem OS (ex: livro digital)';
+      const tipoOS = tipoPorOS[m.id_ordem_servico] || 'OS fora do período';
       for (const p of (m.produtos || [])) {
         const { nome, unidade } = parseProduto(p.produto);
         const chave = String(p.id_produto);
@@ -518,7 +521,7 @@ router.get('/analise-produto', async (req, res) => {
         if (tecnico) P.tec[tecnico] = (P.tec[tecnico] || 0) + qtd;
         if (!P.tipos[tipoOS]) P.tipos[tipoOS] = { total: 0, osSet: new Set() };
         P.tipos[tipoOS].total += qtd;
-        if (temOS) P.tipos[tipoOS].osSet.add(m.id_ordem_servico);
+        P.tipos[tipoOS].osSet.add(m.id_ordem_servico);
       }
     }
 
