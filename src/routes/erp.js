@@ -473,8 +473,15 @@ router.get('/analise-produto', async (req, res) => {
       hubsoft.listarMovimentosEstoque({ dataInicio, dataFim }),
       hubsoft.listarOrdensServico({ dataInicio, dataFim }),
     ]);
-    // considera só as SAÍDAS (consumo); entradas/retornos ficam de fora
-    const movimentos = movTodos.filter(m => m.tipo === 'saida');
+    // Só o que SAIU PARA O CLIENTE:
+    //  - tipo = saída (exclui entradas/retornos, ex: REMOÇÃO/CANCELAMENTO)
+    //  - destino = serviço do cliente (exclui transferências e saídas p/ técnico/estoque)
+    //  - com OS vinculada (exclui livros digitais e saídas soltas)
+    const movimentos = movTodos.filter(m =>
+      m.tipo === 'saida' &&
+      m.vinculo_destino?.tipo_vinculo === 'servico_cliente' &&
+      m.id_ordem_servico
+    );
 
     const tipoPorOS = {};
     for (const o of ordens) tipoPorOS[o.id_ordem_servico] = o.tipo || 'Sem tipo';
