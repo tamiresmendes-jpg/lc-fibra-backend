@@ -473,14 +473,12 @@ router.get('/analise-produto', async (req, res) => {
       hubsoft.listarMovimentosEstoque({ dataInicio, dataFim }),
       hubsoft.listarOrdensServico({ dataInicio, dataFim }),
     ]);
-    // Só o que SAIU PARA O CLIENTE:
-    //  - tipo = saída (exclui entradas/retornos, ex: REMOÇÃO/CANCELAMENTO)
-    //  - destino = serviço do cliente (exclui transferências e saídas p/ técnico/estoque)
-    //  - com OS vinculada (exclui livros digitais e saídas soltas)
+    // PADRÃO ÚNICO da análise: "saída para o cliente".
+    // = movimento de SAÍDA cujo destino é o serviço do cliente.
+    // Todas as seções (total, por técnico, por tipo de OS) usam este mesmo critério.
     const movimentos = movTodos.filter(m =>
       m.tipo === 'saida' &&
-      m.vinculo_destino?.tipo_vinculo === 'servico_cliente' &&
-      m.id_ordem_servico
+      m.vinculo_destino?.tipo_vinculo === 'servico_cliente'
     );
 
     const tipoPorOS = {};
@@ -507,16 +505,14 @@ router.get('/analise-produto', async (req, res) => {
     // prod[chave] = { nome, unidade, total, tec:{}, tipos:{ tipo:{total, osSet} } }
     const prod = {};
     for (const m of movimentos) {
-      // Só material lançado através de uma OS (ignora livros digitais,
-      // transferências entre estoques e outras saídas sem ordem de serviço).
-      if (!m.id_ordem_servico) continue;
-
       // Técnico só quando a ORIGEM é um usuário; se a origem é um local de
       // estoque, não conta como técnico.
       const tecnico = m.vinculo_origem?.tipo_vinculo === 'usuario'
         ? (m.vinculo_origem.display || '(sem técnico)')
         : null;
-      const tipoOS = tipoPorOS[m.id_ordem_servico] || 'OS fora do período';
+      const tipoOS = m.id_ordem_servico
+        ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período')
+        : 'Sem O.S.';
       for (const p of (m.produtos || [])) {
         const { nome, unidade } = parseProduto(p.produto);
         const chave = String(p.id_produto);
@@ -528,7 +524,7 @@ router.get('/analise-produto', async (req, res) => {
         if (tecnico) P.tec[tecnico] = (P.tec[tecnico] || 0) + qtd;
         if (!P.tipos[tipoOS]) P.tipos[tipoOS] = { total: 0, osSet: new Set() };
         P.tipos[tipoOS].total += qtd;
-        P.tipos[tipoOS].osSet.add(m.id_ordem_servico);
+        if (m.id_ordem_servico) P.tipos[tipoOS].osSet.add(m.id_ordem_servico);
       }
     }
 
