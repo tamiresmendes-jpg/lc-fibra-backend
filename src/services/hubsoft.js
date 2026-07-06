@@ -89,14 +89,22 @@ async function apiGet(caminho, params = {}) {
 
 // ── Paginador paralelo genérico ─────────────────────────────────────────────
 // Busca a 1ª página (para saber o total) e as demais em paralelo (lotes de `conc`).
+class CanceladoError extends Error { constructor() { super('CANCELADO'); this.cancelado = true; } }
+async function checarCancelamento(deveCancelar) {
+  if (deveCancelar && await deveCancelar()) throw new CanceladoError();
+}
+
 // conc mantido baixo (3) de propósito: reduz o pico de carga no servidor do ERP.
-async function buscarTodasPaginas(fetchPagina, { extrair, maxPaginas = 60, conc = 3 } = {}) {
+// deveCancelar: callback async opcional; se retornar true entre lotes, aborta a busca.
+async function buscarTodasPaginas(fetchPagina, { extrair, maxPaginas = 60, conc = 3, deveCancelar } = {}) {
+  await checarCancelamento(deveCancelar);
   const primeira = await fetchPagina(0);
   const todos = [...extrair(primeira)];
   const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
   const restantes = [];
   for (let p = 1; p <= ultima; p++) restantes.push(p);
   for (let i = 0; i < restantes.length; i += conc) {
+    await checarCancelamento(deveCancelar);
     const lote = restantes.slice(i, i + conc);
     const resultados = await Promise.all(lote.map(fetchPagina));
     for (const d of resultados) todos.push(...extrair(d));
@@ -167,7 +175,7 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
 
 // Movimentos de estoque (entradas/saídas) num intervalo. itens_por_pagina máx 500.
 // tipoVinculoDestino: filtra no servidor (ex: 'servico_cliente' = só saídas p/ cliente)
-async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300 } = {}) {
+async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300, deveCancelar } = {}) {
   return buscarTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/estoque/movimento_estoque', {
       pagina, itens_por_pagina: 500,
@@ -175,13 +183,13 @@ async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino
       tipo_data: 'movimento',
       ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
     }),
-    { extrair: d => d.movimentos_estoque || d.data || [], maxPaginas }
+    { extrair: d => d.movimentos_estoque || d.data || [], maxPaginas, deveCancelar }
   );
 }
 
 // Busca o tipo de várias OSs por ID via GraphQL (em lotes com aliases).
 // Retorna um mapa { id_ordem_servico: tipoDescricao }.
-async function buscarTiposOSPorId(ids = []) {
+async function buscarTiposOSPorId(ids = [], deveCancelar) {
   const mapa = {};
   const unicos = [...new Set(ids.filter(Boolean).map(Number))];
   if (!unicos.length) return mapa;
@@ -192,6 +200,7 @@ async function buscarTiposOSPorId(ids = []) {
 
   const LOTE = 50;
   for (let i = 0; i < unicos.length; i += LOTE) {
+    await checarCancelamento(deveCancelar);
     const chunk = unicos.slice(i, i + LOTE);
     const campos = chunk
       .map((id) => `os${id}: ordemServicoById(id_ordem_servico: ${id}) { id_ordem_servico tipo_ordem_servico { descricao } }`)
@@ -224,5 +233,5 @@ async function listarClientes({ busca } = {}) {
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
-  buscarTiposOSPorId, getToken,
+  buscarTiposOSPorId, getToken, CanceladoError,
 };

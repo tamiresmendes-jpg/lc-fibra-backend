@@ -480,8 +480,8 @@ router.get('/materiais-por-os', async (req, res) => {
 });
 
 // Lógica pesada da análise de produto (saídas para o cliente por técnico e tipo de OS).
-async function calcularAnaliseProduto(dataInicio, dataFim) {
-  const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim });
+async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
+  const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim, deveCancelar });
 
   // PADRÃO ÚNICO: "saída para o cliente".
   const movimentos = movTodos.filter(m =>
@@ -489,7 +489,7 @@ async function calcularAnaliseProduto(dataInicio, dataFim) {
   );
 
   const idsOS = [...new Set(movimentos.map(m => m.id_ordem_servico).filter(Boolean))];
-  const tipoPorOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS) : {};
+  const tipoPorOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS, deveCancelar) : {};
 
   const parseProduto = (str) => {
     const s = String(str || '');
@@ -533,14 +533,20 @@ async function calcularAnaliseProduto(dataInicio, dataFim) {
 
 // Processa em segundo plano e grava no cache (não bloqueia a resposta HTTP).
 async function processarCacheAnalise(id, empresaId, dataInicio, dataFim) {
+  // Verifica, entre os lotes, se o usuário pediu para parar (status='cancelado').
+  const deveCancelar = async () => {
+    try { const r = await db.get('SELECT status FROM erp_analise_cache WHERE id=?', [id]); return r?.status === 'cancelado'; }
+    catch { return false; }
+  };
   try {
-    const resultado = await calcularAnaliseProduto(dataInicio, dataFim);
+    const resultado = await calcularAnaliseProduto(dataInicio, dataFim, deveCancelar);
     await db.run(
       `UPDATE erp_analise_cache SET status='pronto', dados=?, erro=NULL,
-         updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=?`,
+         updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=? AND status<>'cancelado'`,
       [JSON.stringify(resultado), id]
     );
   } catch (e) {
+    if (e && e.cancelado) return; // parada solicitada — deixa como 'cancelado'
     console.error('Erro ao processar análise em background:', e.message);
     await db.run(
       `UPDATE erp_analise_cache SET status='erro', erro=?,
@@ -549,6 +555,23 @@ async function processarCacheAnalise(id, empresaId, dataInicio, dataFim) {
     ).catch(() => {});
   }
 }
+
+// ── POST /api/erp/analise-produto/cancelar — para a busca em andamento ──
+router.post('/analise-produto/cancelar', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.body.data_inicio || req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.body.data_fim || req.query.data_fim || iso(hoje);
+    await db.run(
+      `UPDATE erp_analise_cache SET status='cancelado',
+         updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+       WHERE empresa_id=? AND data_inicio=? AND data_fim=? AND status='processando'`,
+      [req.usuario.empresa_id, dataInicio, dataFim]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
 
 // ── GET /api/erp/analise-produto — com cache + processamento em segundo plano ──
 // Respostas: { status:'pronto', ...dados } | { status:'processando' } | { status:'erro', erro }
