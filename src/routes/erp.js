@@ -560,6 +560,33 @@ async function processarCacheAnalise(id, empresaId, dataInicio, dataFim) {
   }
 }
 
+// Gera e grava no cache a análise de um período (usado pela rotina diária das 4h).
+async function sincronizarAnalise(empresaId, dataInicio, dataFim) {
+  const cache = await db.get('SELECT id FROM erp_analise_cache WHERE empresa_id=? AND data_inicio=? AND data_fim=?', [empresaId, dataInicio, dataFim]);
+  const id = cache?.id || uuidv4();
+  if (cache) await db.run("UPDATE erp_analise_cache SET status='processando', erro=NULL WHERE id=?", [id]);
+  else await db.run("INSERT INTO erp_analise_cache (id, empresa_id, data_inicio, data_fim, status) VALUES (?,?,?,?,'processando')", [id, empresaId, dataInicio, dataFim]);
+  await processarCacheAnalise(id, empresaId, dataInicio, dataFim);
+}
+
+// Sincroniza mês atual + mês anterior de todas as empresas (chamada pelo cron).
+async function sincronizarTodas() {
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const hoje = new Date();
+  const periodos = [
+    [new Date(hoje.getFullYear(), hoje.getMonth(), 1), new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0)],
+    [new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1), new Date(hoje.getFullYear(), hoje.getMonth(), 0)],
+  ];
+  const empresas = await db.all('SELECT id, nome FROM empresas');
+  for (const emp of empresas) {
+    for (const [di, df] of periodos) {
+      const p = `${iso(di)}..${iso(df)}`;
+      try { console.log(`[sync-analise] ${emp.nome || emp.id} ${p}`); await sincronizarAnalise(emp.id, iso(di), iso(df)); }
+      catch (e) { console.error(`[sync-analise] falha ${emp.id} ${p}:`, e.message); }
+    }
+  }
+}
+
 // ── GET /api/erp/analise-produto/salvos — lista os períodos já salvos (cache) ──
 router.get('/analise-produto/salvos', async (req, res) => {
   try {
@@ -610,13 +637,15 @@ router.get('/analise-produto', async (req, res) => {
       return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
     }
 
-    // Processando: se travou há mais de 10 min, reprocessa; senão, avisa
-    if (cache && cache.status === 'processando' && !forcar) {
-      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 10 * 60 * 1000;
-      if (!velho) return res.json({ status: 'processando' });
+    // SEM forçar: NÃO consulta o ERP (evita sobrecarga). O relatório é alimentado
+    // pela rotina diária das 4h. Devolve o estado do cache.
+    if (!forcar) {
+      if (cache && cache.status === 'processando') return res.json({ status: 'processando' });
+      if (cache && cache.status === 'erro') return res.json({ status: 'erro', erro: cache.erro });
+      return res.json({ status: 'sem_cache' });
     }
 
-    // Cria/atualiza a linha como "processando" e dispara o processamento
+    // forcar=1 → processa consultando o ERP (uso manual "Reprocessar" ou a rotina diária)
     const id = cache?.id || uuidv4();
     if (cache) {
       await db.run(`UPDATE erp_analise_cache SET status='processando', erro=NULL,
@@ -1053,3 +1082,5 @@ router.post('/consultar', async (req, res) => {
 });
 
 module.exports = router;
+module.exports.sincronizarTodas = sincronizarTodas;
+module.exports.sincronizarAnalise = sincronizarAnalise;
