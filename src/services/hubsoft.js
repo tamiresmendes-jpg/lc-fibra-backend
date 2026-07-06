@@ -87,6 +87,23 @@ async function apiGet(caminho, params = {}) {
   return resp.json();
 }
 
+// ── Paginador paralelo genérico ─────────────────────────────────────────────
+// Busca a 1ª página (para saber o total) e as demais em paralelo (lotes de `conc`).
+// conc mantido baixo (3) de propósito: reduz o pico de carga no servidor do ERP.
+async function buscarTodasPaginas(fetchPagina, { extrair, maxPaginas = 60, conc = 3 } = {}) {
+  const primeira = await fetchPagina(0);
+  const todos = [...extrair(primeira)];
+  const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
+  const restantes = [];
+  for (let p = 1; p <= ultima; p++) restantes.push(p);
+  for (let i = 0; i < restantes.length; i += conc) {
+    const lote = restantes.slice(i, i + conc);
+    const resultados = await Promise.all(lote.map(fetchPagina));
+    for (const d of resultados) todos.push(...extrair(d));
+  }
+  return todos;
+}
+
 // ── Consultas de negócio ────────────────────────────────────────────────────
 
 // Lista equipamentos de rede (roteadores, access points, ONUs, etc.)
@@ -100,61 +117,36 @@ async function listarEquipamentos() {
 // Lista produtos do estoque (catálogo). Varre todas as páginas.
 // GET /api/v1/integracao/estoque/produto?pagina=N
 async function listarProdutos() {
-  const todos = [];
-  let pagina = 0;
-  let ultima = 0;
-  do {
-    const d = await apiGet('/api/v1/integracao/estoque/produto', { pagina });
-    const arr = d.produtos || d.data || [];
-    todos.push(...arr);
-    ultima = d.paginacao?.ultima_pagina || pagina;
-    pagina++;
-  } while (pagina <= ultima && pagina <= 50); // trava de segurança
-  return todos;
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/estoque/produto', { pagina }),
+    { extrair: d => d.produtos || d.data || [], maxPaginas: 50 }
+  );
 }
 
 // Lista ordens de serviço com a agenda (equipe/técnico) num intervalo de datas.
 // GET /api/v1/integracao/ordem_servico/todos?relacoes=agenda_ordem_servico
 async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 60 } = {}) {
-  const buscarPagina = (pagina) => apiGet('/api/v1/integracao/ordem_servico/todos', {
-    pagina, itens_por_pagina: 100,
-    data_inicio: dataInicio, data_fim: dataFim,
-    relacoes: 'agenda_ordem_servico,tecnicos',
-  });
-
-  const primeira = await buscarPagina(0);
-  const todas = [...(primeira.ordens_servico || primeira.data || [])];
-  const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
-
-  const restantes = [];
-  for (let p = 1; p <= ultima; p++) restantes.push(p);
-  const CONC = 6;
-  for (let i = 0; i < restantes.length; i += CONC) {
-    const lote = restantes.slice(i, i + CONC);
-    const resultados = await Promise.all(lote.map(buscarPagina));
-    for (const d of resultados) todas.push(...(d.ordens_servico || d.data || []));
-  }
-  return todas;
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/ordem_servico/todos', {
+      pagina, itens_por_pagina: 100,
+      data_inicio: dataInicio, data_fim: dataFim,
+      relacoes: 'agenda_ordem_servico,tecnicos',
+    }),
+    { extrair: d => d.ordens_servico || d.data || [], maxPaginas }
+  );
 }
 
 // Paginador genérico para endpoints /todos com data_inicio/data_fim
 async function listarPaginado(caminho, { dataInicio, dataFim, relacoes, extra = {}, chaveArray, maxPaginas = 60 } = {}) {
-  const todos = [];
-  let pagina = 0, ultima = 0;
-  do {
-    const d = await apiGet(caminho, {
+  return buscarTodasPaginas(
+    (pagina) => apiGet(caminho, {
       pagina, itens_por_pagina: 100,
       data_inicio: dataInicio, data_fim: dataFim,
       ...(relacoes ? { relacoes } : {}),
       ...extra,
-    });
-    const key = chaveArray || Object.keys(d).find(k => Array.isArray(d[k]));
-    const arr = key ? d[key] : [];
-    todos.push(...arr);
-    ultima = d.paginacao?.ultima_pagina || pagina;
-    pagina++;
-  } while (pagina <= ultima && pagina <= maxPaginas);
-  return todos;
+    }),
+    { extrair: d => { const key = chaveArray || Object.keys(d).find(k => Array.isArray(d[k])); return key ? d[key] : []; }, maxPaginas }
+  );
 }
 
 // Faturas (financeiro) num intervalo de vencimento
@@ -176,27 +168,15 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
 // Movimentos de estoque (entradas/saídas) num intervalo. itens_por_pagina máx 500.
 // tipoVinculoDestino: filtra no servidor (ex: 'servico_cliente' = só saídas p/ cliente)
 async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300 } = {}) {
-  const buscarPagina = (pagina) => apiGet('/api/v1/integracao/estoque/movimento_estoque', {
-    pagina, itens_por_pagina: 500,
-    data_inicio: dataInicio, data_fim: dataFim,
-    tipo_data: 'movimento',
-    ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
-  });
-
-  const primeira = await buscarPagina(0);
-  const todos = [...(primeira.movimentos_estoque || primeira.data || [])];
-  const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
-
-  // demais páginas em paralelo (lotes de 6 para não sobrecarregar a API)
-  const restantes = [];
-  for (let p = 1; p <= ultima; p++) restantes.push(p);
-  const CONC = 6;
-  for (let i = 0; i < restantes.length; i += CONC) {
-    const lote = restantes.slice(i, i + CONC);
-    const resultados = await Promise.all(lote.map(buscarPagina));
-    for (const d of resultados) todos.push(...(d.movimentos_estoque || d.data || []));
-  }
-  return todos;
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/estoque/movimento_estoque', {
+      pagina, itens_por_pagina: 500,
+      data_inicio: dataInicio, data_fim: dataFim,
+      tipo_data: 'movimento',
+      ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
+    }),
+    { extrair: d => d.movimentos_estoque || d.data || [], maxPaginas }
+  );
 }
 
 // Busca o tipo de várias OSs por ID via GraphQL (em lotes com aliases).
@@ -235,18 +215,10 @@ async function buscarTiposOSPorId(ids = []) {
 
 // Clientes (com busca opcional por nome/CPF/código)
 async function listarClientes({ busca } = {}) {
-  const todos = [];
-  let pagina = 0, ultima = 0;
-  do {
-    const d = await apiGet('/api/v1/integracao/cliente/todos', {
-      pagina, itens_por_pagina: 100, ...(busca ? { busca } : {}),
-    });
-    const arr = d.clientes || d.data || [];
-    todos.push(...arr);
-    ultima = d.paginacao?.ultima_pagina || pagina;
-    pagina++;
-  } while (pagina <= ultima && pagina <= 60);
-  return todos;
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/cliente/todos', { pagina, itens_por_pagina: 100, ...(busca ? { busca } : {}) }),
+    { extrair: d => d.clientes || d.data || [], maxPaginas: 60 }
+  );
 }
 
 module.exports = {
