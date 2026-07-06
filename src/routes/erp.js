@@ -13,9 +13,27 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const { autenticar } = require('../middleware/auth');
 const hubsoft = require('../services/hubsoft');
+const { get: pget } = require('../config/database');
+const { buscarPermsEfetivas, temPermissaoServer } = require('../utils/permissoes');
 
 const router = express.Router();
 router.use(autenticar);
+
+// Bloqueia o acesso ao ERP (inclusive leitura) para quem não tem 'erp.consultar'.
+router.use(async (req, res, next) => {
+  try {
+    if (req.usuario.perfil === 'admin') return next();
+    let ownPerms = null;
+    try {
+      const u = await pget('SELECT permissoes_modulos FROM usuarios WHERE id = ?', [req.usuario.id]);
+      if (u?.permissoes_modulos) ownPerms = JSON.parse(u.permissoes_modulos);
+    } catch { ownPerms = null; }
+    const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
+    if (!perms) return next(); // sem restrição configurada → liberado
+    if (temPermissaoServer(perms, 'erp.consultar', 'visualizar')) return next();
+    return res.status(403).json({ erro: 'Você não tem permissão para acessar o ERP.' });
+  } catch { return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); }
+});
 
 function getClient() {
   const key = process.env.ANTHROPIC_API_KEY;
