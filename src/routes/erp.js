@@ -528,7 +528,11 @@ async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
     return { chave: P.chave, nome: P.nome, unidade: P.unidade, total, combos };
   }).sort((a, b) => b.total - a.total);
 
-  return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, produtos };
+  return {
+    periodo: { data_inicio: dataInicio, data_fim: dataFim },
+    produtos,
+    _diag: { movimentos_lidos: movTodos.length, saidas_cliente: movimentos.length, os_consultadas: idsOS.length },
+  };
 }
 
 // Processa em segundo plano e grava no cache (não bloqueia a resposta HTTP).
@@ -555,6 +559,18 @@ async function processarCacheAnalise(id, empresaId, dataInicio, dataFim) {
     ).catch(() => {});
   }
 }
+
+// ── GET /api/erp/analise-produto/salvos — lista os períodos já salvos (cache) ──
+router.get('/analise-produto/salvos', async (req, res) => {
+  try {
+    const rows = await db.all(
+      `SELECT data_inicio, data_fim, updated_at FROM erp_analise_cache
+       WHERE empresa_id=? AND status='pronto' ORDER BY data_inicio DESC`,
+      [req.usuario.empresa_id]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
 
 // ── POST /api/erp/analise-produto/cancelar — para a busca em andamento ──
 router.post('/analise-produto/cancelar', async (req, res) => {
