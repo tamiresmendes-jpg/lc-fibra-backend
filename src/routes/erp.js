@@ -632,20 +632,18 @@ router.get('/analise-produto', async (req, res) => {
       [empresaId, dataInicio, dataFim]
     );
 
-    // Já pronto (e sem forçar) → devolve na hora
+    // Período já salvo → devolve do BANCO LOCAL (cache), na hora, sem tocar no ERP.
     if (cache && cache.status === 'pronto' && !forcar) {
       return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
     }
 
-    // SEM forçar: NÃO consulta o ERP (evita sobrecarga). O relatório é alimentado
-    // pela rotina diária das 4h. Devolve o estado do cache.
-    if (!forcar) {
-      if (cache && cache.status === 'processando') return res.json({ status: 'processando' });
-      if (cache && cache.status === 'erro') return res.json({ status: 'erro', erro: cache.erro });
-      return res.json({ status: 'sem_cache' });
+    // Já em processamento → avisa; só reprocessa se travou há mais de 10 min.
+    if (cache && cache.status === 'processando' && !forcar) {
+      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 10 * 60 * 1000;
+      if (!velho) return res.json({ status: 'processando' });
     }
 
-    // forcar=1 → processa consultando o ERP (uso manual "Reprocessar" ou a rotina diária)
+    // Período NÃO salvo (ou forçar/erro/travado) → consulta o ERP uma vez e salva no cache.
     const id = cache?.id || uuidv4();
     if (cache) {
       await db.run(`UPDATE erp_analise_cache SET status='processando', erro=NULL,
