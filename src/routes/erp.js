@@ -607,6 +607,25 @@ async function sincronizarTodas() {
   }
 }
 
+// ── GET /api/erp/produtos-precos — preço (valor_compra) de cada produto do catálogo ──
+// Cache em memória de 12h para não consultar o ERP a cada acesso.
+let _precosCache = { mapa: null, ts: 0 };
+router.get('/produtos-precos', async (req, res) => {
+  try {
+    const forcar = req.query.forcar === '1';
+    if (!forcar && _precosCache.mapa && (Date.now() - _precosCache.ts) < 12 * 3600 * 1000) {
+      return res.json({ precos: _precosCache.mapa, do_cache: true });
+    }
+    const produtos = await hubsoft.listarProdutos();
+    const mapa = {};
+    for (const p of produtos) {
+      mapa[String(p.id_produto)] = { compra: Number(p.valor_compra || 0), venda: Number(p.valor_venda || 0) };
+    }
+    _precosCache = { mapa, ts: Date.now() };
+    res.json({ precos: mapa, do_cache: false });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── GET /api/erp/analise-produto/salvos — lista os períodos já salvos (cache) ──
 router.get('/analise-produto/salvos', async (req, res) => {
   try {
