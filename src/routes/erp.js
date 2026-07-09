@@ -619,6 +619,19 @@ router.get('/analise-produto/salvos', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── DELETE /api/erp/analise-produto/salvos — exclui um relatório salvo (cache) ──
+router.delete('/analise-produto/salvos', async (req, res) => {
+  try {
+    const { data_inicio, data_fim } = req.query;
+    if (!data_inicio || !data_fim) return res.status(400).json({ erro: 'Período obrigatório' });
+    await db.run(
+      'DELETE FROM erp_analise_cache WHERE empresa_id=? AND data_inicio=? AND data_fim=?',
+      [req.usuario.empresa_id, data_inicio, data_fim]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── POST /api/erp/analise-produto/cancelar — para a busca em andamento ──
 router.post('/analise-produto/cancelar', async (req, res) => {
   try {
