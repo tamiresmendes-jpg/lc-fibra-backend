@@ -527,22 +527,25 @@ async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
       const { nome, unidade } = parseProduto(p.produto);
       const chave = String(p.id_produto);
       const qtd = Number(p.quantidade || 0);
+      const valor = Number(p.valor || 0); // valor total da linha (R$)
       if (qtd <= 0) continue;
       if (!prod[chave]) prod[chave] = { chave, nome, unidade, combos: new Map() };
       const k = `${tecnico}||${tipoOS}`;
       let c = prod[chave].combos.get(k);
-      if (!c) { c = { tecnico, tipo: tipoOS, qtd: 0, os: new Set() }; prod[chave].combos.set(k, c); }
+      if (!c) { c = { tecnico, tipo: tipoOS, qtd: 0, valor: 0, os: new Set() }; prod[chave].combos.set(k, c); }
       c.qtd += qtd;
+      c.valor += valor;
       if (m.id_ordem_servico) c.os.add(m.id_ordem_servico);
     }
   }
 
   const produtos = Object.values(prod).map(P => {
     const combos = [...P.combos.values()].map(c => ({
-      tecnico: c.tecnico, tipo: c.tipo, qtd: c.qtd, os: [...c.os],
+      tecnico: c.tecnico, tipo: c.tipo, qtd: c.qtd, valor: c.valor, os: [...c.os],
     }));
     const total = combos.reduce((s, c) => s + c.qtd, 0);
-    return { chave: P.chave, nome: P.nome, unidade: P.unidade, total, combos };
+    const totalValor = combos.reduce((s, c) => s + c.valor, 0);
+    return { chave: P.chave, nome: P.nome, unidade: P.unidade, total, totalValor, combos };
   }).sort((a, b) => b.total - a.total);
 
   return {
