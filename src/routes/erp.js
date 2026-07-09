@@ -589,20 +589,32 @@ async function sincronizarAnalise(empresaId, dataInicio, dataFim) {
   await processarCacheAnalise(id, empresaId, dataInicio, dataFim);
 }
 
-// Sincroniza mês atual + mês anterior de todas as empresas (chamada pelo cron).
+// Sincroniza de Janeiro até o mês atual, de todas as empresas (chamada pelo cron das 4h).
+// Mês atual e anterior sempre atualizam; meses fechados já salvos não repetem a
+// consulta ao ERP (não mudam) — puxa uma vez e mantém no cache.
 async function sincronizarTodas() {
   const iso = (d) => d.toISOString().slice(0, 10);
   const hoje = new Date();
-  const periodos = [
-    [new Date(hoje.getFullYear(), hoje.getMonth(), 1), new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0)],
-    [new Date(hoje.getFullYear(), hoje.getMonth() - 1, 1), new Date(hoje.getFullYear(), hoje.getMonth(), 0)],
-  ];
+  const ano = hoje.getFullYear();
+  const mesAtual = hoje.getMonth(); // 0-based
+  const periodos = [];
+  for (let m = 0; m <= mesAtual; m++) {
+    periodos.push([new Date(ano, m, 1), new Date(ano, m + 1, 0)]);
+  }
   const empresas = await db.all('SELECT id, nome FROM empresas');
   for (const emp of empresas) {
-    for (const [di, df] of periodos) {
+    for (let i = 0; i < periodos.length; i++) {
+      const [di, df] = periodos[i];
       const p = `${iso(di)}..${iso(df)}`;
-      try { console.log(`[sync-analise] ${emp.nome || emp.id} ${p}`); await sincronizarAnalise(emp.id, iso(di), iso(df)); }
-      catch (e) { console.error(`[sync-analise] falha ${emp.id} ${p}:`, e.message); }
+      const ehRecente = i >= periodos.length - 2; // mês atual e anterior
+      try {
+        if (!ehRecente) {
+          const jaPronto = await db.get("SELECT id FROM erp_analise_cache WHERE empresa_id=? AND data_inicio=? AND data_fim=? AND status='pronto'", [emp.id, iso(di), iso(df)]);
+          if (jaPronto) { console.log(`[sync-analise] ${emp.nome || emp.id} ${p} — já salvo, pula`); continue; }
+        }
+        console.log(`[sync-analise] ${emp.nome || emp.id} ${p}`);
+        await sincronizarAnalise(emp.id, iso(di), iso(df));
+      } catch (e) { console.error(`[sync-analise] falha ${emp.id} ${p}:`, e.message); }
     }
   }
 }
