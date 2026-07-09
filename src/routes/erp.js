@@ -490,13 +490,9 @@ async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
   const bufferInicio = isoD(new Date(ini.getFullYear(), ini.getMonth(), ini.getDate() - 10));
   const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio: bufferInicio, dataFim, deveCancelar });
 
-  // PADRÃO: saída para o cliente, com ORIGEM = técnico (usuário) e plataforma APP.
-  // Não conta saídas direto do local de estoque nem lançadas pela WEB.
+  // PADRÃO ÚNICO: "saída para o cliente".
   const movimentos = movTodos.filter(m =>
-    m.tipo === 'saida' &&
-    m.vinculo_destino?.tipo_vinculo === 'servico_cliente' &&
-    m.vinculo_origem?.tipo_vinculo === 'usuario' &&
-    String(m.plataforma || '').toUpperCase() === 'APP'
+    m.tipo === 'saida' && m.vinculo_destino?.tipo_vinculo === 'servico_cliente'
   );
 
   const idsOS = [...new Set(movimentos.map(m => m.id_ordem_servico).filter(Boolean))];
