@@ -203,7 +203,7 @@ async function buscarTiposOSPorId(ids = [], deveCancelar) {
     await checarCancelamento(deveCancelar);
     const chunk = unicos.slice(i, i + LOTE);
     const campos = chunk
-      .map((id) => `os${id}: ordemServicoById(id_ordem_servico: ${id}) { id_ordem_servico tipo_ordem_servico { descricao } }`)
+      .map((id) => `os${id}: ordemServicoById(id_ordem_servico: ${id}) { id_ordem_servico data_termino_executado tipo_ordem_servico { descricao } }`)
       .join('\n');
     const query = `query { ${campos} }`;
     try {
@@ -215,7 +215,8 @@ async function buscarTiposOSPorId(ids = [], deveCancelar) {
       const json = await resp.json();
       const data = json.data || {};
       for (const v of Object.values(data)) {
-        if (v && v.id_ordem_servico) mapa[v.id_ordem_servico] = v.tipo_ordem_servico?.descricao || 'Sem tipo';
+        // Retorna { tipo, fechamento } por O.S. (fechamento = data_termino_executado)
+        if (v && v.id_ordem_servico) mapa[v.id_ordem_servico] = { tipo: v.tipo_ordem_servico?.descricao || 'Sem tipo', fechamento: v.data_termino_executado || null };
       }
     } catch { /* ignora lote com erro */ }
   }

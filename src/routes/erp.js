@@ -481,7 +481,14 @@ router.get('/materiais-por-os', async (req, res) => {
 
 // Lógica pesada da análise de produto (saídas para o cliente por técnico e tipo de OS).
 async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
-  const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio, dataFim, deveCancelar });
+  // A atribuição é pela DATA DE FECHAMENTO da O.S. (data_termino_executado).
+  // Como o movimento costuma ser no dia do fechamento, buscamos com uma folga de
+  // alguns dias antes para não perder O.S. fechadas no início do período cujo
+  // movimento tenha ficado no fim do período anterior.
+  const isoD = (d) => d.toISOString().slice(0, 10);
+  const ini = new Date(dataInicio + 'T00:00:00');
+  const bufferInicio = isoD(new Date(ini.getFullYear(), ini.getMonth(), ini.getDate() - 10));
+  const movTodos = await hubsoft.listarMovimentosEstoque({ dataInicio: bufferInicio, dataFim, deveCancelar });
 
   // PADRÃO ÚNICO: "saída para o cliente".
   const movimentos = movTodos.filter(m =>
@@ -489,7 +496,7 @@ async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
   );
 
   const idsOS = [...new Set(movimentos.map(m => m.id_ordem_servico).filter(Boolean))];
-  const tipoPorOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS, deveCancelar) : {};
+  const infoOS = idsOS.length ? await hubsoft.buscarTiposOSPorId(idsOS, deveCancelar) : {};
 
   const parseProduto = (str) => {
     const s = String(str || '');
@@ -498,14 +505,24 @@ async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
     return { nome, unidade: un.toUpperCase() };
   };
 
+  // dentro do período pela DATA DE FECHAMENTO da O.S. (fallback: data do movimento)
+  const noPeriodo = (d) => d && String(d).slice(0, 10) >= dataInicio && String(d).slice(0, 10) <= dataFim;
+
   const prod = {};
+  let porFechamento = 0, porMovimento = 0;
   for (const m of movimentos) {
+    const info = m.id_ordem_servico ? infoOS[m.id_ordem_servico] : null;
+    const fechamento = info?.fechamento || null;
+    // Critério do período: data de fechamento da O.S.; sem O.S./sem fechamento → data do movimento.
+    const dataRef = fechamento || m.data_movimento;
+    if (!noPeriodo(dataRef)) continue;
+    if (fechamento) porFechamento++; else porMovimento++;
     const tecnico = m.vinculo_origem?.tipo_vinculo === 'usuario'
       ? (m.vinculo_origem.display || 'Sem técnico')
       : 'Direto do estoque';
-    const tipoOS = m.id_ordem_servico
-      ? (tipoPorOS[m.id_ordem_servico] || 'OS fora do período')
-      : 'Sem O.S.';
+    const tipoOS = info?.tipo
+      ? info.tipo
+      : (m.id_ordem_servico ? 'OS fora do período' : 'Sem O.S.');
     for (const p of (m.produtos || [])) {
       const { nome, unidade } = parseProduto(p.produto);
       const chave = String(p.id_produto);
@@ -531,7 +548,7 @@ async function calcularAnaliseProduto(dataInicio, dataFim, deveCancelar) {
   return {
     periodo: { data_inicio: dataInicio, data_fim: dataFim },
     produtos,
-    _diag: { movimentos_lidos: movTodos.length, saidas_cliente: movimentos.length, os_consultadas: idsOS.length },
+    _diag: { movimentos_lidos: movTodos.length, saidas_cliente: movimentos.length, os_consultadas: idsOS.length, por_fechamento: porFechamento, por_movimento: porMovimento, criterio: 'data_fechamento_os' },
   };
 }
 
