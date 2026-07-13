@@ -1,4 +1,8 @@
 const PDFDocument = require('pdfkit');
+const fs = require('fs');
+const path = require('path');
+
+const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 
 const COR_PRIMARIA = '#7B55F1';
 const COR_TEXTO    = '#0f172a';
@@ -41,6 +45,156 @@ function stripHtml(html) {
     .trim();
 }
 
+// ── Renderização de HTML rico (títulos, listas, negrito, imagens, tabelas) ─────
+function decodeEntities(s) {
+  return String(s || '')
+    .replace(/&#(\d+);/g, (_, d) => { try { return String.fromCodePoint(Number(d)); } catch { return ''; } })
+    .replace(/&#x([0-9a-f]+);/gi, (_, h) => { try { return String.fromCodePoint(parseInt(h, 16)); } catch { return ''; } })
+    .replace(/&nbsp;/gi, ' ').replace(/&(apos|#39);/gi, "'")
+    .replace(/&amp;/gi, '&').replace(/&lt;/gi, '<').replace(/&gt;/gi, '>').replace(/&quot;/gi, '"');
+}
+
+// Carrega uma imagem do <img src> como Buffer (base64 ou arquivo em /uploads).
+function carregarImagem(src) {
+  try {
+    if (!src) return null;
+    if (src.startsWith('data:')) {
+      const b64 = src.split(',')[1];
+      return b64 ? Buffer.from(b64, 'base64') : null;
+    }
+    const mUp = src.match(/\/uploads\/([^?#"']+)/);
+    if (mUp) {
+      const fp = path.join(UPLOADS_DIR, decodeURIComponent(mUp[1]));
+      if (fs.existsSync(fp)) return fs.readFileSync(fp);
+    }
+  } catch { /* ignora */ }
+  return null; // URLs externas não são baixadas (evita dependências de rede)
+}
+
+function desenharImagem(doc, buf, indent) {
+  try {
+    const img = doc.openImage(buf);
+    const usableW = doc.page.width - doc.page.margins.left - doc.page.margins.right - indent - 4;
+    let w = img.width, h = img.height;
+    const escala = Math.min(1, usableW / w);
+    w *= escala; h *= escala;
+    const maxH = doc.page.height - doc.page.margins.top - doc.page.margins.bottom;
+    if (h > maxH) { const s2 = maxH / h; w *= s2; h *= s2; }
+    if (doc.y + h > doc.page.height - doc.page.margins.bottom) doc.addPage();
+    doc.image(img, doc.page.margins.left + indent, doc.y, { width: w });
+    doc.y += h + 8;
+  } catch { /* imagem inválida: ignora */ }
+}
+
+function parseTokens(html) {
+  const tokens = [];
+  const re = /<\/?([a-zA-Z0-9]+)([^>]*?)(\/?)>|([^<]+)/g;
+  let m;
+  while ((m = re.exec(html))) {
+    if (m[4] !== undefined) tokens.push({ t: 'text', text: decodeEntities(m[4]) });
+    else tokens.push({ t: m[0].startsWith('</') ? 'close' : 'open', name: m[1].toLowerCase(), attrs: m[2] || '' });
+  }
+  return tokens;
+}
+
+// Renderiza HTML do editor no PDF preservando estrutura, formatação e imagens.
+function renderRichHtml(doc, html, baseIndent = 10) {
+  const tokens = parseTokens(html);
+  let runs = [];
+  let bold = 0, italic = 0;
+  const listas = [];      // pilha { tipo:'ul'|'ol', n }
+  let heading = 0;        // nível de título atual (1-4)
+  let quote = false;
+  let capImg = false;     // dentro de <figcaption>
+  const left = doc.page.margins.left;
+
+  function nivelIndent() { return baseIndent + listas.length * 14; }
+
+  function flush(prefix, opts = {}) {
+    const texto = runs.map(r => r.text).join('');
+    if (!texto.trim() && !prefix) { runs = []; return; }
+    const indent = opts.indent != null ? opts.indent : nivelIndent();
+    const size = opts.size || 10;
+    const color = opts.color || '#374151';
+    doc.fillColor(color);
+    if (doc.y > doc.page.height - doc.page.margins.bottom - 20) doc.addPage();
+    let first = true;
+    const seq = runs.length ? runs : [{ text: '', bold: 0, italic: 0 }];
+    seq.forEach((r, i) => {
+      const b = r.bold || opts.bold, it = r.italic || opts.italic;
+      const font = b && it ? 'Helvetica-BoldOblique' : b ? 'Helvetica-Bold' : it ? 'Helvetica-Oblique' : 'Helvetica';
+      doc.font(font).fontSize(size);
+      const isLast = i === seq.length - 1;
+      const txt = (first && prefix ? prefix : '') + r.text;
+      first = false;
+      doc.text(txt, { continued: !isLast, indent, align: opts.align });
+    });
+    runs = [];
+    if (opts.gap !== 0) doc.moveDown(opts.gap || 0.25);
+  }
+
+  for (const tk of tokens) {
+    if (tk.t === 'text') {
+      const clean = tk.text.replace(/\s+/g, ' ');
+      if (capImg) { // legenda da imagem
+        if (clean.trim()) doc.fillColor(COR_SUBTEXTO).font('Helvetica-Oblique').fontSize(8)
+          .text(clean.trim(), { indent: baseIndent, align: 'center' });
+        continue;
+      }
+      if (clean) runs.push({ text: clean, bold, italic });
+      continue;
+    }
+    const n = tk.name;
+    if (tk.t === 'open') {
+      if (n === 'b' || n === 'strong') bold++;
+      else if (n === 'i' || n === 'em') italic++;
+      else if (n === 'br') runs.push({ text: '\n', bold, italic });
+      else if (n === 'p') flush();
+      else if (/^h[1-4]$/.test(n)) { flush(); heading = Number(n[1]); }
+      else if (n === 'blockquote') { flush(); quote = true; }
+      else if (n === 'ul') { flush(); listas.push({ tipo: 'ul' }); }
+      else if (n === 'ol') { flush(); listas.push({ tipo: 'ol', num: 0 }); }
+      else if (n === 'li') { flush(); }
+      else if (n === 'hr') {
+        flush();
+        doc.moveDown(0.2);
+        doc.moveTo(left + baseIndent, doc.y).lineTo(doc.page.width - doc.page.margins.right, doc.y)
+          .strokeColor(COR_BORDA).lineWidth(0.5).stroke();
+        doc.moveDown(0.4);
+      }
+      else if (n === 'img') {
+        flush();
+        const mSrc = tk.attrs.match(/src\s*=\s*"([^"]*)"/i) || tk.attrs.match(/src\s*=\s*'([^']*)'/i);
+        const buf = mSrc ? carregarImagem(mSrc[1]) : null;
+        if (buf) desenharImagem(doc, buf, baseIndent);
+      }
+      else if (n === 'figcaption') capImg = true;
+      else if (n === 'pre' || n === 'code') { /* tratado no texto */ }
+    } else { // close
+      if (n === 'b' || n === 'strong') bold = Math.max(0, bold - 1);
+      else if (n === 'i' || n === 'em') italic = Math.max(0, italic - 1);
+      else if (n === 'p') flush(null, { gap: 0.35 });
+      else if (/^h[1-4]$/.test(n)) {
+        const sz = { 1: 14, 2: 13, 3: 12, 4: 11 }[heading] || 12;
+        flush(null, { size: sz, bold: 1, color: COR_TEXTO, gap: 0.35 });
+        heading = 0;
+      }
+      else if (n === 'blockquote') { flush(null, { italic: 1, color: COR_SUBTEXTO, indent: baseIndent + 12, gap: 0.35 }); quote = false; }
+      else if (n === 'li') {
+        const lst = listas[listas.length - 1];
+        let prefix = '• ';
+        if (lst && lst.tipo === 'ol') { lst.num = (lst.num || 0) + 1; prefix = `${lst.num}. `; }
+        flush(prefix, { indent: nivelIndent(), gap: 0.15 });
+      }
+      else if (n === 'ul' || n === 'ol') { flush(); listas.pop(); }
+      else if (n === 'figcaption') capImg = false;
+    }
+  }
+  flush();
+}
+
+function ehHtml(s) { return typeof s === 'string' && /<(p|h[1-4]|ul|ol|li|img|figure|table|div|br|blockquote|strong|b|em|pre)\b|<hr/i.test(s); }
+
 function secao(doc, numero, titulo, conteudo) {
   doc.moveDown(0.5);
 
@@ -56,7 +210,10 @@ function secao(doc, numero, titulo, conteudo) {
 
   doc.moveDown(0.4);
 
-  // Conteúdo (sempre exibido — seções vazias mostram um marcador discreto)
+  // Conteúdo: HTML rico é renderizado com formatação e imagens; texto simples mantém o fluxo antigo.
+  if (ehHtml(conteudo)) {
+    renderRichHtml(doc, conteudo, 10);
+  } else {
   const texto = stripHtml(conteudo);
   if (texto) {
     doc.fillColor('#374151').font('Helvetica').fontSize(10);
@@ -67,6 +224,7 @@ function secao(doc, numero, titulo, conteudo) {
   } else {
     doc.fillColor('#94a3b8').font('Helvetica-Oblique').fontSize(9)
       .text('(seção não preenchida)', { indent: 10 });
+  }
   }
 
   doc.moveDown(0.6);
