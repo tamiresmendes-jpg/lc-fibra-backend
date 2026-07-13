@@ -1,31 +1,79 @@
 const { get, all } = require('../config/database');
 
 // ─────────────────────────────────────────────────────────────
-// Mescla de permissões (usuário + grupos). Nível mais alto vence:
-// editar > visualizar > false. Grupo/usuário sem restrição = acesso total.
+// Mescla de permissões (usuário + grupos). Regra: A MAIS RESTRITIVA VENCE.
+// Se QUALQUER fonte (grupo direto, grupo do departamento ou o próprio
+// usuário) bloquear um item, ele fica bloqueado. Assim, remover a permissão
+// em um grupo realmente esconde o item para a pessoa ("ser fiel").
+// editar > visualizar > bloqueado. Fonte sem restrição (null) = "não opina"
+// (não libera nem bloqueia). Se NENHUMA fonte tem restrição → acesso total.
 // ─────────────────────────────────────────────────────────────
+
+// Nível → rank (quanto maior, mais acesso). 3=editar, 2=visualizar, 0=bloqueado.
+function _rank(v) {
+  if (v === true || v === 'editar') return 3;
+  if (v === 'visualizar') return 2;
+  return 0; // false, null, undefined
+}
+function _nivelDeRank(r) {
+  if (r >= 3) return 'editar';
+  if (r === 2) return 'visualizar';
+  return false;
+}
+function _moduloBloqueado(v) {
+  return v === false || v == null || (typeof v === 'object' && v.enabled === false);
+}
+function _scalarRank(v) {
+  if (v === true || v === 'editar') return 3;
+  if (v === 'visualizar') return 2;
+  return null; // é objeto (permissões por item)
+}
+// Rank de um item específico dentro de um valor de módulo.
+// Item não listado num objeto = bloqueado (consistente com temPermissaoServer).
+function _itemRank(v, item) {
+  const s = _scalarRank(v);
+  if (s !== null) return s; // módulo escalar libera todos os itens no mesmo nível
+  return _rank(v?.itens?.[item]);
+}
+
+// Interseção (mais restritiva) entre dois valores de módulo já definidos.
+function _interseccaoModulo(va, vb) {
+  if (_moduloBloqueado(va) || _moduloBloqueado(vb)) return false;
+  const ra = _scalarRank(va), rb = _scalarRank(vb);
+  if (ra !== null && rb !== null) return _nivelDeRank(Math.min(ra, rb));
+  // Ao menos um é objeto por item → resultado por item.
+  const chaves = new Set([
+    ...(typeof va === 'object' ? Object.keys(va.itens || {}) : []),
+    ...(typeof vb === 'object' ? Object.keys(vb.itens || {}) : []),
+  ]);
+  const itens = {};
+  for (const it of chaves) {
+    itens[it] = _nivelDeRank(Math.min(_itemRank(va, it), _itemRank(vb, it)));
+  }
+  return { enabled: true, itens };
+}
+
+function _interseccaoPerms(a, b) {
+  const res = {};
+  const modulos = new Set([...Object.keys(a), ...Object.keys(b)]);
+  for (const m of modulos) {
+    const va = a[m], vb = b[m];
+    // Se só uma fonte define o módulo, a outra "não opina" → usa a que definiu.
+    if (va === undefined) { res[m] = vb; continue; }
+    if (vb === undefined) { res[m] = va; continue; }
+    res[m] = _interseccaoModulo(va, vb);
+  }
+  return res;
+}
+
 function mesclarPermissoes(userPerms, grupoPermsList) {
-  if (!grupoPermsList || grupoPermsList.length === 0) return userPerms;
-  if (!userPerms && grupoPermsList.every(g => !g)) return null; // todos nulos = sem restrição
-  const base = userPerms ? JSON.parse(JSON.stringify(userPerms)) : {};
-  for (const gPerms of grupoPermsList) {
-    if (!gPerms) return null; // grupo sem restrição → acesso total
-    for (const [modulo, valor] of Object.entries(gPerms)) {
-      if (!base[modulo] || base[modulo] === false) {
-        base[modulo] = valor;
-      } else if (valor && valor !== false) {
-        if (base[modulo] === true || base[modulo] === 'editar') continue; // já no máximo
-        if (valor === true || valor === 'editar') { base[modulo] = valor; continue; }
-        if (typeof base[modulo] === 'object' && typeof valor === 'object') {
-          base[modulo] = { enabled: true, itens: { ...(base[modulo].itens || {}) } };
-          for (const [item, nivelGrupo] of Object.entries(valor.itens || {})) {
-            const nivelAtual = base[modulo].itens[item];
-            if (!nivelAtual || nivelAtual === false) base[modulo].itens[item] = nivelGrupo;
-            else if (nivelAtual === 'visualizar' && (nivelGrupo === 'editar' || nivelGrupo === true)) base[modulo].itens[item] = nivelGrupo;
-          }
-        }
-      }
-    }
+  const fontes = [userPerms, ...(grupoPermsList || [])];
+  // Fontes sem restrição (null) não opinam. Só interessam as com restrição.
+  const comRestricao = fontes.filter(p => p && typeof p === 'object');
+  if (comRestricao.length === 0) return null; // ninguém restringe → acesso total
+  let base = JSON.parse(JSON.stringify(comRestricao[0]));
+  for (let i = 1; i < comRestricao.length; i++) {
+    base = _interseccaoPerms(base, comRestricao[i]);
   }
   return base;
 }
