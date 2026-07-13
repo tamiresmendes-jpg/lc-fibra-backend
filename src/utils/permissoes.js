@@ -93,9 +93,14 @@ async function buscarPermsEfetivas(usuarioId, empresaId, permModulos) {
         [usuario.departamento_id, empresaId]
       );
     }
-    const todasPerms = [...gruposDiretos, ...gruposDept]
+    const grupos = [...gruposDiretos, ...gruposDept];
+    // REGRA: se o usuário pertence a algum grupo, o GRUPO é a fonte da verdade
+    // (as permissões individuais antigas são ignoradas). Assim, mudar/remover no
+    // grupo reflete de verdade. Sem grupo → usa as permissões individuais.
+    if (grupos.length === 0) return permModulos;
+    const todasPerms = grupos
       .map(g => { try { return g.permissoes_modulos ? JSON.parse(g.permissoes_modulos) : null; } catch { return null; } });
-    return mesclarPermissoes(permModulos, todasPerms);
+    return mesclarPermissoes(null, todasPerms);
   } catch { return permModulos; }
 }
 
