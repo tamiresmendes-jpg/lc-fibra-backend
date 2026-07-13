@@ -195,6 +195,38 @@ function renderRichHtml(doc, html, baseIndent = 10) {
 
 function ehHtml(s) { return typeof s === 'string' && /<(p|h[1-4]|ul|ol|li|img|figure|table|div|br|blockquote|strong|b|em|pre)\b|<hr/i.test(s); }
 
+// Converte blocos (novo formato JSON do editor) em HTML, espelhando o front.
+function escBk(s) { return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+function blocosBkParaHtml(blocks) { return (blocks || []).map(blocoBkParaHtml).join('\n'); }
+function blocoBkParaHtml(b) {
+  if (!b || !b.type) return '';
+  const t = b.type;
+  if (t === 'paragraph') return `<p>${b.content || ''}</p>`;
+  if (/^heading[1-4]$/.test(t)) return `<h${t.slice(-1)}>${b.content || ''}</h${t.slice(-1)}>`;
+  if (t === 'quote') return `<blockquote>${b.content || ''}</blockquote>`;
+  if (t === 'divider') return '<hr/>';
+  if (t === 'code') return `<pre>${escBk(b.content)}</pre>`;
+  if (t === 'bullet_list') return `<ul>${(b.items || []).map(i => `<li>${i.content || ''}</li>`).join('')}</ul>`;
+  if (t === 'numbered_list') return `<ol>${(b.items || []).map(i => `<li>${i.content || ''}</li>`).join('')}</ol>`;
+  if (t === 'check_list') return `<ul>${(b.items || []).map(i => `<li>${i.checked ? '☑ ' : '☐ '}${i.content || ''}</li>`).join('')}</ul>`;
+  if (t === 'table') return `<table>${(b.cells || []).map(row => `<tr>${row.map(c => `<td>${c}</td>`).join('')}</tr>`).join('')}</table>`;
+  if (t.startsWith('callout_')) return `<p>${b.content || ''}</p>`;
+  if (t === 'image' && b.url) return `<figure><img src="${escBk(b.url)}"/>${b.caption ? `<figcaption>${escBk(b.caption)}</figcaption>` : ''}</figure>`;
+  if (t === 'pop_link' && b.popId) return `<p><strong>→ ${escBk(b.popTitulo || 'POP')}</strong></p>`;
+  if (t.startsWith('columns')) return (b.columns || []).map(col => blocosBkParaHtml(col)).join('');
+  if (t === 'diagram') return `<pre>${escBk(b.code)}</pre>`;
+  return b.content ? `<p>${b.content}</p>` : '';
+}
+// Se o conteúdo for JSON de blocos, converte para HTML; se já for HTML, retorna; senão null.
+function conteudoParaHtml(conteudo) {
+  if (typeof conteudo !== 'string') return null;
+  const s = conteudo.trim();
+  if (s.startsWith('[')) {
+    try { const p = JSON.parse(s); if (Array.isArray(p) && p[0] && p[0].type) return blocosBkParaHtml(p); } catch { /* não é JSON de blocos */ }
+  }
+  return ehHtml(conteudo) ? conteudo : null;
+}
+
 function secao(doc, numero, titulo, conteudo) {
   doc.moveDown(0.5);
 
@@ -210,9 +242,10 @@ function secao(doc, numero, titulo, conteudo) {
 
   doc.moveDown(0.4);
 
-  // Conteúdo: HTML rico é renderizado com formatação e imagens; texto simples mantém o fluxo antigo.
-  if (ehHtml(conteudo)) {
-    renderRichHtml(doc, conteudo, 10);
+  // Conteúdo: JSON de blocos ou HTML rico são renderizados com formatação e imagens; texto simples mantém o fluxo antigo.
+  const htmlRico = conteudoParaHtml(conteudo);
+  if (htmlRico != null) {
+    renderRichHtml(doc, htmlRico, 10);
   } else {
   const texto = stripHtml(conteudo);
   if (texto) {
