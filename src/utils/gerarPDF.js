@@ -398,7 +398,7 @@ function gerarPDFPOP(pop) {
       { label: 'Elaborado por',  valor: pop.criado_por_nome || '—' },
       { label: 'Cargo',          valor: pop.cargo_nome || '—' },
       { label: 'Versão',         valor: `v${pop.versao || '1.0'}` },
-      { label: 'Departamento',   valor: pop.departamento_nome || '—' },
+      { label: 'Departamento',   valor: pop.departamentos_nomes || pop.departamento_nome || '—' },
       { label: 'Data',           valor: pop.data_elaboracao
           ? new Date(pop.data_elaboracao + 'T00:00:00').toLocaleDateString('pt-BR')
           : new Date(pop.created_at).toLocaleDateString('pt-BR') },
@@ -526,7 +526,7 @@ function gerarPDFProcesso(proc) {
       .fill(COR_FUNDO).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
     const idCols = [
       { label: 'Responsável', valor: proc.responsavel || '—' },
-      { label: 'Setor',       valor: proc.setor || '—' },
+      { label: 'Setor',       valor: proc.departamentos_nomes || proc.setor || '—' },
       { label: 'Categoria',   valor: proc.categoria_nome || '—' },
       { label: 'Data',        valor: proc.created_at ? new Date(proc.created_at).toLocaleDateString('pt-BR') : '—' },
     ];

@@ -22,6 +22,16 @@ router.use(autenticar);
 
 function eid(req) { return req.usuario.empresa_id; }
 
+// Resolve lista de IDs de departamento → { idsJson, nomes }
+async function resolverDeptsProc(ids, empresaId) {
+  const lista = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (!lista.length) return null;
+  const rows = await all('SELECT id, nome FROM departamentos WHERE empresa_id=$1', [empresaId]);
+  const mapa = {}; rows.forEach(r => { mapa[r.id] = r.nome; });
+  const nomes = lista.map(id => mapa[id]).filter(Boolean).join(', ');
+  return { idsJson: JSON.stringify(lista), nomes: nomes || null };
+}
+
 // Garantir colunas e tabelas (idempotente)
 ;(async () => {
   try {
@@ -35,6 +45,8 @@ function eid(req) { return req.usuario.empresa_id; }
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS responsavel TEXT`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS categoria_id TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS departamentos_ids TEXT`);
+    await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS departamentos_nomes TEXT`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS versao TEXT DEFAULT '1.0'`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS total_visualizacoes INTEGER DEFAULT 0`);
     await run(`ALTER TABLE processos ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP`);
@@ -411,6 +423,8 @@ router.post('/', async (req, res) => {
        responsavel||null, status||'rascunho', resultado_esperado||null, pops_relacionados||null,
        categoria_id||null, versao||'1.0', req.usuario.id, req.usuario.nome]
     );
+    const dep = await resolverDeptsProc(req.body.departamentos_ids, eid(req));
+    if (dep) await run('UPDATE processos SET departamentos_ids=$1, departamentos_nomes=$2 WHERE id=$3', [dep.idsJson, dep.nomes, id]);
     await registrarHistorico(id, eid(req), req.usuario, 'criado', { mudancas: [status === 'ativo' ? 'Processo criado e ativado' : 'Processo criado em rascunho'], titulo, codigo, status });
     res.status(201).json({ id, titulo, codigo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -437,6 +451,11 @@ router.put('/:id', async (req, res) => {
       [titulo, objetivo||null, descricao||null, setor||null, responsavel||null, status||'rascunho',
        resultado_esperado||null, pops_relacionados||null, codigo, categoria_id||null, versao||antes.versao||'1.0', req.params.id, eid(req)]
     );
+    if (req.body.departamentos_ids !== undefined) {
+      const dep = await resolverDeptsProc(req.body.departamentos_ids, eid(req));
+      await run('UPDATE processos SET departamentos_ids=$1, departamentos_nomes=$2 WHERE id=$3 AND empresa_id=$4',
+        [dep?.idsJson || null, dep?.nomes || null, req.params.id, eid(req)]);
+    }
     // Histórico só para eventos relevantes do ciclo de vida (evita spam do autosave a cada 2s).
     // Edições de conteúdo (objetivo/descrição/etc.) NÃO geram entrada de histórico — igual ao POP.
     const mudancas = [];

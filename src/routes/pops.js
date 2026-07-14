@@ -8,6 +8,24 @@ const { enviarEmailPOP } = require('../utils/email');
 const router = express.Router();
 router.use(autenticar);
 
+// Suporte a múltiplos departamentos por POP (idempotente)
+;(async () => {
+  try {
+    await run(`ALTER TABLE pops ADD COLUMN IF NOT EXISTS departamentos_ids TEXT`);
+    await run(`ALTER TABLE pops ADD COLUMN IF NOT EXISTS departamentos_nomes TEXT`);
+  } catch (_) {}
+})();
+
+// Resolve uma lista de IDs de departamento → { idsJson, nomes, primeiro }
+async function resolverDepts(ids, empresaId) {
+  const lista = Array.isArray(ids) ? ids.filter(Boolean) : [];
+  if (!lista.length) return null;
+  const rows = await all('SELECT id, nome FROM departamentos WHERE empresa_id=$1', [empresaId]);
+  const mapa = {}; rows.forEach(r => { mapa[r.id] = r.nome; });
+  const nomes = lista.map(id => mapa[id]).filter(Boolean).join(', ');
+  return { idsJson: JSON.stringify(lista), nomes: nomes || null, primeiro: lista[0] || null };
+}
+
 // Dashboard de POPs
 router.get('/dashboard', async (req, res) => {
   try {
@@ -141,6 +159,11 @@ router.post('/', async (req, res) => {
       INSERT INTO pop_historico (id, pop_id, usuario_id, versao_anterior, versao_nova, resumo_alteracao, tipo_alteracao)
       VALUES ($1,$2,$3,$4,$5,$6,$7)
     `, [uuidv4(), id, req.usuario.id, null, versao || '1.0', 'POP criado em rascunho', 'criacao']);
+
+    // Múltiplos departamentos (também sincroniza departamento_id = primeiro, p/ compatibilidade)
+    const dep = await resolverDepts(req.body.departamentos_ids, req.usuario.empresa_id);
+    if (dep) await run('UPDATE pops SET departamentos_ids=$1, departamentos_nomes=$2, departamento_id=$3 WHERE id=$4',
+      [dep.idsJson, dep.nomes, dep.primeiro, id]);
 
     res.status(201).json({ id, titulo, codigo });
 
@@ -315,6 +338,13 @@ router.put('/:id', async (req, res) => {
       dono_processo || null, sipoc_dados || null, dados_inspecao || null, criterio_aceite || null,
       req.params.id, req.usuario.empresa_id
     ]);
+
+    // Múltiplos departamentos
+    if (req.body.departamentos_ids !== undefined) {
+      const dep = await resolverDepts(req.body.departamentos_ids, req.usuario.empresa_id);
+      await run('UPDATE pops SET departamentos_ids=$1, departamentos_nomes=$2, departamento_id=$3 WHERE id=$4 AND empresa_id=$5',
+        [dep?.idsJson || null, dep?.nomes || null, dep?.primeiro || (departamento_id || null), req.params.id, req.usuario.empresa_id]);
+    }
 
     const registraHistorico = popAtual.status === 'ativo' && tipo_alteracao !== 'ajuste_livre';
     if (registraHistorico) {
