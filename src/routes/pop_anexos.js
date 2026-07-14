@@ -125,6 +125,10 @@ router.get('/:popId/anexos/:id/download', (req, res, next) => {
     }
     const filePath = path.join(UPLOADS_DIR, anexo.caminho);
     if (!fs.existsSync(filePath)) return res.status(404).json({ erro: 'Arquivo não encontrado' });
+    if (req.query.inline) {
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(anexo.nome)}"`);
+      return res.sendFile(filePath);
+    }
     res.download(filePath, anexo.nome);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

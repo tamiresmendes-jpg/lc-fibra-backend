@@ -261,6 +261,10 @@ router.get('/:id/anexos/:anexoId/download', (req, res, next) => {
     if (anexo.url_externa) return res.redirect(anexo.url_externa);
     const fp = path.join(UPLOADS_DIR, anexo.caminho);
     if (!fs.existsSync(fp)) return res.status(404).json({ erro: 'Arquivo não encontrado' });
+    if (req.query.inline) {
+      res.setHeader('Content-Disposition', `inline; filename="${encodeURIComponent(anexo.nome)}"`);
+      return res.sendFile(fp);
+    }
     res.download(fp, anexo.nome);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
