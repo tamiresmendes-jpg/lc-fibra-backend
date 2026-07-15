@@ -32,6 +32,39 @@ async function resolverDepts(ids, empresaId) {
   return { idsJson: JSON.stringify(lista), nomes: nomes || null, primeiro: lista[0] || null };
 }
 
+// ── Ações em massa (somente ADMIN) — declaradas ANTES das rotas /:id ──────────
+// Ativar vários POPs de uma vez
+router.post('/bulk/ativar', async (req, res) => {
+  try {
+    if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas o administrador pode ativar em massa' });
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ erro: 'Nenhum POP selecionado' });
+    for (const id of ids) {
+      await run(
+        `UPDATE pops SET status='ativo', updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+         WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL`,
+        [id, req.usuario.empresa_id]
+      );
+    }
+    res.json({ ok: true, total: ids.length });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Definir departamentos de vários POPs de uma vez
+router.post('/bulk/departamentos', async (req, res) => {
+  try {
+    if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas o administrador pode alterar em massa' });
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ erro: 'Nenhum POP selecionado' });
+    const dep = await resolverDepts(req.body.departamentos_ids, req.usuario.empresa_id);
+    for (const id of ids) {
+      await run('UPDATE pops SET departamentos_ids=$1, departamentos_nomes=$2, departamento_id=$3 WHERE id=$4 AND empresa_id=$5',
+        [dep?.idsJson || null, dep?.nomes || null, dep?.primeiro || null, id, req.usuario.empresa_id]);
+    }
+    res.json({ ok: true, total: ids.length });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Dashboard de POPs
 router.get('/dashboard', async (req, res) => {
   try {
@@ -694,41 +727,6 @@ router.get('/:id/exportar/word', async (req, res) => {
     res.setHeader('Content-Type', 'application/msword');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(nomeArquivo)}"`);
     res.send(html);
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
-
-// ── Ações em massa ────────────────────────────────────────────────────────────
-// Ativar vários POPs de uma vez
-router.post('/bulk/ativar', async (req, res) => {
-  try {
-    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
-    if (!ids.length) return res.status(400).json({ erro: 'Nenhum POP selecionado' });
-    let n = 0;
-    for (const id of ids) {
-      const r = await run(
-        `UPDATE pops SET status='ativo', updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
-         WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL`,
-        [id, req.usuario.empresa_id]
-      );
-      n++;
-    }
-    res.json({ ok: true, total: n });
-  } catch(e) { res.status(500).json({ erro: e.message }); }
-});
-
-// Definir departamentos de vários POPs de uma vez
-router.post('/bulk/departamentos', async (req, res) => {
-  try {
-    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
-    if (!ids.length) return res.status(400).json({ erro: 'Nenhum POP selecionado' });
-    const dep = await resolverDepts(req.body.departamentos_ids, req.usuario.empresa_id);
-    for (const id of ids) {
-      await run('UPDATE pops SET departamentos_ids=$1, departamentos_nomes=$2, departamento_id=$3 WHERE id=$4 AND empresa_id=$5',
-        [dep?.idsJson || null, dep?.nomes || null, dep?.primeiro || null, id, req.usuario.empresa_id]);
-    }
-    res.json({ ok: true, total: ids.length });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
