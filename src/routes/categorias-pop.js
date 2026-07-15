@@ -16,8 +16,8 @@ router.use(autenticar);
 
 // Tipos de documento que ficam dentro das pastas (categorias)
 const DOCS = [
-  { tipo: 'pop',       tabela: 'pops',       titulo: 'titulo' },
-  { tipo: 'processo',  tabela: 'processos',  titulo: 'titulo' },
+  { tipo: 'pop',       tabela: 'pops',       titulo: 'titulo', soft: true },
+  { tipo: 'processo',  tabela: 'processos',  titulo: 'titulo', soft: true },
   { tipo: 'fluxo',     tabela: 'fluxos',     titulo: 'titulo' },
   { tipo: 'checklist', tabela: 'checklists', titulo: 'titulo' },
 ];
@@ -42,7 +42,7 @@ async function contagensPorCategoria(empresaId) {
   for (const d of DOCS) {
     try {
       const rows = await all(
-        `SELECT categoria_id, COUNT(*) AS n FROM ${d.tabela} WHERE empresa_id = ? AND categoria_id IS NOT NULL GROUP BY categoria_id`,
+        `SELECT categoria_id, COUNT(*) AS n FROM ${d.tabela} WHERE empresa_id = ? AND categoria_id IS NOT NULL${d.soft ? ' AND excluido_em IS NULL' : ''} GROUP BY categoria_id`,
         [empresaId]
       );
       for (const r of rows) mapa[r.categoria_id] = (mapa[r.categoria_id] || 0) + Number(r.n);
@@ -90,7 +90,7 @@ router.get('/:id/conteudo', async (req, res) => {
     const keys = { pop: 'pops', processo: 'processos', fluxo: 'fluxos', checklist: 'checklists' };
     for (const d of DOCS) {
       try {
-        const filtroExcluido = (d.tabela === 'processos') ? ' AND excluido_em IS NULL' : '';
+        const filtroExcluido = d.soft ? ' AND excluido_em IS NULL' : '';
         const rows = await all(
           `SELECT id, ${d.titulo} AS titulo FROM ${d.tabela} WHERE empresa_id = ? AND categoria_id = ?${filtroExcluido} ORDER BY ${d.titulo}`,
           [eid, cid]
