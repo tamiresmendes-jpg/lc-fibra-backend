@@ -149,10 +149,11 @@ async function htmlParaPdf(html, browser) {
   const page = await b.newPage();
   try {
     await page.setContent(html, { waitUntil: 'load' });
-    return await page.pdf({
+    const pdf = await page.pdf({
       format: 'A4', printBackground: true,
       margin: { top: '0', bottom: '14mm', left: '0', right: '0' },
     });
+    return Buffer.from(pdf); // puppeteer pode retornar Uint8Array
   } finally { await page.close(); }
 }
 
