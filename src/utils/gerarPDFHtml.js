@@ -38,11 +38,12 @@ function secaoHtml(num, titulo, conteudo) {
   return `<section class="sec"><h2><span class="n">${num}</span> ${esc(titulo)}</h2><div class="corpo">${corpo}</div></section>`;
 }
 
+// colunas: [{ label, key }] — renderiza apenas os campos indicados (evita colunas extras como "id")
 function tabelaHtml(num, titulo, colunas, linhas) {
   if (!linhas || !linhas.length)
     return `<section class="sec"><h2><span class="n">${num}</span> ${esc(titulo)}</h2><div class="corpo"><p class="vazio">(seção não preenchida)</p></div></section>`;
-  const head = colunas.map(c => `<th>${esc(c)}</th>`).join('');
-  const body = linhas.map(l => `<tr>${Object.values(l).map(v => `<td>${esc(v)}</td>`).join('')}</tr>`).join('');
+  const head = colunas.map(c => `<th>${esc(c.label)}</th>`).join('');
+  const body = linhas.map(l => `<tr>${colunas.map(c => `<td>${esc(l[c.key] || '')}</td>`).join('')}</tr>`).join('');
   return `<section class="sec"><h2><span class="n">${num}</span> ${esc(titulo)}</h2>
     <div class="corpo"><table class="tab"><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></section>`;
 }
@@ -73,13 +74,13 @@ function montarHtmlPOP(pop) {
   const secoes = [
     secaoHtml(2, 'Objetivo', pop.objetivo),
     secaoHtml(3, 'Campo de Aplicação', pop.campo_aplicacao),
-    respLinhas ? tabelaHtml(4, 'Responsabilidades', ['Nome / Cargo', 'Responsabilidade'], respLinhas)
+    respLinhas ? tabelaHtml(4, 'Responsabilidades', [{ label: 'Nome / Cargo', key: 'cargo_nome' }, { label: 'Responsabilidade', key: 'responsabilidade' }], respLinhas)
                : secaoHtml(4, 'Responsabilidades', pop.responsabilidade),
     secaoHtml(5, 'Procedimento Detalhado', pop.procedimento),
     secaoHtml(6, 'Documentos e Ferramentas', pop.documentos),
     secaoHtml(7, 'Segurança e Conduta', pop.seguranca),
     secaoHtml(8, 'Penalidades', pop.penalidade),
-    dispLinhas ? tabelaHtml(9, 'Disposições Finais', ['Item', 'Destino / Ação Final', 'Responsável'], dispLinhas)
+    dispLinhas ? tabelaHtml(9, 'Disposições Finais', [{ label: 'Item', key: 'item' }, { label: 'Destino / Ação Final', key: 'destino' }, { label: 'Responsável', key: 'responsavel' }], dispLinhas)
                : secaoHtml(9, 'Disposições Finais', pop.disposicao_final),
     pop.kpis ? secaoHtml('+', 'KPIs e Indicadores', pop.kpis) : '',
   ].join('');
