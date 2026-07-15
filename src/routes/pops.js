@@ -415,13 +415,20 @@ router.get('/exportar-todos/pdf', async (req, res) => {
       archive.on('warning', err => { if (err.code !== 'ENOENT') reject(err); });
       (async () => {
         const browser = await getBrowser().catch(() => null);
-        for (const pop of popsAll) {
-          try {
-            const buf = await gerarPDFfiel(pop, browser);
-            const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.pdf`;
-            archive.append(buf, { name: nome });
-          } catch (e) { console.error('PDF falhou para', pop.codigo, e.message); }
+        // Gera em paralelo (lotes de 4) para não estourar o tempo com muitos POPs
+        const CONC = 4;
+        let i = 0;
+        async function worker() {
+          while (i < popsAll.length) {
+            const pop = popsAll[i++];
+            try {
+              const buf = await gerarPDFfiel(pop, browser);
+              const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.pdf`;
+              archive.append(buf, { name: nome });
+            } catch (e) { console.error('PDF falhou para', pop.codigo, e.message); }
+          }
         }
+        await Promise.all(Array.from({ length: CONC }, worker));
         archive.finalize();
       })().catch(reject);
     });
