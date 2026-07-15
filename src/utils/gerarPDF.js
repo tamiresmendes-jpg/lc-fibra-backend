@@ -562,4 +562,4 @@ function gerarPDFProcesso(proc) {
   });
 }
 
-module.exports = { gerarPDFPOP, gerarPDFProcesso };
+module.exports = { gerarPDFPOP, gerarPDFProcesso, conteudoParaHtml, blocosBkParaHtml, parseLista };

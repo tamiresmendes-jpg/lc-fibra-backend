@@ -3,6 +3,12 @@ const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { gerarPDFPOP } = require('../utils/gerarPDF');
+const { gerarPDFPOPHtml, getBrowser } = require('../utils/gerarPDFHtml');
+// Gera PDF fiel (HTML/Chromium); em caso de falha, cai no gerador simples (pdfkit).
+async function gerarPDFfiel(pop, browser) {
+  try { return await gerarPDFPOPHtml(pop, browser); }
+  catch (e) { console.error('PDF fiel falhou, usando fallback:', e.message); return gerarPDFPOP(pop); }
+}
 const { enviarEmailPOP } = require('../utils/email');
 
 const router = express.Router();
@@ -408,9 +414,10 @@ router.get('/exportar-todos/pdf', async (req, res) => {
       archive.on('error', reject);
       archive.on('warning', err => { if (err.code !== 'ENOENT') reject(err); });
       (async () => {
+        const browser = await getBrowser().catch(() => null);
         for (const pop of popsAll) {
           try {
-            const buf = await gerarPDFPOP(pop);
+            const buf = await gerarPDFfiel(pop, browser);
             const nome = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.pdf`;
             archive.append(buf, { name: nome });
           } catch (e) { console.error('PDF falhou para', pop.codigo, e.message); }
@@ -539,7 +546,7 @@ router.get('/:id/exportar/pdf', async (req, res) => {
 
     if (!pop) return res.status(404).json({ erro: 'POP não encontrado' });
 
-    const pdfBuffer = await gerarPDFPOP(pop);
+    const pdfBuffer = await gerarPDFfiel(pop);
     const nomeArquivo = `${pop.codigo || 'POP'}-${pop.titulo.replace(/[^a-zA-Z0-9\s]/g, '').trim().replace(/\s+/g, '_')}.pdf`;
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="${encodeURIComponent(nomeArquivo)}"`);
