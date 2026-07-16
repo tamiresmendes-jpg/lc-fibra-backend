@@ -29,19 +29,28 @@ function inlineImagens(html) {
   });
 }
 
+// Considera "sem conteúdo" quando vazio, só espaços, ou JSON de array/objeto vazio ([] / {})
+function temConteudo(c) {
+  if (!c) return false;
+  const s = String(c).trim();
+  if (!s) return false;
+  if (s.startsWith('[') || s.startsWith('{')) {
+    try { const a = JSON.parse(s); return Array.isArray(a) ? a.length > 0 : Object.keys(a).length > 0; } catch { return true; }
+  }
+  return true;
+}
+
+// Seções vazias NÃO entram no PDF (igual à visualização em tela)
 function secaoHtml(num, titulo, conteudo) {
+  if (!temConteudo(conteudo)) return '';
   const html = conteudoParaHtml(conteudo);
-  let corpo;
-  if (html != null) corpo = inlineImagens(html);
-  else if (conteudo && String(conteudo).trim()) corpo = `<p>${esc(conteudo).replace(/\n/g, '<br>')}</p>`;
-  else corpo = `<p class="vazio">(seção não preenchida)</p>`;
+  const corpo = (html != null) ? inlineImagens(html) : `<p>${esc(conteudo).replace(/\n/g, '<br>')}</p>`;
   return `<section class="sec"><h2><span class="n">${num}</span> ${esc(titulo)}</h2><div class="corpo">${corpo}</div></section>`;
 }
 
 // colunas: [{ label, key }] — renderiza apenas os campos indicados (evita colunas extras como "id")
 function tabelaHtml(num, titulo, colunas, linhas) {
-  if (!linhas || !linhas.length)
-    return `<section class="sec"><h2><span class="n">${num}</span> ${esc(titulo)}</h2><div class="corpo"><p class="vazio">(seção não preenchida)</p></div></section>`;
+  if (!linhas || !linhas.length) return '';
   const head = colunas.map(c => `<th>${esc(c.label)}</th>`).join('');
   const body = linhas.map(l => `<tr>${colunas.map(c => `<td>${esc(l[c.key] || '')}</td>`).join('')}</tr>`).join('');
   return `<section class="sec"><h2><span class="n">${num}</span> ${esc(titulo)}</h2>
