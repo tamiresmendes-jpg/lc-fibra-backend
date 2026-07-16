@@ -39,14 +39,23 @@ router.post('/bulk/ativar', async (req, res) => {
     if (req.usuario.perfil !== 'admin') return res.status(403).json({ erro: 'Apenas o administrador pode ativar em massa' });
     const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
     if (!ids.length) return res.status(400).json({ erro: 'Nenhum POP selecionado' });
+    let n = 0;
     for (const id of ids) {
+      const pa = await get('SELECT versao, status FROM pops WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [id, req.usuario.empresa_id]);
+      if (!pa || pa.status === 'ativo') continue; // ignora inexistentes/já ativos
       await run(
-        `UPDATE pops SET status='ativo', updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
-         WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL`,
+        `UPDATE pops SET status='ativo', data_ativacao=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'), updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+         WHERE id=$1 AND empresa_id=$2`,
         [id, req.usuario.empresa_id]
       );
+      await run(
+        `INSERT INTO pop_historico (id, pop_id, usuario_id, versao_anterior, versao_nova, resumo_alteracao, tipo_alteracao)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [uuidv4(), id, req.usuario.id, null, pa.versao, 'POP ativado e publicado oficialmente', 'ativacao']
+      );
+      n++;
     }
-    res.json({ ok: true, total: ids.length });
+    res.json({ ok: true, total: n });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

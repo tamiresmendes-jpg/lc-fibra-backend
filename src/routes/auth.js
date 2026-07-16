@@ -41,7 +41,8 @@ router.post('/login', loginLimiter, async (req, res) => {
 
     if (!usuario) return res.status(401).json({ erro: 'Email ou senha incorretos' });
 
-    if (usuario.primeiro_acesso === 1) {
+    // Primeiro acesso: flag ligada OU ainda sem senha cadastrada
+    if (usuario.primeiro_acesso === 1 || !usuario.senha) {
       return res.status(200).json({ primeiro_acesso: true });
     }
 
@@ -113,7 +114,19 @@ router.post('/registrar', async (req, res) => {
   }
 });
 
-// Definir senha no primeiro acesso (sem token, verificado por primeiro_acesso=1)
+// Verifica um e-mail para o fluxo "e-mail primeiro" do login.
+// Retorna { existe, primeiro_acesso } — sem revelar senha.
+router.post('/verificar-email', async (req, res) => {
+  try {
+    const { email } = req.body;
+    if (!email || !email.trim()) return res.status(400).json({ erro: 'Informe o e-mail' });
+    const u = await get('SELECT primeiro_acesso, senha FROM usuarios WHERE email = ? AND ativo = 1', [email.trim()]);
+    if (!u) return res.json({ existe: false });
+    return res.json({ existe: true, primeiro_acesso: (u.primeiro_acesso === 1 || !u.senha) });
+  } catch (err) { res.status(500).json({ erro: err.message }); }
+});
+
+// Definir senha no primeiro acesso (sem token, verificado por primeiro_acesso=1 ou sem senha)
 router.post('/definir-senha', async (req, res) => {
   try {
     const { email, nova_senha } = req.body;
@@ -129,7 +142,8 @@ router.post('/definir-senha', async (req, res) => {
       WHERE u.email = ? AND u.ativo = 1
     `, [email]);
 
-    if (!usuario || usuario.primeiro_acesso !== 1) {
+    // Permite definir senha se for primeiro acesso OU se ainda não houver senha cadastrada
+    if (!usuario || (usuario.primeiro_acesso !== 1 && !!usuario.senha)) {
       return res.status(403).json({ erro: 'Operação não permitida' });
     }
 
