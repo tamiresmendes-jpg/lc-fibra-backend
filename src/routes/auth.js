@@ -55,7 +55,7 @@ router.post('/login', loginLimiter, async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id, nome: usuario.nome },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '365d' }
     );
 
     const { senha: _, ...dadosUsuario } = usuario;
@@ -105,7 +105,7 @@ router.post('/registrar', async (req, res) => {
     const token = jwt.sign(
       { id: usuarioId, email, perfil: 'admin', empresa_id: empresaId, nome },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '365d' }
     );
 
     res.status(201).json({ token, usuario: { id: usuarioId, nome, email, perfil: 'admin', empresa_id: empresaId, empresa_nome: nome_empresa } });
@@ -153,7 +153,7 @@ router.post('/definir-senha', async (req, res) => {
     const token = jwt.sign(
       { id: usuario.id, email: usuario.email, perfil: usuario.perfil, empresa_id: usuario.empresa_id, nome: usuario.nome },
       process.env.JWT_SECRET,
-      { expiresIn: '30d' }
+      { expiresIn: '365d' }
     );
 
     const { senha: _, ...dadosUsuario } = usuario;
