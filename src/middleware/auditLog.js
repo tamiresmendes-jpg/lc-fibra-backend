@@ -35,7 +35,7 @@ const ROTA_MODULO = {
   '/api/ceps':                   'CEPs',
   '/api/email':                  'Configuração de E-mail',
   '/api/feedbacks':              'Feedbacks',
-  '/api/sugestoes':              'Sugestões',
+  '/api/sugestoes':              'Fórum',
   '/api/beneficios':             'Benefícios',
   '/api/ferias':                 'Férias',
   '/api/coffee-breaks':          'Coffee Break',

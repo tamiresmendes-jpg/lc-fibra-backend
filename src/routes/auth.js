@@ -24,6 +24,18 @@ function normalizarDataCmp(s) {
 
 const router = express.Router();
 
+// Registra entrada/saída no audit_log (o middleware de auditoria ignora /api/auth)
+async function auditAuth(req, usuario, acao) {
+  try {
+    const ip = req.headers['x-forwarded-for']?.split(',')[0]?.trim() || req.socket?.remoteAddress || null;
+    await run(
+      `INSERT INTO audit_log (id, empresa_id, usuario_id, usuario_nome, perfil, modulo, acao, entidade_nome, ip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [uuidv4(), usuario.empresa_id, usuario.id, usuario.nome || null, usuario.perfil, 'Autenticação', acao, `Sessão de ${usuario.nome || usuario.email || ''}`, ip]
+    );
+  } catch (e) { /* não bloqueia login */ }
+}
+
 // Login
 router.post('/login', loginLimiter, async (req, res) => {
   try {
@@ -68,10 +80,17 @@ router.post('/login', loginLimiter, async (req, res) => {
       permModulos = await buscarPermsEfetivas(dadosUsuario.id, dadosUsuario.empresa_id, permModulos);
     }
     dadosUsuario.permissoes_modulos = permModulos;
+    await auditAuth(req, usuario, 'Entrou no sistema');
     res.json({ token, usuario: dadosUsuario });
   } catch(err) {
     res.status(500).json({ erro: err.message });
   }
+});
+
+// Logout — registra a saída no audit_log
+router.post('/logout', autenticar, async (req, res) => {
+  try { await auditAuth(req, req.usuario, 'Saiu do sistema'); } catch {}
+  res.json({ ok: true });
 });
 
 // Registrar (criar empresa + admin)
@@ -165,6 +184,7 @@ router.post('/definir-senha', async (req, res) => {
       permModulos = await buscarPermsEfetivas(dadosUsuario.id, dadosUsuario.empresa_id, permModulos);
     }
     dadosUsuario.permissoes_modulos = permModulos;
+    await auditAuth(req, usuario, 'Entrou no sistema (primeiro acesso)');
     res.json({ token, usuario: dadosUsuario });
   } catch(err) {
     res.status(500).json({ erro: err.message });

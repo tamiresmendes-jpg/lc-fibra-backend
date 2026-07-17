@@ -4,12 +4,18 @@ const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
 
+// Fórum identificado: guarda autor
+;(async () => {
+  try { await run('ALTER TABLE sugestoes ADD COLUMN IF NOT EXISTS usuario_id TEXT'); } catch {}
+  try { await run('ALTER TABLE sugestoes ADD COLUMN IF NOT EXISTS usuario_nome TEXT'); } catch {}
+})();
+
 // Listar sugestões — todos veem; arquivadas só admin/gestor
 router.get('/', autenticar, async (req, res) => {
   try {
     const isAdmin = ['admin', 'gestor'].includes(req.usuario.perfil);
     const rows = await all(
-      `SELECT id, empresa_id, categoria, texto, status, resposta, imagem, created_at
+      `SELECT id, empresa_id, categoria, texto, status, resposta, imagem, created_at, usuario_id, usuario_nome
        FROM sugestoes
        WHERE empresa_id = $1
        ${isAdmin ? '' : "AND status <> 'arquivada'"}
@@ -20,11 +26,11 @@ router.get('/', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: 'Erro ao buscar sugestões' }); }
 });
 
-// Enviar sugestão anônima — NÃO armazena usuario_id
+// Publicar no fórum — identificado (guarda autor)
 router.post('/', autenticar, async (req, res) => {
   try {
     const { texto, categoria, imagem } = req.body;
-    if (!texto || texto.trim().length < 5) return res.status(400).json({ erro: 'Sugestão muito curta' });
+    if (!texto || texto.trim().length < 5) return res.status(400).json({ erro: 'Mensagem muito curta' });
     let img = null;
     if (imagem && typeof imagem === 'string' && imagem.startsWith('data:image/')) {
       if (imagem.length > 4_200_000) return res.status(400).json({ erro: 'Imagem muito grande (máx. ~3MB).' });
@@ -32,11 +38,11 @@ router.post('/', autenticar, async (req, res) => {
     }
     const id = uuidv4();
     await run(
-      `INSERT INTO sugestoes (id, empresa_id, categoria, texto, status, imagem) VALUES ($1, $2, $3, $4, 'nova', $5)`,
-      [id, req.usuario.empresa_id, categoria || 'geral', texto.trim(), img]
+      `INSERT INTO sugestoes (id, empresa_id, categoria, texto, status, imagem, usuario_id, usuario_nome) VALUES ($1, $2, $3, $4, 'nova', $5, $6, $7)`,
+      [id, req.usuario.empresa_id, categoria || 'geral', texto.trim(), img, req.usuario.id, req.usuario.nome || null]
     );
-    res.status(201).json({ id, mensagem: 'Sugestão enviada com sucesso' });
-  } catch (e) { res.status(500).json({ erro: 'Erro ao enviar sugestão' }); }
+    res.status(201).json({ id, mensagem: 'Publicado com sucesso' });
+  } catch (e) { res.status(500).json({ erro: 'Erro ao publicar' }); }
 });
 
 // Atualizar status e resposta (admin/gestor)
