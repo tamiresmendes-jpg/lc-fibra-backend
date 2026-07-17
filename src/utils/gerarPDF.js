@@ -352,7 +352,7 @@ function gerarPDFPOP(pop) {
 
     // Empresa e código
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20)
-      .text('LC FIBRA', marginL, 24, { align: 'left' });
+      .text(pop.empresa_nome || 'LC Virtual Net', marginL, 24, { align: 'left' });
 
     if (pop.codigo) {
       doc.font('Helvetica').fontSize(11)
@@ -479,13 +479,15 @@ function gerarPDFProcesso(proc) {
     const doc = new PDFDocument({
       size: 'A4',
       margins: { top: 60, bottom: 60, left: 50, right: 50 },
+      bufferPages: true,
       info: {
         Title: `${proc.codigo || 'PROC'} - ${proc.titulo}`,
-        Author: proc.criado_por_nome || 'Sistema LC FIBRA',
+        Author: proc.criado_por_nome || 'Sistema LC Virtual Net',
         Subject: 'Processo Organizacional',
-        Creator: 'LC FIBRA - Sistema de Gestão',
+        Creator: 'LC Virtual Net - Sistema de Gestão',
       },
     });
+    const empresaNome = proc.empresa_nome || 'LC Virtual Net';
 
     doc.on('data', c => chunks.push(c));
     doc.on('end', () => resolve(Buffer.concat(chunks)));
@@ -498,7 +500,7 @@ function gerarPDFProcesso(proc) {
     // ── CABEÇALHO ──
     doc.rect(0, 0, pageW, 130).fill(COR_PRIMARIA);
     doc.fillColor('#ffffff').font('Helvetica-Bold').fontSize(20)
-      .text('LC FIBRA', marginL, 24, { align: 'left' });
+      .text(empresaNome, marginL, 24, { align: 'left' });
     if (proc.codigo) {
       doc.font('Helvetica').fontSize(11)
         .text(proc.codigo, pageW - marginR - 100, 28, { width: 100, align: 'right' });
@@ -550,13 +552,21 @@ function gerarPDFProcesso(proc) {
     const resTxt = listaParaBullets(proc.resultado_esperado, r => (typeof r === 'string' ? r : (r.item || '')));
     secao(doc, 5, 'Resultado Esperado', resTxt);
 
-    // ── RODAPÉ ──
-    const rodapeY = doc.page.height - 45;
-    doc.rect(0, rodapeY, pageW, 45).fill(COR_FUNDO);
-    doc.moveTo(0, rodapeY).lineTo(pageW, rodapeY).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
-    doc.fillColor(COR_SUBTEXTO).font('Helvetica').fontSize(8)
-      .text(`LC FIBRA — Sistema de Gestão  ·  ${proc.codigo || ''}  ·  Gerado em ${new Date().toLocaleString('pt-BR')}`,
-        marginL, rodapeY + 16, { width: pageW - marginL - marginR, align: 'center' });
+    // ── RODAPÉ (em todas as páginas) ──
+    const geradoEm = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    const range = doc.bufferedPageRange();
+    for (let i = 0; i < range.count; i++) {
+      doc.switchToPage(range.start + i);
+      const rodapeY = doc.page.height - 45;
+      doc.rect(0, rodapeY, pageW, 45).fill(COR_FUNDO);
+      doc.moveTo(0, rodapeY).lineTo(pageW, rodapeY).strokeColor(COR_BORDA).lineWidth(0.5).stroke();
+      doc.fillColor(COR_SUBTEXTO).font('Helvetica').fontSize(8)
+        .text(`${empresaNome} — Sistema de Gestão  ·  ${proc.codigo || ''}  ·  Gerado em ${geradoEm}`,
+          marginL, rodapeY + 12, { width: pageW - marginL - marginR, align: 'center' });
+      doc.fillColor(COR_SUBTEXTO).font('Helvetica').fontSize(8)
+        .text(`Página ${i + 1} de ${range.count}`,
+          marginL, rodapeY + 24, { width: pageW - marginL - marginR, align: 'center' });
+    }
 
     doc.end();
   });
