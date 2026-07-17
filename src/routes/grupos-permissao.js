@@ -68,6 +68,20 @@ router.post('/', autenticar, soAdmin, async (req, res) => {
 });
 
 // Atualizar grupo
+// Aplicar a MESMA configuração de permissões a vários grupos de uma vez (só admin)
+router.post('/bulk-permissoes', autenticar, soAdmin, async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ erro: 'Nenhum grupo selecionado' });
+    const perm = req.body.permissoes_modulos ? JSON.stringify(req.body.permissoes_modulos) : null;
+    for (const id of ids) {
+      await run('UPDATE grupos_permissao SET permissoes_modulos = ? WHERE id = ? AND empresa_id = ?', [perm, id, req.usuario.empresa_id]);
+      await logGrupoHist(id, req, 'permissoes', 'Permissões definidas em massa');
+    }
+    res.json({ ok: true, total: ids.length });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.put('/:id', autenticar, soAdmin, async (req, res) => {
   try {
     const { nome, descricao, permissoes_modulos } = req.body;
