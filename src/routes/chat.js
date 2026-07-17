@@ -11,6 +11,14 @@ router.use(autenticar);
 (async () => {
   try { await run(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS aceite_prazo TIMESTAMPTZ`); } catch {}
   try { await run(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS aceite_tentativas INTEGER DEFAULT 0`); } catch {}
+  // Canais: responder mensagem + reações
+  try { await run(`ALTER TABLE chat_canal_mensagens ADD COLUMN IF NOT EXISTS responder_a TEXT`); } catch {}
+  try { await run(`ALTER TABLE chat_canal_mensagens ADD COLUMN IF NOT EXISTS responder_nome TEXT`); } catch {}
+  try { await run(`ALTER TABLE chat_canal_mensagens ADD COLUMN IF NOT EXISTS responder_texto TEXT`); } catch {}
+  try { await run(`CREATE TABLE IF NOT EXISTS chat_canal_reacoes (
+    id TEXT PRIMARY KEY, mensagem_id TEXT NOT NULL, empresa_id TEXT, usuario_id TEXT, emoji TEXT,
+    created_at TIMESTAMPTZ DEFAULT NOW()
+  )`); } catch {}
 })();
 
 const NOW = `TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')`;
@@ -528,26 +536,71 @@ router.get('/canais/:id/mensagens', async (req, res) => {
       `SELECT * FROM chat_canal_mensagens WHERE canal_id = ? ORDER BY created_at ASC LIMIT ?`,
       [req.params.id, limite]
     );
+    // Anexa reações agregadas por mensagem
+    const ids = msgs.map(m => m.id);
+    if (ids.length) {
+      const placeholders = ids.map(() => '?').join(',');
+      const rs = await all(
+        `SELECT mensagem_id, emoji, COUNT(*) AS total, SUM(CASE WHEN usuario_id = ? THEN 1 ELSE 0 END) AS eu
+         FROM chat_canal_reacoes WHERE mensagem_id IN (${placeholders}) GROUP BY mensagem_id, emoji`,
+        [uid(req), ...ids]
+      );
+      const mapa = {};
+      rs.forEach(r => { (mapa[r.mensagem_id] = mapa[r.mensagem_id] || []).push({ emoji: r.emoji, total: Number(r.total), eu: Number(r.eu) > 0 }); });
+      msgs.forEach(m => { m.reacoes = mapa[m.id] || []; });
+    }
     res.json(msgs);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Enviar mensagem no canal
+// Enviar mensagem no canal (texto, imagem/anexo, resposta a outra mensagem)
 router.post('/canais/:id/mensagens', async (req, res) => {
   try {
     const canal = await get('SELECT * FROM chat_canais WHERE id = ? AND empresa_id = ?', [req.params.id, eid(req)]);
     if (!canal) return res.status(404).json({ erro: 'Canal não encontrado' });
     if (!await temAcessoCanal(req, canal)) return res.status(403).json({ erro: 'Sem acesso a este canal' });
-    const { texto, anexo, anexo_nome, anexo_tipo } = req.body;
+    const { texto, anexo, anexo_nome, anexo_tipo, responder_a } = req.body;
     if (!texto?.trim() && !anexo) return res.status(400).json({ erro: 'Mensagem vazia' });
+    let rNome = null, rTexto = null;
+    if (responder_a) {
+      const orig = await get('SELECT usuario_nome, texto, anexo_nome FROM chat_canal_mensagens WHERE id = ? AND canal_id = ?', [responder_a, req.params.id]);
+      if (orig) { rNome = orig.usuario_nome; rTexto = orig.texto || (orig.anexo_nome ? '📎 ' + orig.anexo_nome : 'anexo'); }
+    }
     const id = uuidv4();
     await run(
-      `INSERT INTO chat_canal_mensagens (id, canal_id, empresa_id, usuario_id, usuario_nome, texto, anexo, anexo_nome, anexo_tipo)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, req.params.id, eid(req), uid(req), unome(req), texto?.trim() || null, anexo || null, anexo_nome || null, anexo_tipo || null]
+      `INSERT INTO chat_canal_mensagens (id, canal_id, empresa_id, usuario_id, usuario_nome, texto, anexo, anexo_nome, anexo_tipo, responder_a, responder_nome, responder_texto)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.params.id, eid(req), uid(req), unome(req), texto?.trim() || null, anexo || null, anexo_nome || null, anexo_tipo || null, responder_a || null, rNome, rTexto]
     );
     const msg = await get('SELECT * FROM chat_canal_mensagens WHERE id = ?', [id]);
+    msg.reacoes = [];
     res.json(msg);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Reagir / desreagir a uma mensagem de canal (toggle por emoji)
+router.post('/canais/:id/mensagens/:mid/reagir', async (req, res) => {
+  try {
+    const { emoji } = req.body;
+    if (!emoji) return res.status(400).json({ erro: 'Emoji obrigatório' });
+    const msg = await get('SELECT id FROM chat_canal_mensagens WHERE id = ? AND canal_id = ? AND empresa_id = ?', [req.params.mid, req.params.id, eid(req)]);
+    if (!msg) return res.status(404).json({ erro: 'Mensagem não encontrada' });
+    const ja = await get('SELECT id FROM chat_canal_reacoes WHERE mensagem_id = ? AND usuario_id = ? AND emoji = ?', [req.params.mid, uid(req), emoji]);
+    if (ja) await run('DELETE FROM chat_canal_reacoes WHERE id = ?', [ja.id]);
+    else await run('INSERT INTO chat_canal_reacoes (id, mensagem_id, empresa_id, usuario_id, emoji) VALUES (?, ?, ?, ?, ?)', [uuidv4(), req.params.mid, eid(req), uid(req), emoji]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Apagar mensagem de canal: só o autor; gestor/admin apaga qualquer
+router.delete('/canais/:id/mensagens/:mid', async (req, res) => {
+  try {
+    const msg = await get('SELECT * FROM chat_canal_mensagens WHERE id = ? AND canal_id = ? AND empresa_id = ?', [req.params.mid, req.params.id, eid(req)]);
+    if (!msg) return res.status(404).json({ erro: 'Mensagem não encontrada' });
+    if (!ehGestor(req) && msg.usuario_id !== uid(req)) return res.status(403).json({ erro: 'Você só pode apagar suas próprias mensagens' });
+    await run('DELETE FROM chat_canal_reacoes WHERE mensagem_id = ?', [req.params.mid]);
+    await run('DELETE FROM chat_canal_mensagens WHERE id = ?', [req.params.mid]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
