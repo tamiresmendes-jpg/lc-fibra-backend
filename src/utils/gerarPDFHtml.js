@@ -117,7 +117,8 @@ function montarHtmlPOP(pop) {
     .sec h2 .n { background: #7B55F1; color: #fff; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
     .corpo { padding-left: 28px; }
     .corpo p { margin: 0 0 8px; }
-    .corpo img { max-width: 100%; border-radius: 6px; margin: 6px 0; }
+    .corpo img { max-width: 100%; max-height: 200mm; width: auto; height: auto; object-fit: contain; border-radius: 6px; margin: 6px 0; display: block; }
+    .corpo figure { margin: 8px 0; }
     .corpo h1,.corpo h2,.corpo h3,.corpo h4 { color: #0f172a; margin: 12px 0 6px; }
     .corpo ul,.corpo ol { margin: 6px 0; padding-left: 22px; }
     .corpo li { margin: 2px 0; }
