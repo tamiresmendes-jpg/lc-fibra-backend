@@ -49,6 +49,10 @@ function usuarioPodeVer(alteracao, usuario) {
     const deptId = pub.split(':')[1];
     return String(usuario.departamento_id) === String(deptId);
   }
+  if (pub.startsWith('departamentos:')) {
+    const ids = pub.slice('departamentos:'.length).split(',').map(s => s.trim()).filter(Boolean);
+    return ids.map(String).includes(String(usuario.departamento_id));
+  }
   return true;
 }
 
