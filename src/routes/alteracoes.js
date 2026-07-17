@@ -12,6 +12,10 @@ function eid(req) { return req.usuario.empresa_id; }
 (async () => {
   // Garante coluna publico_alvo
   try { await run("ALTER TABLE alteracoes ADD COLUMN publico_alvo TEXT DEFAULT 'todos'"); } catch {}
+  // Curtidas nos avisos
+  try { await run(`CREATE TABLE IF NOT EXISTS alteracao_curtidas (
+    id TEXT PRIMARY KEY, alteracao_id TEXT NOT NULL, usuario_id TEXT, created_at TIMESTAMPTZ DEFAULT NOW()
+  )`); } catch {}
 
   // Limpeza única: apaga histórico automático antigo (roda só uma vez)
   try {
@@ -77,10 +81,12 @@ router.get('/', async (req, res) => {
     // Filtra por publico_alvo
     lista = lista.filter(a => usuarioPodeVer(a, usuarioCompleto || req.usuario));
 
-    // Para cada alteração, verifica se usuário já leu
+    // Para cada alteração, verifica leitura e curtidas
     lista = await Promise.all(lista.map(async a => {
       const ciencia = await get('SELECT id, created_at FROM alteracao_ciencias WHERE alteracao_id=? AND usuario_id=?', [a.id, req.usuario.id]);
-      return { ...a, eu_li: !!ciencia, data_ciencia: ciencia?.created_at };
+      const curt = await get('SELECT COUNT(*) AS total FROM alteracao_curtidas WHERE alteracao_id=?', [a.id]);
+      const euCurti = await get('SELECT id FROM alteracao_curtidas WHERE alteracao_id=? AND usuario_id=?', [a.id, req.usuario.id]);
+      return { ...a, eu_li: !!ciencia, data_ciencia: ciencia?.created_at, curtidas: Number(curt?.total || 0), eu_curti: !!euCurti };
     }));
 
     if (pendentes === 'true') lista = lista.filter(a => !a.eu_li);
@@ -184,6 +190,18 @@ router.post('/:id/ciente', async (req, res) => {
     if (existe) return res.json({ ok: true, ja_confirmado: true });
     const ip = req.headers['x-forwarded-for'] || req.socket?.remoteAddress || null;
     await run('INSERT INTO alteracao_ciencias (id,alteracao_id,usuario_id,ip) VALUES (?,?,?,?)', [uuidv4(), req.params.id, req.usuario.id, ip]);
+    res.json({ ok: true });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Curtir / descurtir um aviso (toggle) — qualquer usuário
+router.post('/:id/curtir', async (req, res) => {
+  try {
+    const alteracao = await get('SELECT id FROM alteracoes WHERE id=? AND empresa_id=? AND ativo=1', [req.params.id, eid(req)]);
+    if (!alteracao) return res.status(404).json({ erro: 'Aviso não encontrado' });
+    const ja = await get('SELECT id FROM alteracao_curtidas WHERE alteracao_id=? AND usuario_id=?', [req.params.id, req.usuario.id]);
+    if (ja) await run('DELETE FROM alteracao_curtidas WHERE id=?', [ja.id]);
+    else await run('INSERT INTO alteracao_curtidas (id,alteracao_id,usuario_id) VALUES (?,?,?)', [uuidv4(), req.params.id, req.usuario.id]);
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

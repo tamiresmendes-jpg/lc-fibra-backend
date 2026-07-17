@@ -213,6 +213,7 @@ const ROTAS_PESSOAIS = [
   /^\/api\/cultura\/pesquisas\/[^/]+\/responder\/?$/,           // responder pesquisa de clima
   /^\/api\/cultura\/enquetes\/[^/]+\/votar\/?$/,                // votar em enquete
   /^\/api\/alteracoes\/[^/]+\/ciente\/?$/,                       // dar ciência
+  /^\/api\/alteracoes\/[^/]+\/curtir\/?$/,                       // curtir aviso
   /^\/api\/treinamentos\/[^/]+\/pops\/[^/]+\/concluir\/?$/,      // concluir treinamento próprio
   // POP — comentar, curtir/reagir e excluir o próprio comentário (resolver continua bloqueado)
   /^\/api\/pop-comentarios\/?$/,                                 // criar comentário
