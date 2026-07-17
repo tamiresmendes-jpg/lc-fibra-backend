@@ -103,7 +103,6 @@ router.get('/pendentes', async (req, res) => {
     `, [eid(req), req.usuario.id]);
 
     const filtrados = lista
-      .filter(a => usuarioTemAcessoModulo(usuario, a.modulo))
       .filter(a => usuarioPodeVer(a, usuario));
     res.json(filtrados);
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -119,7 +118,6 @@ router.get('/contador', async (req, res) => {
       AND NOT EXISTS (SELECT 1 FROM alteracao_ciencias c WHERE c.alteracao_id=a.id AND c.usuario_id=?)
     `, [eid(req), req.usuario.id]);
     const filtrados = lista
-      .filter(a => usuarioTemAcessoModulo(usuario, a.modulo))
       .filter(a => usuarioPodeVer(a, usuario));
     res.json({ total: filtrados.length });
   } catch(e) { res.status(500).json({ erro: e.message }); }
