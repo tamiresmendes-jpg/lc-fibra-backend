@@ -439,6 +439,7 @@ router.post('/', async (req, res) => {
         { name: 'Criado por', value: req.usuario.nome || '—', inline: true },
         { name: 'Status', value: status || 'rascunho', inline: true },
       ],
+      linkPath: `/processos`,
       footer: { text: 'Kronos — Processos' },
       timestamp: new Date().toISOString(),
     }).catch(() => {});

@@ -17,6 +17,7 @@ async function garantirTabela() {
       atualizado_em TIMESTAMP DEFAULT NOW()
     )`);
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_aniv_env TEXT'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS sistema_url TEXT'); } catch {}
     tabelaPronta = true;
   } catch (e) { console.error('[Discord] tabela', e.message); }
 }
@@ -63,12 +64,24 @@ async function postWebhook(url, embed, conteudo) {
  * @param {string} evento  chave em EVENTO_COL
  * @param {object} embed   { title, description, color, fields, url, footer }
  */
+const URL_PADRAO = 'https://kronos.lcvirtualnet.com.br';
+
 async function notificar(empresaId, evento, embed) {
   try {
     const cfg = await getConfig(empresaId);
     if (!cfg || !cfg.ativo || !cfg.webhook_url) return false;
     const col = EVENTO_COL[evento];
     if (col && !cfg[col]) return false; // evento desativado
+
+    // Link clicável: se o embed tiver linkPath, monta a URL do sistema e a
+    // aplica no título (embed.url) + um campo "Abrir no Kronos".
+    if (embed && embed.linkPath) {
+      const base = (cfg.sistema_url || URL_PADRAO).replace(/\/+$/, '');
+      const url = base + embed.linkPath;
+      embed.url = url;
+      embed.fields = [...(embed.fields || []), { name: '🔗 Link', value: `[Abrir no Kronos](${url})` }];
+      delete embed.linkPath;
+    }
     return postWebhook(cfg.webhook_url, embed);
   } catch (e) {
     console.error('[Discord] notificar', e.message);

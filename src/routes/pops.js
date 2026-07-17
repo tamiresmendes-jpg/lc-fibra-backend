@@ -61,6 +61,7 @@ router.post('/bulk/ativar', async (req, res) => {
       title: `✅ ${n} POP${n > 1 ? 's' : ''} ativado${n > 1 ? 's' : ''} e publicado${n > 1 ? 's' : ''}`,
       color: DISCORD_COR.verde,
       fields: [{ name: 'Por', value: req.usuario.nome || '—', inline: true }],
+      linkPath: `/pops`,
       footer: { text: 'Kronos — POPs' },
       timestamp: new Date().toISOString(),
     }).catch(() => {});
@@ -227,6 +228,7 @@ router.post('/', async (req, res) => {
       title: `📄 Novo POP: ${codigo || ''} ${titulo}`.trim(),
       color: DISCORD_COR.roxo,
       fields: [{ name: 'Criado por', value: req.usuario.nome || '—', inline: true }],
+      linkPath: `/pops/${id}`,
       footer: { text: 'Kronos — POPs' },
       timestamp: new Date().toISOString(),
     }).catch(() => {});
@@ -323,7 +325,7 @@ router.get('/:id/visualizacoes', async (req, res) => {
 // Ativar POP (rascunho → ativo)
 router.post('/:id/ativar', async (req, res) => {
   try {
-    const popAtual = await get('SELECT id, versao, status FROM pops WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    const popAtual = await get('SELECT id, versao, status, codigo, titulo FROM pops WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
     if (!popAtual) return res.status(404).json({ erro: 'POP não encontrado' });
     if (popAtual.status === 'ativo') return res.status(400).json({ erro: 'POP já está ativo' });
 
@@ -338,6 +340,14 @@ router.post('/:id/ativar', async (req, res) => {
     `, [uuidv4(), req.params.id, req.usuario.id, null, popAtual.versao, 'POP ativado e publicado oficialmente', 'ativacao']);
 
     res.json({ mensagem: 'POP ativado com sucesso' });
+    notificarDiscord(req.usuario.empresa_id, 'pop', {
+      title: `✅ POP ativado: ${popAtual.codigo || ''} ${popAtual.titulo || ''}`.trim(),
+      color: DISCORD_COR.verde,
+      fields: [{ name: 'Ativado por', value: req.usuario.nome || '—', inline: true }],
+      linkPath: `/pops/${req.params.id}`,
+      footer: { text: 'Kronos — POPs' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

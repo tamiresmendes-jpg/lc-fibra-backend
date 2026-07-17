@@ -152,6 +152,7 @@ router.post('/', async (req, res) => {
         { name: 'Módulo', value: modulo, inline: true },
         { name: 'Tipo', value: tipo_acao, inline: true },
       ],
+      linkPath: `/central-alteracoes`,
       footer: { text: 'Kronos — Central de Ciência' },
       timestamp: new Date().toISOString(),
     }).catch(() => {});
