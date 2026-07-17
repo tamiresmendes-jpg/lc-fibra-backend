@@ -12,7 +12,7 @@ const { run } = require('../config/database');
 const CAMPOS_OCULTOS = new Set([
   'senha', 'senha_atual', 'nova_senha', 'password', 'token', 'refresh_token',
   'imagem', 'foto', 'anexo', 'anexos', 'arquivo', 'base64', 'avatar', 'blocos',
-  'conteudo', 'assinatura',
+  'conteudo', 'assinatura', 'webhook_url',
 ]);
 
 // Sanitiza o corpo da requisição: oculta sensíveis, corta strings enormes

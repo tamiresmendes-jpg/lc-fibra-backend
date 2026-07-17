@@ -2,6 +2,7 @@ const express = require('express');
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { notificar, COR } = require('../utils/discord');
 
 const router = express.Router();
 router.use(autenticar);
@@ -143,6 +144,17 @@ router.post('/', async (req, res) => {
        versao_anterior||null, versao_atual||null, req.usuario.id, publico_alvo||'todos']
     );
     res.status(201).json({ id });
+    notificar(eid(req), 'ciencia', {
+      title: `🔔 ${titulo}`,
+      description: descricao || undefined,
+      color: COR.azul,
+      fields: [
+        { name: 'Módulo', value: modulo, inline: true },
+        { name: 'Tipo', value: tipo_acao, inline: true },
+      ],
+      footer: { text: 'Kronos — Central de Ciência' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

@@ -6,6 +6,7 @@ const fs = require('fs');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { gerarPDFProcesso } = require('../utils/gerarPDF');
+const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 const UPLOADS_DIR = path.join(__dirname, '../../uploads');
 try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch (_) {}
@@ -431,6 +432,16 @@ router.post('/', async (req, res) => {
     if (dep) await run('UPDATE processos SET departamentos_ids=$1, departamentos_nomes=$2 WHERE id=$3', [dep.idsJson, dep.nomes, id]);
     await registrarHistorico(id, eid(req), req.usuario, 'criado', { mudancas: [status === 'ativo' ? 'Processo criado e ativado' : 'Processo criado em rascunho'], titulo, codigo, status });
     res.status(201).json({ id, titulo, codigo });
+    notificarDiscord(eid(req), 'processo', {
+      title: `🗂️ Novo Processo: ${codigo || ''} ${titulo}`.trim(),
+      color: DISCORD_COR.roxo,
+      fields: [
+        { name: 'Criado por', value: req.usuario.nome || '—', inline: true },
+        { name: 'Status', value: status || 'rascunho', inline: true },
+      ],
+      footer: { text: 'Kronos — Processos' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

@@ -10,6 +10,7 @@ async function gerarPDFfiel(pop, browser) {
   catch (e) { console.error('PDF fiel falhou, usando fallback:', e.message); return gerarPDFPOP(pop); }
 }
 const { enviarEmailPOP } = require('../utils/email');
+const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 const router = express.Router();
 router.use(autenticar);
@@ -56,6 +57,13 @@ router.post('/bulk/ativar', async (req, res) => {
       n++;
     }
     res.json({ ok: true, total: n });
+    if (n > 0) notificarDiscord(req.usuario.empresa_id, 'pop', {
+      title: `✅ ${n} POP${n > 1 ? 's' : ''} ativado${n > 1 ? 's' : ''} e publicado${n > 1 ? 's' : ''}`,
+      color: DISCORD_COR.verde,
+      fields: [{ name: 'Por', value: req.usuario.nome || '—', inline: true }],
+      footer: { text: 'Kronos — POPs' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -214,6 +222,14 @@ router.post('/', async (req, res) => {
       [dep.idsJson, dep.nomes, dep.primeiro, id]);
 
     res.status(201).json({ id, titulo, codigo });
+
+    notificarDiscord(req.usuario.empresa_id, 'pop', {
+      title: `📄 Novo POP: ${codigo || ''} ${titulo}`.trim(),
+      color: DISCORD_COR.roxo,
+      fields: [{ name: 'Criado por', value: req.usuario.nome || '—', inline: true }],
+      footer: { text: 'Kronos — POPs' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
 
     // Gera PDF e envia e-mail em background (não bloqueia a resposta)
     setImmediate(async () => {
