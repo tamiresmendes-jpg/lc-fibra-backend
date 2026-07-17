@@ -1,6 +1,56 @@
 const { v4: uuidv4 } = require('uuid');
 const { run } = require('../config/database');
 
+// Colunas extras para auditoria detalhada (o que mudou / método / rota)
+;(async () => {
+  try { await run('ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS detalhes TEXT'); } catch {}
+  try { await run('ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS metodo TEXT'); } catch {}
+  try { await run('ALTER TABLE audit_log ADD COLUMN IF NOT EXISTS rota TEXT'); } catch {}
+})();
+
+// Campos que nunca devem ser gravados no log (sensíveis/pesados)
+const CAMPOS_OCULTOS = new Set([
+  'senha', 'senha_atual', 'nova_senha', 'password', 'token', 'refresh_token',
+  'imagem', 'foto', 'anexo', 'anexos', 'arquivo', 'base64', 'avatar', 'blocos',
+  'conteudo', 'assinatura',
+]);
+
+// Sanitiza o corpo da requisição: oculta sensíveis, corta strings enormes
+// (base64/HTML) e limita profundidade para o log ficar legível.
+function sanitizar(valor, profundidade = 0) {
+  if (valor === null || valor === undefined) return valor;
+  if (typeof valor === 'string') {
+    if (valor.startsWith('data:')) return '[arquivo]';
+    return valor.length > 300 ? valor.slice(0, 300) + '…' : valor;
+  }
+  if (typeof valor === 'number' || typeof valor === 'boolean') return valor;
+  if (profundidade >= 4) return '…';
+  if (Array.isArray(valor)) {
+    if (valor.length > 20) return `[${valor.length} itens]`;
+    return valor.map(v => sanitizar(v, profundidade + 1));
+  }
+  if (typeof valor === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(valor)) {
+      if (CAMPOS_OCULTOS.has(k.toLowerCase())) { out[k] = '[oculto]'; continue; }
+      out[k] = sanitizar(v, profundidade + 1);
+    }
+    return out;
+  }
+  return String(valor);
+}
+
+function montarDetalhes(body) {
+  try {
+    if (!body || typeof body !== 'object' || Array.isArray(body)) return null;
+    const limpo = sanitizar(body);
+    const chaves = Object.keys(limpo);
+    if (!chaves.length) return null;
+    const json = JSON.stringify(limpo);
+    return json.length > 4000 ? json.slice(0, 4000) + '…' : json;
+  } catch { return null; }
+}
+
 // Mapa de prefixo de rota → módulo legível. Rotas não mapeadas usam fallback
 // derivado do caminho (nada é silenciosamente descartado).
 const ROTA_MODULO = {
@@ -138,10 +188,12 @@ async function registrar(req, res, statusCode, responseBody) {
       || req.socket?.remoteAddress
       || null;
 
+    const detalhes = method === 'DELETE' ? null : montarDetalhes(req.body);
+
     await run(
-      `INSERT INTO audit_log (id, empresa_id, usuario_id, usuario_nome, perfil, modulo, acao, entidade_nome, ip)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-      [uuidv4(), req.usuario.empresa_id, req.usuario.id, req.usuario.nome || null, req.usuario.perfil, modulo, acao, entidadeNome, ip]
+      `INSERT INTO audit_log (id, empresa_id, usuario_id, usuario_nome, perfil, modulo, acao, entidade_nome, ip, metodo, rota, detalhes)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+      [uuidv4(), req.usuario.empresa_id, req.usuario.id, req.usuario.nome || null, req.usuario.perfil, modulo, acao, entidadeNome, ip, method, url, detalhes]
     );
   } catch (e) {
     console.error('[AuditLog]', e.message);
