@@ -68,7 +68,7 @@ function fmtData(d) {
 function montarHtmlPOP(pop) {
   const status = { ativo: 'ATIVO', rascunho: 'RASCUNHO', revisao: 'EM REVISÃO', inativo: 'INATIVO' }[pop.status] || (pop.status || '').toUpperCase();
   const ident = [
-    ['Empresa', pop.empresa_nome || 'LC FIBRA'],
+    ['Empresa', pop.empresa_nome || 'LC Virtual Net'],
     ['Elaborado por', pop.criado_por_nome || '—'],
     ['Cargo', pop.cargo_nome || '—'],
     ['Versão', `v${pop.versao || '1.0'}`],
@@ -110,8 +110,10 @@ function montarHtmlPOP(pop) {
     .id-cel { background: #f8fafc; padding: 8px 12px; display: flex; flex-direction: column; gap: 2px; }
     .id-lbl { font-size: 8.5px; color: #64748b; text-transform: uppercase; let-spacing: .04em; font-weight: 700; }
     .id-val { font-size: 12px; font-weight: 600; color: #0f172a; }
-    .sec { margin: 14px 0; page-break-inside: avoid; }
-    .sec h2 { font-size: 13px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 8px; margin: 0 0 8px; }
+    .sec { margin: 14px 0; }
+    .sec h2 { font-size: 13px; font-weight: 700; color: #0f172a; display: flex; align-items: center; gap: 8px; margin: 0 0 8px; page-break-after: avoid; break-after: avoid; }
+    .id-grid { page-break-inside: avoid; }
+    .corpo img, .corpo table, .corpo tr, table.tab tr { page-break-inside: avoid; }
     .sec h2 .n { background: #7B55F1; color: #fff; width: 20px; height: 20px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex-shrink: 0; }
     .corpo { padding-left: 28px; }
     .corpo p { margin: 0 0 8px; }
@@ -130,7 +132,7 @@ function montarHtmlPOP(pop) {
     table.tab th, table.tab td { border: 1px solid #e2e8f0; padding: 7px 10px; text-align: left; vertical-align: top; }
   </style></head><body>
     <div class="cabecalho">
-      <div class="top"><span class="marca">LC FIBRA</span><span class="cod">${esc(pop.codigo || '')}</span></div>
+      <div class="top"><span class="marca">${esc(pop.empresa_nome || 'LC Virtual Net')}</span><span class="cod">${esc(pop.codigo || '')}</span></div>
       <h1>${esc(pop.titulo || 'Procedimento Operacional Padrão')}</h1>
       ${pop.descricao ? `<p class="desc">${esc(pop.descricao)}</p>` : ''}
       <span class="badge">${esc(status || 'RASCUNHO')}</span>
@@ -161,7 +163,13 @@ async function htmlParaPdf(html, browser) {
     await page.setContent(html, { waitUntil: 'load' });
     const pdf = await page.pdf({
       format: 'A4', printBackground: true,
-      margin: { top: '0', bottom: '14mm', left: '0', right: '0' },
+      displayHeaderFooter: true,
+      headerTemplate: '<span></span>',
+      footerTemplate: `<div style="font-size:8px;color:#94a3b8;width:100%;padding:0 12mm;display:flex;justify-content:space-between;align-items:center;font-family:Arial,sans-serif;">
+        <span>Kronos — Sistema de Gestão · LC Virtual Net</span>
+        <span>Gerado em <span class="date"></span> · pág. <span class="pageNumber"></span>/<span class="totalPages"></span></span>
+      </div>`,
+      margin: { top: '0', bottom: '16mm', left: '0', right: '0' },
     });
     return Buffer.from(pdf); // puppeteer pode retornar Uint8Array
   } finally { await page.close(); }
