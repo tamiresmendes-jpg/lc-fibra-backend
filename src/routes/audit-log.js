@@ -36,6 +36,19 @@ router.get('/', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Feed de novidades para o Dashboard de Início (visível a qualquer usuário logado)
+router.get('/feed', async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT id, usuario_nome, perfil, modulo, acao, entidade_nome, created_at
+       FROM audit_log WHERE empresa_id = $1
+       ORDER BY created_at DESC LIMIT 25`,
+      [eid(req)]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Usuários que fizeram alterações (para filtro)
 router.get('/usuarios', async (req, res) => {
   try {
