@@ -5,6 +5,7 @@ const {
   temPermissaoServer,
   resolverPermissao,
   ehRotaPessoal,
+  ehModuloOptIn,
 } = require('../utils/permissoes');
 
 const METODOS_MUTACAO = ['POST', 'PUT', 'PATCH', 'DELETE'];
@@ -51,6 +52,18 @@ async function verificarPermissao(req, res, next) {
     } catch { ownPerms = null; }
 
     const perms = await buscarPermsEfetivas(usuario.id, usuario.empresa_id, ownPerms);
+
+    // Módulos opt-in (ex.: ERP): exigem liberação EXPLÍCITA do grupo, mesmo
+    // quando o usuário tem "acesso total" (sem restrição configurada).
+    if (ehModuloOptIn(chave)) {
+      const mod = chave.split('.')[0];
+      const v = perms && perms[mod];
+      const liberado = v === true || v === 'editar' || v === 'visualizar'
+        || (v && typeof v === 'object' && v.enabled !== false);
+      if (!liberado) return res.status(403).json({ erro: 'Este módulo não está liberado para o seu grupo.' });
+      return next();
+    }
+
     if (!perms) return next(); // sem restrição configurada → acesso total
 
     if (temPermissaoServer(perms, chave, 'editar')) return next();

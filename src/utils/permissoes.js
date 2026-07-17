@@ -188,7 +188,17 @@ const MAPA_PERMISSAO = [
   ['/api/gestao-extra/metas',          'gestao.metas'],
   ['/api/gestao-extra/okrs',           'gestao.okrs'],
   ['/api/gestao-extra',                'gestao.indicadores'],
+  // ERP HubSoft — opt-in (ver MODULOS_OPT_IN abaixo)
+  ['/api/erp',                         'erp.consultar'],
 ];
+
+// Módulos que NÃO seguem a regra "acesso total mostra tudo": só liberam se o
+// grupo conceder explicitamente. Usado tanto para menu quanto para API.
+const MODULOS_OPT_IN = ['erp'];
+
+function ehModuloOptIn(chave) {
+  return MODULOS_OPT_IN.includes((chave || '').split('.')[0]);
+}
 
 function resolverPermissao(path) {
   for (const [prefixo, chave] of MAPA_PERMISSAO) {
@@ -231,4 +241,5 @@ module.exports = {
   temPermissaoServer,
   resolverPermissao,
   ehRotaPessoal,
+  ehModuloOptIn,
 };
