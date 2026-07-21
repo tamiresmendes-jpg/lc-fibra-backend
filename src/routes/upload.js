@@ -25,31 +25,40 @@ const upload = multer({
   storage,
   limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
   fileFilter: (req, file, cb) => {
-    const mimePermitidos = [
-      'video/mp4', 'video/quicktime', 'video/x-msvideo', 'video/webm',
-      'image/jpeg', 'image/png',
+    const mime = file.mimetype || '';
+    // Qualquer imagem (jpeg, png, webp, gif, heic/heif de iPhone, bmp, svg…) e vídeo
+    if (mime.startsWith('image/') || mime.startsWith('video/')) return cb(null, true);
+    const outrosPermitidos = [
       'application/pdf',
       'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
       'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+      'application/msword', 'application/vnd.ms-excel', 'application/vnd.ms-powerpoint',
+      'text/plain', 'text/csv',
     ];
-    if (mimePermitidos.includes(file.mimetype)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Tipo de arquivo não permitido'), false);
-    }
+    if (outrosPermitidos.includes(mime)) return cb(null, true);
+    cb(new Error('Tipo de arquivo não permitido'), false);
   },
 });
 
-router.post('/', upload.single('arquivo'), (req, res) => {
-  if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-  if (!req.file) return res.status(400).json({ erro: 'Nenhum arquivo enviado' });
-  res.json({
-    nome:     req.file.originalname,
-    arquivo:  req.file.filename,
-    url:      `/uploads/${req.file.filename}`,
-    tamanho:  req.file.size,
-    tipo:     req.file.mimetype,
+const uploadSingle = upload.single('arquivo');
+router.post('/', (req, res) => {
+  uploadSingle(req, res, (err) => {
+    if (err) {
+      const msg = err.code === 'LIMIT_FILE_SIZE'
+        ? 'Arquivo muito grande (máximo 100MB).'
+        : (err.message || 'Falha ao enviar o arquivo.');
+      return res.status(400).json({ erro: msg });
+    }
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    if (!req.file) return res.status(400).json({ erro: 'Nenhum arquivo enviado' });
+    res.json({
+      nome:     req.file.originalname,
+      arquivo:  req.file.filename,
+      url:      `/uploads/${req.file.filename}`,
+      tamanho:  req.file.size,
+      tipo:     req.file.mimetype,
+    });
   });
 });
 

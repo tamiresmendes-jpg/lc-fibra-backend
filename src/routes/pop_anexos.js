@@ -33,9 +33,11 @@ const TIPOS_PERMITIDOS = [
 
 const upload = multer({
   storage,
-  limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
+  limits: { fileSize: 100 * 1024 * 1024 }, // 100MB
   fileFilter: (req, file, cb) => {
-    if (TIPOS_PERMITIDOS.includes(file.mimetype)) return cb(null, true);
+    const mime = file.mimetype || '';
+    if (mime.startsWith('image/') || mime.startsWith('video/')) return cb(null, true);
+    if (TIPOS_PERMITIDOS.includes(mime)) return cb(null, true);
     cb(new Error('Tipo de arquivo não permitido'));
   },
 });
