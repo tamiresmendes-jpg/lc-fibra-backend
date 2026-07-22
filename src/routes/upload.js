@@ -62,4 +62,26 @@ router.post('/', (req, res) => {
   });
 });
 
+// Importa uma imagem a partir de uma URL (ex.: imagem colada de outro site) e
+// salva no servidor — para que o link não expire e a imagem fique permanente.
+router.post('/importar-url', async (req, res) => {
+  try {
+    if (!['admin','gestor','lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { url } = req.body || {};
+    if (!/^https?:\/\//i.test(url || '')) return res.status(400).json({ erro: 'URL inválida' });
+    const resp = await fetch(url);
+    if (!resp.ok) return res.status(400).json({ erro: 'Não foi possível baixar a imagem (link pode ter expirado).' });
+    const ct = (resp.headers.get('content-type') || '').split(';')[0].trim();
+    if (!ct.startsWith('image/')) return res.status(400).json({ erro: 'O link não é uma imagem.' });
+    const buf = Buffer.from(await resp.arrayBuffer());
+    if (buf.length > 100 * 1024 * 1024) return res.status(400).json({ erro: 'Imagem muito grande (máximo 100MB).' });
+    const ext = (ct.split('/')[1] || 'png').replace('jpeg', 'jpg').replace('svg+xml', 'svg').replace(/[^a-z0-9]/gi, '') || 'png';
+    const nome = `${Date.now()}_import.${ext}`;
+    fs.writeFileSync(path.join(UPLOAD_DIR, nome), buf);
+    res.json({ url: `/uploads/${nome}`, nome, tamanho: buf.length, tipo: ct });
+  } catch (e) {
+    res.status(400).json({ erro: 'Falha ao importar a imagem.' });
+  }
+});
+
 module.exports = router;
