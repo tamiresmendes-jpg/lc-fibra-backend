@@ -1,5 +1,5 @@
 const { run, all } = require('../config/database');
-const { postWebhook, garantirTabela, COR } = require('./discord');
+const { postWebhook, garantirTabela, registrarEnvio, COR } = require('./discord');
 
 // Data de hoje no fuso de São Paulo (YYYY-MM-DD)
 function hojeSP() {
@@ -40,13 +40,14 @@ async function enviarAniversariantesDoDia() {
       if (!aniversariantes.length) continue;
 
       const nomes = aniversariantes.map(a => `🎂 **${a.nome}**`).join('\n');
-      await postWebhook(cfg.webhook_url, {
+      const ok = await postWebhook(cfg.webhook_url, {
         title: '🎉 Aniversariantes de hoje!',
         description: `Hoje é dia de comemorar:\n\n${nomes}\n\nQue todos possam celebrar com muita alegria! 🥳`,
         color: COR.laranja,
         footer: { text: 'Kronos — Aniversariantes' },
         timestamp: new Date().toISOString(),
       });
+      registrarEnvio(cfg.empresa_id, 'aniversario', `Aniversariantes de hoje (${aniversariantes.length})`, ok, ok ? null : 'Falha no envio');
     }
   } catch (e) {
     console.error('[DiscordScheduler]', e.message);

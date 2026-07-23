@@ -1,7 +1,7 @@
 const express = require('express');
-const { run, get } = require('../config/database');
+const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
-const { getConfig, postWebhook, notificar, COR } = require('../utils/discord');
+const { getConfig, postWebhook, notificar, registrarEnvio, COR } = require('../utils/discord');
 
 const router = express.Router();
 router.use(autenticar);
@@ -66,6 +66,7 @@ router.post('/testar', async (req, res) => {
       color: COR.roxo,
       footer: { text: 'Kronos — Sistema de Gestão' },
     });
+    registrarEnvio(req.usuario.empresa_id, 'teste', 'Mensagem de teste', ok, ok ? null : 'Falha no envio');
     if (!ok) return res.status(502).json({ erro: 'Não foi possível enviar. Verifique a URL do webhook.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -92,6 +93,21 @@ router.post('/comunicar', async (req, res) => {
     });
     if (!ok) return res.status(400).json({ erro: 'Discord não configurado ou desativado. Ative em Configurações.' });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// GET — histórico dos avisos enviados ao Discord
+router.get('/historico', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const limite = Math.min(parseInt(req.query.limit) || 100, 300);
+    const rows = await all(
+      `SELECT id, evento, titulo, ok, erro, created_at
+       FROM discord_envios WHERE empresa_id = $1
+       ORDER BY created_at DESC LIMIT $2`,
+      [req.usuario.empresa_id, limite]
+    );
+    res.json(rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

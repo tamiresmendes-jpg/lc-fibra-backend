@@ -1,4 +1,16 @@
 const { run, get } = require('../config/database');
+const { v4: uuidv4 } = require('uuid');
+
+// Registra um envio no histórico (não quebra o fluxo em caso de erro)
+async function registrarEnvio(empresaId, evento, titulo, ok, erro) {
+  try {
+    await garantirTabela();
+    await run(
+      'INSERT INTO discord_envios (id, empresa_id, evento, titulo, ok, erro) VALUES ($1,$2,$3,$4,$5,$6)',
+      [uuidv4(), empresaId, evento || null, (titulo || '').slice(0, 300), ok ? 1 : 0, erro ? String(erro).slice(0, 300) : null]
+    );
+  } catch (e) { /* histórico é best-effort */ }
+}
 
 // Configuração da integração com Discord por empresa
 let tabelaPronta = false;
@@ -18,6 +30,17 @@ async function garantirTabela() {
     )`);
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_aniv_env TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS sistema_url TEXT'); } catch {}
+    try {
+      await run(`CREATE TABLE IF NOT EXISTS discord_envios (
+        id TEXT PRIMARY KEY,
+        empresa_id TEXT,
+        evento TEXT,
+        titulo TEXT,
+        ok INTEGER DEFAULT 1,
+        erro TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`);
+    } catch {}
     tabelaPronta = true;
   } catch (e) { console.error('[Discord] tabela', e.message); }
 }
@@ -82,7 +105,10 @@ async function notificar(empresaId, evento, embed) {
       embed.fields = [...(embed.fields || []), { name: '🔗 Link', value: `[Abrir no Kronos](${url})` }];
       delete embed.linkPath;
     }
-    return postWebhook(cfg.webhook_url, embed);
+    const tituloLimpo = (embed?.title || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
+    const ok = await postWebhook(cfg.webhook_url, embed);
+    registrarEnvio(empresaId, evento, tituloLimpo, ok, ok ? null : 'Falha no envio');
+    return ok;
   } catch (e) {
     console.error('[Discord] notificar', e.message);
     return false;
@@ -97,4 +123,4 @@ const COR = {
   vermelho: 0xef4444,
 };
 
-module.exports = { getConfig, notificar, postWebhook, garantirTabela, COR, EVENTO_COL };
+module.exports = { getConfig, notificar, postWebhook, garantirTabela, registrarEnvio, COR, EVENTO_COL };
