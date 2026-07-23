@@ -3,9 +3,12 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 router.use(autenticar);
 function eid(req) { return req.usuario.empresa_id; }
+
+const MESES_ESC = ['Janeiro','Fevereiro','Março','Abril','Maio','Junho','Julho','Agosto','Setembro','Outubro','Novembro','Dezembro'];
 
 async function logHist(escalaId, req, acao, detalhe) {
   try {
@@ -348,6 +351,31 @@ router.delete('/:id', async (req, res) => {
     await run('DELETE FROM hora_extra WHERE escala_id=?', [req.params.id]);
     await run('DELETE FROM sobreaviso_entradas WHERE escala_id=?', [req.params.id]);
     await run('DELETE FROM escalas WHERE id=? AND empresa_id=?', [req.params.id, eid(req)]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Notificar a escala/plantão no Discord (avisar a equipe que está pronta)
+router.post('/:id/notificar-discord', async (req, res) => {
+  try {
+    if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const escala = await get(
+      `SELECT e.*, d.nome as departamento_nome FROM escalas e
+       LEFT JOIN departamentos d ON d.id = e.departamento_id
+       WHERE e.id = ? AND e.empresa_id = ?`,
+      [req.params.id, eid(req)]
+    );
+    if (!escala) return res.status(404).json({ erro: 'Escala não encontrada' });
+    const titulo = escala.nome || `Plantão ${MESES_ESC[(escala.mes || 1) - 1]} ${escala.ano || ''}`.trim();
+    const ok = await notificarDiscord(eid(req), 'comunicado', {
+      title: `📅 ${titulo}`,
+      description: `A escala de **${escala.departamento_nome || 'plantão'}** referente a **${MESES_ESC[(escala.mes || 1) - 1]} ${escala.ano || ''}** está disponível. Confira sua escala!`,
+      color: DISCORD_COR.roxo,
+      linkPath: `/escala/ver/${req.params.id}`,
+      footer: { text: 'Kronos — Escala' },
+      timestamp: new Date().toISOString(),
+    });
+    if (!ok) return res.status(400).json({ erro: 'Discord não configurado/ativo. Configure em Configurações → Integração com o Discord.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
