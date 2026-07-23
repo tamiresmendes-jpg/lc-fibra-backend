@@ -35,7 +35,7 @@ router.get('/dashboard', async (req, res) => {
     const aniversariantes = await all(`
       SELECT id, nome, avatar, data_nascimento, departamento_id
       FROM usuarios WHERE empresa_id = $1 AND ativo = 1
-      AND COALESCE(tipo_usuario,'colaborador')='colaborador'
+      AND (COALESCE(tipo_usuario,'colaborador')='colaborador' OR COALESCE(mostrar_aniversario,0)=1)
       AND data_nascimento IS NOT NULL
       AND EXTRACT(MONTH FROM data_nascimento::date) = EXTRACT(MONTH FROM NOW() - INTERVAL '3 hours')
       ORDER BY EXTRACT(DAY FROM data_nascimento::date)

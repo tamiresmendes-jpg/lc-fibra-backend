@@ -87,7 +87,7 @@ router.get('/', async (req, res) => {
            ORDER BY f.data_inicio ASC LIMIT 6`, [eid])),
       safe(() => all(`SELECT id, nome, avatar, data_nascimento
            FROM usuarios
-           WHERE empresa_id=$1 AND ativo=1 AND COALESCE(tipo_usuario,'colaborador')='colaborador' AND data_nascimento IS NOT NULL`, [eid])),
+           WHERE empresa_id=$1 AND ativo=1 AND (COALESCE(tipo_usuario,'colaborador')='colaborador' OR COALESCE(mostrar_aniversario,0)=1) AND data_nascimento IS NOT NULL`, [eid])),
     ]);
 
     const totalColaboradores = rowResumo.total_colaboradores;

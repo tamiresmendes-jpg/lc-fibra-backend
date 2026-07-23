@@ -140,7 +140,7 @@ router.get('/', async (req, res) => {
         `SELECT u.id, u.nome, u.data_nascimento
          FROM usuarios u
          WHERE u.empresa_id=? AND u.ativo=1 AND u.data_nascimento IS NOT NULL
-           AND COALESCE(u.tipo_usuario,'colaborador') = 'colaborador'
+           AND (COALESCE(u.tipo_usuario,'colaborador') = 'colaborador' OR COALESCE(u.mostrar_aniversario,0)=1)
            AND substr(u.data_nascimento,6,2) IN (?,?,?)`,
         [eid, prevMes, mesMM, nextMes]
       )),

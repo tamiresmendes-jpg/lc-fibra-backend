@@ -8,6 +8,14 @@ const { enviarEmailAcesso } = require('../utils/email');
 const router = express.Router();
 router.use(autenticar);
 
+// Marca se um usuário administrativo deve aparecer nos aniversariantes
+;(async () => {
+  try { await run('ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS mostrar_aniversario INTEGER DEFAULT 0'); } catch {}
+})();
+
+// Regra: aparece nos aniversariantes se for colaborador OU administrativo marcado
+const COND_ANIVERSARIO = "(COALESCE(tipo_usuario,'colaborador')='colaborador' OR COALESCE(mostrar_aniversario,0)=1)";
+
 // Normaliza data de nascimento — aceita dd/mm/aaaa, dd-mm-aaaa, aaaa-mm-dd, dd/mm
 function normalizarData(raw) {
   if (!raw || !raw.toString().trim()) return null;
@@ -44,7 +52,7 @@ router.get('/', async (req, res) => {
     let sql = `
     SELECT u.id, u.nome, u.email, u.perfil, u.ativo, u.created_at,
            u.departamento_id, u.cargo_id, u.gestor_id, u.setor_id, u.funcao, u.bloqueado, u.sort_order, u.cor, u.nivel,
-           u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos, u.tipo_usuario,
+           u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos, u.tipo_usuario, u.mostrar_aniversario,
            d.nome as departamento_nome, c.nome as cargo_nome,
            g.nome as gestor_nome, s.nome as setor_nome
     FROM usuarios u
@@ -207,6 +215,11 @@ router.put('/:id', async (req, res) => {
           WHERE id=? AND empresa_id=?
         `, [...base, req.params.id, req.usuario.empresa_id]);
       }
+    }
+    // Aparecer nos aniversariantes (opção para usuários administrativos)
+    if ('mostrar_aniversario' in req.body) {
+      await run('UPDATE usuarios SET mostrar_aniversario=? WHERE id=? AND empresa_id=?',
+        [req.body.mostrar_aniversario ? 1 : 0, req.params.id, req.usuario.empresa_id]);
     }
     res.json({ mensagem: 'Usuário atualizado' });
   } catch(err) {
