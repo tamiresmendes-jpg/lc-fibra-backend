@@ -1,18 +1,25 @@
-const { run, get } = require('../config/database');
+const { run, get, all } = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 
-// Registra um envio no histórico (não quebra o fluxo em caso de erro)
-async function registrarEnvio(empresaId, evento, titulo, ok, erro) {
-  try {
-    await garantirTabela();
-    await run(
-      'INSERT INTO discord_envios (id, empresa_id, evento, titulo, ok, erro) VALUES ($1,$2,$3,$4,$5,$6)',
-      [uuidv4(), empresaId, evento || null, (titulo || '').slice(0, 300), ok ? 1 : 0, erro ? String(erro).slice(0, 300) : null]
-    );
-  } catch (e) { /* histórico é best-effort */ }
-}
+const URL_PADRAO = 'https://kronos.lcvirtualnet.com.br';
 
-// Configuração da integração com Discord por empresa
+const COR = {
+  roxo: 0x7B55F1,
+  verde: 0x10b981,
+  azul: 0x0ea5e9,
+  laranja: 0xf59e0b,
+  vermelho: 0xef4444,
+};
+
+// Eventos que podem ser direcionados a um canal
+const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'comunicado'];
+// Mapa evento → coluna de habilitação (liga/desliga)
+const EVENTO_COL = {
+  ciencia: 'ev_ciencia', pop: 'ev_pop', processo: 'ev_processo',
+  aniversario: 'ev_aniversario', comunicado: 'ev_comunicado', manual: 'ev_comunicado',
+};
+
+// ── Migração / criação de tabelas ─────────────────────────────────────────
 let tabelaPronta = false;
 async function garantirTabela() {
   if (tabelaPronta) return;
@@ -30,49 +37,96 @@ async function garantirTabela() {
     )`);
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_aniv_env TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS sistema_url TEXT'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS canais_evento TEXT'); } catch {}
+    try {
+      await run(`CREATE TABLE IF NOT EXISTS discord_canais (
+        id TEXT PRIMARY KEY,
+        empresa_id TEXT,
+        nome TEXT,
+        webhook_url TEXT,
+        created_at TIMESTAMP DEFAULT NOW()
+      )`);
+    } catch {}
     try {
       await run(`CREATE TABLE IF NOT EXISTS discord_envios (
         id TEXT PRIMARY KEY,
         empresa_id TEXT,
         evento TEXT,
         titulo TEXT,
+        canal TEXT,
         ok INTEGER DEFAULT 1,
         erro TEXT,
         created_at TIMESTAMP DEFAULT NOW()
       )`);
     } catch {}
+    try { await run('ALTER TABLE discord_envios ADD COLUMN IF NOT EXISTS canal TEXT'); } catch {}
     tabelaPronta = true;
   } catch (e) { console.error('[Discord] tabela', e.message); }
 }
 garantirTabela();
 
-async function getConfig(empresaId) {
-  await garantirTabela();
-  return get('SELECT * FROM integracao_discord WHERE empresa_id = $1', [empresaId]);
+// Cria o canal "Principal" a partir do webhook antigo, se ainda não houver canais
+async function migrarCanalPrincipal(empresaId, cfg) {
+  try {
+    const existe = await get('SELECT id FROM discord_canais WHERE empresa_id = $1 LIMIT 1', [empresaId]);
+    if (existe) return;
+    if (cfg && cfg.webhook_url) {
+      const id = uuidv4();
+      await run('INSERT INTO discord_canais (id, empresa_id, nome, webhook_url) VALUES ($1,$2,$3,$4)',
+        [id, empresaId, 'Principal', cfg.webhook_url]);
+      // aponta todos os eventos para esse canal
+      const mapa = {}; EVENTOS.forEach(ev => { mapa[ev] = id; });
+      await run('UPDATE integracao_discord SET canais_evento = $1 WHERE empresa_id = $2', [JSON.stringify(mapa), empresaId]);
+    }
+  } catch (e) { /* best-effort */ }
 }
 
-// Mapa evento → coluna de habilitação
-const EVENTO_COL = {
-  ciencia: 'ev_ciencia',
-  pop: 'ev_pop',
-  processo: 'ev_processo',
-  aniversario: 'ev_aniversario',
-  comunicado: 'ev_comunicado',
-  manual: null, // "Comunicar à equipe" sempre permitido quando ativo
-};
+async function getConfig(empresaId) {
+  await garantirTabela();
+  const cfg = await get('SELECT * FROM integracao_discord WHERE empresa_id = $1', [empresaId]);
+  if (cfg) await migrarCanalPrincipal(empresaId, cfg);
+  return cfg;
+}
 
-// Envia um embed para o webhook. Não lança erro (falha de Discord nunca
-// deve quebrar a operação principal do sistema).
+async function getCanais(empresaId) {
+  await garantirTabela();
+  return all('SELECT id, nome, webhook_url FROM discord_canais WHERE empresa_id = $1 ORDER BY created_at ASC', [empresaId]);
+}
+
+// Resolve o webhook do canal para um evento (ou canal específico)
+async function resolverWebhook(empresaId, cfg, evento, canalId) {
+  const canais = await getCanais(empresaId);
+  if (!canais.length) return cfg?.webhook_url || null;
+  let alvo = null;
+  if (canalId) alvo = canais.find(c => c.id === canalId);
+  if (!alvo) {
+    let mapa = {};
+    try { mapa = cfg?.canais_evento ? JSON.parse(cfg.canais_evento) : {}; } catch {}
+    const ev = evento === 'manual' ? 'comunicado' : evento;
+    const id = mapa[ev];
+    alvo = canais.find(c => c.id === id);
+  }
+  if (!alvo) alvo = canais[0]; // fallback: primeiro canal
+  return alvo?.webhook_url || cfg?.webhook_url || null;
+}
+
+async function registrarEnvio(empresaId, evento, titulo, ok, erro, canal) {
+  try {
+    await garantirTabela();
+    await run(
+      'INSERT INTO discord_envios (id, empresa_id, evento, titulo, canal, ok, erro) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [uuidv4(), empresaId, evento || null, (titulo || '').slice(0, 300), canal || null, ok ? 1 : 0, erro ? String(erro).slice(0, 300) : null]
+    );
+  } catch (e) { /* histórico best-effort */ }
+}
+
+// Envia um embed para o webhook. Nunca lança erro.
 async function postWebhook(url, embed, conteudo) {
   try {
     const resp = await fetch(url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        username: 'Kronos',
-        content: conteudo || undefined,
-        embeds: embed ? [embed] : undefined,
-      }),
+      body: JSON.stringify({ username: 'Kronos', content: conteudo || undefined, embeds: embed ? [embed] : undefined }),
     });
     return resp.ok;
   } catch (e) {
@@ -82,32 +136,29 @@ async function postWebhook(url, embed, conteudo) {
 }
 
 /**
- * Notifica um evento no Discord, respeitando a configuração da empresa.
- * @param {string} empresaId
- * @param {string} evento  chave em EVENTO_COL
- * @param {object} embed   { title, description, color, fields, url, footer }
+ * Notifica um evento no Discord, respeitando a config da empresa e o canal.
+ * @param {object} opts { canalId, canalNome }
  */
-const URL_PADRAO = 'https://kronos.lcvirtualnet.com.br';
-
-async function notificar(empresaId, evento, embed) {
+async function notificar(empresaId, evento, embed, opts = {}) {
   try {
     const cfg = await getConfig(empresaId);
-    if (!cfg || !cfg.ativo || !cfg.webhook_url) return false;
+    if (!cfg || !cfg.ativo) return false;
     const col = EVENTO_COL[evento];
     if (col && !cfg[col]) return false; // evento desativado
 
-    // Link clicável: se o embed tiver linkPath, monta a URL do sistema e a
-    // aplica no título (embed.url) + um campo "Abrir no Kronos".
+    const url = await resolverWebhook(empresaId, cfg, evento, opts.canalId);
+    if (!url) return false;
+
     if (embed && embed.linkPath) {
       const base = (cfg.sistema_url || URL_PADRAO).replace(/\/+$/, '');
-      const url = base + embed.linkPath;
-      embed.url = url;
-      embed.fields = [...(embed.fields || []), { name: '🔗 Link', value: `[Abrir no Kronos](${url})` }];
+      const link = base + embed.linkPath;
+      embed.url = link;
+      embed.fields = [...(embed.fields || []), { name: '🔗 Link', value: `[Abrir no Kronos](${link})` }];
       delete embed.linkPath;
     }
     const tituloLimpo = (embed?.title || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
-    const ok = await postWebhook(cfg.webhook_url, embed);
-    registrarEnvio(empresaId, evento, tituloLimpo, ok, ok ? null : 'Falha no envio');
+    const ok = await postWebhook(url, embed);
+    registrarEnvio(empresaId, evento, tituloLimpo, ok, ok ? null : 'Falha no envio', opts.canalNome);
     return ok;
   } catch (e) {
     console.error('[Discord] notificar', e.message);
@@ -115,12 +166,4 @@ async function notificar(empresaId, evento, embed) {
   }
 }
 
-const COR = {
-  roxo: 0x7B55F1,
-  verde: 0x10b981,
-  azul: 0x0ea5e9,
-  laranja: 0xf59e0b,
-  vermelho: 0xef4444,
-};
-
-module.exports = { getConfig, notificar, postWebhook, garantirTabela, registrarEnvio, COR, EVENTO_COL };
+module.exports = { getConfig, getCanais, resolverWebhook, notificar, postWebhook, garantirTabela, registrarEnvio, COR, EVENTO_COL, EVENTOS };

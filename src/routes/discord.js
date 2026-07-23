@@ -1,7 +1,8 @@
 const express = require('express');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
-const { getConfig, postWebhook, notificar, registrarEnvio, COR } = require('../utils/discord');
+const { v4: uuidv4 } = require('uuid');
+const { getConfig, getCanais, postWebhook, notificar, registrarEnvio, COR } = require('../utils/discord');
 
 const router = express.Router();
 router.use(autenticar);
@@ -19,16 +20,59 @@ router.get('/config', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
     const cfg = await getConfig(req.usuario.empresa_id) || {};
+    const canais = await getCanais(req.usuario.empresa_id);
+    let canaisEvento = {};
+    try { canaisEvento = cfg.canais_evento ? JSON.parse(cfg.canais_evento) : {}; } catch {}
     res.json({
       ativo: !!cfg.ativo,
-      webhook_url: cfg.webhook_url || '',
       sistema_url: cfg.sistema_url || '',
       ev_ciencia: cfg.ev_ciencia !== 0,
       ev_pop: cfg.ev_pop !== 0,
       ev_processo: cfg.ev_processo !== 0,
       ev_aniversario: cfg.ev_aniversario !== 0,
       ev_comunicado: cfg.ev_comunicado !== 0,
+      canais_evento: canaisEvento,
+      canais,
     });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── Canais (webhooks) ──────────────────────────────────────────────────────
+router.get('/canais', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    res.json(await getCanais(req.usuario.empresa_id));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.post('/canais', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const { nome, webhook_url } = req.body;
+    if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Informe o nome do canal' });
+    if (!/^https?:\/\//i.test(webhook_url || '')) return res.status(400).json({ erro: 'URL de webhook inválida' });
+    const id = uuidv4();
+    await run('INSERT INTO discord_canais (id, empresa_id, nome, webhook_url) VALUES ($1,$2,$3,$4)',
+      [id, req.usuario.empresa_id, nome.trim(), webhook_url.trim()]);
+    res.status(201).json({ id, nome: nome.trim(), webhook_url: webhook_url.trim() });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/canais/:id', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const { nome, webhook_url } = req.body;
+    await run('UPDATE discord_canais SET nome=$1, webhook_url=$2 WHERE id=$3 AND empresa_id=$4',
+      [(nome || '').trim(), (webhook_url || '').trim(), req.params.id, req.usuario.empresa_id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.delete('/canais/:id', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    await run('DELETE FROM discord_canais WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -36,18 +80,19 @@ router.get('/config', async (req, res) => {
 router.put('/config', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { ativo, webhook_url, sistema_url, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado } = req.body;
+    const { ativo, sistema_url, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, canais_evento } = req.body;
     const b = v => (v ? 1 : 0);
+    const mapaJson = canais_evento && typeof canais_evento === 'object' ? JSON.stringify(canais_evento) : null;
     await run(
-      `INSERT INTO integracao_discord (empresa_id, webhook_url, sistema_url, ativo, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, atualizado_em)
+      `INSERT INTO integracao_discord (empresa_id, sistema_url, ativo, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, canais_evento, atualizado_em)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9, NOW())
        ON CONFLICT (empresa_id) DO UPDATE SET
-         webhook_url = EXCLUDED.webhook_url, sistema_url = EXCLUDED.sistema_url, ativo = EXCLUDED.ativo,
+         sistema_url = EXCLUDED.sistema_url, ativo = EXCLUDED.ativo,
          ev_ciencia = EXCLUDED.ev_ciencia, ev_pop = EXCLUDED.ev_pop,
          ev_processo = EXCLUDED.ev_processo, ev_aniversario = EXCLUDED.ev_aniversario,
-         ev_comunicado = EXCLUDED.ev_comunicado, atualizado_em = NOW()`,
-      [req.usuario.empresa_id, (webhook_url || '').trim() || null, (sistema_url || '').trim() || null, b(ativo),
-       b(ev_ciencia), b(ev_pop), b(ev_processo), b(ev_aniversario), b(ev_comunicado)]
+         ev_comunicado = EXCLUDED.ev_comunicado, canais_evento = EXCLUDED.canais_evento, atualizado_em = NOW()`,
+      [req.usuario.empresa_id, (sistema_url || '').trim() || null, b(ativo),
+       b(ev_ciencia), b(ev_pop), b(ev_processo), b(ev_aniversario), b(ev_comunicado), mapaJson]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -57,16 +102,25 @@ router.put('/config', async (req, res) => {
 router.post('/testar', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const cfg = await getConfig(req.usuario.empresa_id);
-    const url = (req.body.webhook_url || cfg?.webhook_url || '').trim();
-    if (!url) return res.status(400).json({ erro: 'Informe a URL do webhook' });
+    let url = (req.body.webhook_url || '').trim();
+    let nomeCanal = 'teste';
+    if (!url && req.body.canal_id) {
+      const canais = await getCanais(req.usuario.empresa_id);
+      const c = canais.find(x => x.id === req.body.canal_id);
+      if (c) { url = c.webhook_url; nomeCanal = c.nome; }
+    }
+    if (!url) {
+      const canais = await getCanais(req.usuario.empresa_id);
+      if (canais[0]) { url = canais[0].webhook_url; nomeCanal = canais[0].nome; }
+    }
+    if (!url) return res.status(400).json({ erro: 'Cadastre um canal (webhook) primeiro.' });
     const ok = await postWebhook(url, {
       title: '✅ Integração Kronos × Discord',
       description: 'Tudo certo! Este canal vai receber os avisos do Kronos.',
       color: COR.roxo,
       footer: { text: 'Kronos — Sistema de Gestão' },
     });
-    registrarEnvio(req.usuario.empresa_id, 'teste', 'Mensagem de teste', ok, ok ? null : 'Falha no envio');
+    registrarEnvio(req.usuario.empresa_id, 'teste', 'Mensagem de teste', ok, ok ? null : 'Falha no envio', nomeCanal);
     if (!ok) return res.status(502).json({ erro: 'Não foi possível enviar. Verifique a URL do webhook.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -76,9 +130,11 @@ router.post('/testar', async (req, res) => {
 router.post('/comunicar', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { titulo, descricao, categoria, link_path } = req.body;
+    const { titulo, descricao, categoria, link_path, canal_id } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Informe o título' });
     const corMap = { atualizacao: COR.roxo, correcao: COR.laranja, novidade: COR.verde, aviso: COR.azul };
+    let canalNome;
+    if (canal_id) { const c = (await getCanais(req.usuario.empresa_id)).find(x => x.id === canal_id); canalNome = c?.nome; }
     const ok = await notificar(req.usuario.empresa_id, 'manual', {
       title: `📢 ${titulo.trim()}`,
       description: (descricao || '').trim() || undefined,
@@ -90,7 +146,7 @@ router.post('/comunicar', async (req, res) => {
       linkPath: (link_path && /^\/[\w\-/]*$/.test(link_path)) ? link_path : undefined,
       footer: { text: 'Kronos — Comunicado da equipe' },
       timestamp: new Date().toISOString(),
-    });
+    }, { canalId: canal_id, canalNome });
     if (!ok) return res.status(400).json({ erro: 'Discord não configurado ou desativado. Ative em Configurações.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -102,7 +158,7 @@ router.get('/historico', async (req, res) => {
     if (!soAdminGestor(req, res)) return;
     const limite = Math.min(parseInt(req.query.limit) || 100, 300);
     const rows = await all(
-      `SELECT id, evento, titulo, ok, erro, created_at
+      `SELECT id, evento, titulo, canal, ok, erro, created_at
        FROM discord_envios WHERE empresa_id = $1
        ORDER BY created_at DESC LIMIT $2`,
       [req.usuario.empresa_id, limite]
