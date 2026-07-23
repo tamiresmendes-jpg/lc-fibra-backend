@@ -213,6 +213,10 @@ router.patch('/:id/turnos', async (req, res) => {
       sets.push('turnos_sabado=?');
       params.push(req.body.turnos_sabado === null ? null : JSON.stringify(req.body.turnos_sabado));
     }
+    if ('lanches' in req.body) {
+      sets.push('lanches=?');
+      params.push(req.body.lanches === null ? null : JSON.stringify(req.body.lanches));
+    }
     if (sets.length) {
       params.push(req.params.id);
       await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=?`, params);
