@@ -371,6 +371,9 @@ router.post('/:id/notificar-discord', async (req, res) => {
       title: `📅 ${titulo}`,
       description: `A escala de **${escala.departamento_nome || 'plantão'}** referente a **${MESES_ESC[(escala.mes || 1) - 1]} ${escala.ano || ''}** está disponível. Confira sua escala!`,
       color: DISCORD_COR.roxo,
+      fields: [
+        { name: 'Notificado por', value: req.usuario.nome || '—', inline: true },
+      ],
       linkPath: `/escala/ver/${req.params.id}`,
       footer: { text: 'Kronos — Escala' },
       timestamp: new Date().toISOString(),
