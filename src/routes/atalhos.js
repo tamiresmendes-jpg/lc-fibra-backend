@@ -16,9 +16,11 @@ async function garantir() {
       nome TEXT,
       url TEXT,
       cor TEXT,
+      logo TEXT,
       ordem INTEGER DEFAULT 0,
       created_at TIMESTAMP DEFAULT NOW()
     )`);
+    try { await run('ALTER TABLE atalhos ADD COLUMN IF NOT EXISTS logo TEXT'); } catch {}
     pronto = true;
   } catch (e) { console.error('[Atalhos]', e.message); }
 }
@@ -56,12 +58,12 @@ function soAdminGestor(req, res) {
 router.post('/', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { nome, url, cor } = req.body;
+    const { nome, url, cor, logo } = req.body;
     if (!nome || !nome.trim()) return res.status(400).json({ erro: 'Informe o nome' });
     const id = uuidv4();
     const ordem = (await get('SELECT COALESCE(MAX(ordem),0)+1 AS n FROM atalhos WHERE empresa_id=$1', [req.usuario.empresa_id]))?.n || 0;
-    await run('INSERT INTO atalhos (id, empresa_id, nome, url, cor, ordem) VALUES ($1,$2,$3,$4,$5,$6)',
-      [id, req.usuario.empresa_id, nome.trim(), (url || '').trim() || null, cor || '#7B55F1', ordem]);
+    await run('INSERT INTO atalhos (id, empresa_id, nome, url, cor, logo, ordem) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+      [id, req.usuario.empresa_id, nome.trim(), (url || '').trim() || null, cor || '#7B55F1', logo || null, ordem]);
     res.status(201).json({ id });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -69,9 +71,9 @@ router.post('/', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { nome, url, cor } = req.body;
-    await run('UPDATE atalhos SET nome=$1, url=$2, cor=$3 WHERE id=$4 AND empresa_id=$5',
-      [(nome || '').trim(), (url || '').trim() || null, cor || '#7B55F1', req.params.id, req.usuario.empresa_id]);
+    const { nome, url, cor, logo } = req.body;
+    await run('UPDATE atalhos SET nome=$1, url=$2, cor=$3, logo=$4 WHERE id=$5 AND empresa_id=$6',
+      [(nome || '').trim(), (url || '').trim() || null, cor || '#7B55F1', logo || null, req.params.id, req.usuario.empresa_id]);
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
