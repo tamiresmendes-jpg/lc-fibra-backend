@@ -6,6 +6,8 @@ const { v4: uuidv4 } = require('uuid');
 const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 function fmtDataBR(d) { try { return new Date(d + 'T12:00').toLocaleDateString('pt-BR'); } catch { return d; } }
+const DIAS_BR = ['Domingo','Segunda-feira','Terça-feira','Quarta-feira','Quinta-feira','Sexta-feira','Sábado'];
+function diaSemanaBR(d) { try { return DIAS_BR[new Date(d + 'T12:00').getDay()]; } catch { return ''; } }
 
 // Vincula o card do Mural ao coffee break (para remover junto se excluir)
 ;(async () => { try { await run('ALTER TABLE cultura_mural ADD COLUMN IF NOT EXISTS coffee_id TEXT'); } catch {} })();
@@ -48,8 +50,12 @@ router.post('/', autenticar, async (req, res) => {
 
     notificarDiscord(req.usuario.empresa_id, 'coffee', {
       title: `☕ Coffee Break${titulo ? ': ' + titulo : ''}`,
-      description: `📍 ${unidade}${cidade ? ' — ' + cidade : ''}\n🗓️ ${fmtDataBR(data)}${horario ? ' às ' + horario : ''}${observacao ? '\n\n' + observacao : ''}`,
+      description: `📍 ${unidade}${cidade ? ' — ' + cidade : ''}${observacao ? '\n\n' + observacao : ''}`,
       color: DISCORD_COR.laranja,
+      fields: [
+        { name: '📅 Data', value: `${fmtDataBR(data)}${diaSemanaBR(data) ? ' (' + diaSemanaBR(data) + ')' : ''}`, inline: true },
+        { name: '⏰ Horário', value: horario || 'A definir', inline: true },
+      ],
       imagem: imagem || null,
       linkPath: '/coffee-breaks',
       footer: { text: 'Kronos — Coffee Break' },

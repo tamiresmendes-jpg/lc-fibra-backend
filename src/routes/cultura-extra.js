@@ -200,10 +200,12 @@ router.post('/mural', autenticar, async (req, res) => {
     res.status(201).json(await get(`SELECT * FROM cultura_mural WHERE id = ?`, [id]));
     // Não notifica avisos agendados para o futuro (só quando publicados de fato)
     if (!data_agendamento) {
+      const agoraBR = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
       notificarDiscord(req.usuario.empresa_id, 'mural', {
         title: `📌 Mural: ${titulo}`,
         description: (conteudo || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) || undefined,
         color: DISCORD_COR.azul,
+        fields: [{ name: '🕒 Publicado em', value: agoraBR, inline: true }],
         imagem: imagem || null,
         linkPath: '/cultura/mural',
         footer: { text: 'Kronos — Mural de Avisos' },
