@@ -98,6 +98,7 @@ app.use('/api/gestao', require('./routes/gestao-extra'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/auditoria-extra', require('./routes/auditoria-extra'));
 app.use('/api/discord', require('./routes/discord'));
+app.use('/api/atalhos', require('./routes/atalhos'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));
