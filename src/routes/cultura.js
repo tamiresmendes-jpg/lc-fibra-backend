@@ -3,8 +3,12 @@ const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 router.use(autenticar);
+
+const stripHtml = (h) => (h || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+const primeiraImagem = (h) => { const m = (h || '').match(/<img[^>]+src="([^"]+)"/i); return m ? m[1] : null; };
 
 function empId(req) { return req.usuario.empresa_id; }
 
@@ -95,6 +99,15 @@ router.put('/institucional/:tipo', async (req, res) => {
       );
       res.json({ id });
     }
+    notificarDiscord(eid, 'cultura', {
+      title: `📣 Cultura · Institucional — ${titulo || req.params.tipo}`,
+      description: stripHtml(conteudo).slice(0, 500) || 'Confira a nossa cultura no Kronos!',
+      color: DISCORD_COR.roxo,
+      imagem: primeiraImagem(conteudo),
+      linkPath: '/cultura/institucional',
+      footer: { text: 'Kronos — Cultura (Institucional)' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -147,6 +160,17 @@ router.post('/reconhecimentos', async (req, res) => {
       [id, empId(req), tipo||'elogio', req.usuario.id, para_usuario_id, valor||null, descricao, publico!==false?1:0]
     );
     res.json({ id });
+    if (publico !== false) {
+      const para = await get('SELECT nome FROM usuarios WHERE id=$1', [para_usuario_id]).catch(() => null);
+      notificarDiscord(empId(req), 'cultura', {
+        title: `⭐ Reconhecimento — ${tipo || 'elogio'}`,
+        description: `${req.usuario.nome || 'Alguém'} reconheceu ${para?.nome || 'um colega'}${descricao ? `:\n\n"${descricao}"` : '!'}`,
+        color: DISCORD_COR.laranja,
+        linkPath: '/cultura/reconhecimento',
+        footer: { text: 'Kronos — Cultura (Reconhecimento)' },
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    }
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

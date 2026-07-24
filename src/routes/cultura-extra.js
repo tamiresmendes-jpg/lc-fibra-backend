@@ -30,6 +30,15 @@ router.post('/eventos', autenticar, async (req, res) => {
       [id, req.usuario.empresa_id, titulo, descricao || null, data_inicio || null, data_fim || null, local || null, tipo || 'evento', publico !== false ? 1 : 0, imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_eventos WHERE id = ?`, [id]));
+    if (publico !== false) notificarDiscord(req.usuario.empresa_id, 'cultura', {
+      title: `🎉 Evento — ${titulo}`,
+      description: (descricao || '').slice(0, 400) || undefined,
+      color: DISCORD_COR.verde,
+      imagem: imagem || null,
+      linkPath: '/cultura/eventos',
+      footer: { text: 'Kronos — Cultura (Eventos)' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch { res.status(500).json({ erro: 'Erro ao criar evento' }); }
 });
 
@@ -84,6 +93,14 @@ router.post('/enquetes', autenticar, async (req, res) => {
       [id, req.usuario.empresa_id, titulo, descricao || null, JSON.stringify(opcoes), data_fim || null, anonima ? 1 : 0, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_enquetes WHERE id = ?`, [id]));
+    notificarDiscord(req.usuario.empresa_id, 'cultura', {
+      title: `🗳️ Nova enquete — ${titulo}`,
+      description: `${descricao ? descricao + '\n\n' : ''}Participe respondendo no Kronos!`,
+      color: DISCORD_COR.azul,
+      linkPath: '/cultura/enquetes',
+      footer: { text: 'Kronos — Cultura (Enquetes)' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch { res.status(500).json({ erro: 'Erro ao criar enquete' }); }
 });
 
@@ -245,6 +262,15 @@ router.post('/campanhas-internas', autenticar, async (req, res) => {
       [id, req.usuario.empresa_id, titulo, descricao || null, objetivo || null, data_inicio || null, data_fim || null, status || 'planejada', imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_campanhas_internas WHERE id = ?`, [id]));
+    notificarDiscord(req.usuario.empresa_id, 'cultura', {
+      title: `📢 Campanha interna — ${titulo}`,
+      description: (descricao || objetivo || '').slice(0, 400) || undefined,
+      color: DISCORD_COR.roxo,
+      imagem: imagem || null,
+      linkPath: '/cultura/campanhas-internas',
+      footer: { text: 'Kronos — Cultura (Campanhas)' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch { res.status(500).json({ erro: 'Erro ao criar campanha' }); }
 });
 

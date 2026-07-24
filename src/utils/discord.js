@@ -12,12 +12,12 @@ const COR = {
 };
 
 // Eventos que podem ser direcionados a um canal
-const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'comunicado', 'coffee', 'mural'];
+const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'comunicado', 'coffee', 'mural', 'cultura'];
 // Mapa evento → coluna de habilitação (liga/desliga)
 const EVENTO_COL = {
   ciencia: 'ev_ciencia', pop: 'ev_pop', processo: 'ev_processo',
   aniversario: 'ev_aniversario', comunicado: 'ev_comunicado', manual: 'ev_comunicado',
-  coffee: 'ev_coffee', mural: 'ev_mural',
+  coffee: 'ev_coffee', mural: 'ev_mural', cultura: 'ev_cultura',
 };
 
 // ── Migração / criação de tabelas ─────────────────────────────────────────
@@ -41,6 +41,7 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS canais_evento TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_coffee INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_mural INTEGER DEFAULT 1'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_cultura INTEGER DEFAULT 1'); } catch {}
     try {
       await run(`CREATE TABLE IF NOT EXISTS discord_canais (
         id TEXT PRIMARY KEY,
@@ -152,12 +153,19 @@ async function notificar(empresaId, evento, embed, opts = {}) {
     const url = await resolverWebhook(empresaId, cfg, evento, opts.canalId);
     if (!url) return false;
 
+    const base = (cfg.sistema_url || URL_PADRAO).replace(/\/+$/, '');
     if (embed && embed.linkPath) {
-      const base = (cfg.sistema_url || URL_PADRAO).replace(/\/+$/, '');
       const link = base + embed.linkPath;
       embed.url = link;
       embed.fields = [...(embed.fields || []), { name: '🔗 Link', value: `[Abrir no Kronos](${link})` }];
       delete embed.linkPath;
+    }
+    // Imagem: aceita URL absoluta, data: (ignorada) ou caminho /uploads (vira absoluta)
+    if (embed && embed.imagem) {
+      let img = embed.imagem;
+      if (/^\//.test(img)) img = base + img;
+      if (/^https?:\/\//i.test(img)) embed.image = { url: img };
+      delete embed.imagem;
     }
     const tituloLimpo = (embed?.title || '').replace(/^[^\p{L}\p{N}]+/u, '').trim();
     const ok = await postWebhook(url, embed);
