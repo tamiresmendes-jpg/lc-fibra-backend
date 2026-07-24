@@ -34,6 +34,8 @@ router.get('/config', async (req, res) => {
       ev_coffee: cfg.ev_coffee !== 0,
       ev_mural: cfg.ev_mural !== 0,
       ev_cultura: cfg.ev_cultura !== 0,
+      servidor_id: cfg.servidor_id || '',
+      canal_embed: cfg.canal_embed || '',
       canais_evento: canaisEvento,
       canais,
     });
@@ -83,20 +85,22 @@ router.delete('/canais/:id', async (req, res) => {
 router.put('/config', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { ativo, sistema_url, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, ev_coffee, ev_mural, ev_cultura, canais_evento } = req.body;
+    const { ativo, sistema_url, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, ev_coffee, ev_mural, ev_cultura, canais_evento, servidor_id, canal_embed } = req.body;
     const b = v => (v ? 1 : 0);
     const mapaJson = canais_evento && typeof canais_evento === 'object' ? JSON.stringify(canais_evento) : null;
+    const soDigitos = v => (v || '').replace(/\D/g, '') || null;
     await run(
-      `INSERT INTO integracao_discord (empresa_id, sistema_url, ativo, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, ev_coffee, ev_mural, ev_cultura, canais_evento, atualizado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12, NOW())
+      `INSERT INTO integracao_discord (empresa_id, sistema_url, ativo, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_comunicado, ev_coffee, ev_mural, ev_cultura, canais_evento, servidor_id, canal_embed, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14, NOW())
        ON CONFLICT (empresa_id) DO UPDATE SET
          sistema_url = EXCLUDED.sistema_url, ativo = EXCLUDED.ativo,
          ev_ciencia = EXCLUDED.ev_ciencia, ev_pop = EXCLUDED.ev_pop,
          ev_processo = EXCLUDED.ev_processo, ev_aniversario = EXCLUDED.ev_aniversario,
          ev_comunicado = EXCLUDED.ev_comunicado, ev_coffee = EXCLUDED.ev_coffee, ev_mural = EXCLUDED.ev_mural,
-         ev_cultura = EXCLUDED.ev_cultura, canais_evento = EXCLUDED.canais_evento, atualizado_em = NOW()`,
+         ev_cultura = EXCLUDED.ev_cultura, canais_evento = EXCLUDED.canais_evento,
+         servidor_id = EXCLUDED.servidor_id, canal_embed = EXCLUDED.canal_embed, atualizado_em = NOW()`,
       [req.usuario.empresa_id, (sistema_url || '').trim() || null, b(ativo),
-       b(ev_ciencia), b(ev_pop), b(ev_processo), b(ev_aniversario), b(ev_comunicado), b(ev_coffee), b(ev_mural), b(ev_cultura), mapaJson]
+       b(ev_ciencia), b(ev_pop), b(ev_processo), b(ev_aniversario), b(ev_comunicado), b(ev_coffee), b(ev_mural), b(ev_cultura), mapaJson, soDigitos(servidor_id), soDigitos(canal_embed)]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
