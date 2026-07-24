@@ -204,6 +204,7 @@ router.post('/mural', autenticar, async (req, res) => {
         title: `📌 Mural: ${titulo}`,
         description: (conteudo || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) || undefined,
         color: DISCORD_COR.azul,
+        imagem: imagem || null,
         linkPath: '/cultura/mural',
         footer: { text: 'Kronos — Mural de Avisos' },
         timestamp: new Date().toISOString(),

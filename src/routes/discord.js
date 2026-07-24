@@ -134,7 +134,7 @@ router.post('/testar', async (req, res) => {
 router.post('/comunicar', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { titulo, descricao, categoria, link_path, canal_id } = req.body;
+    const { titulo, descricao, categoria, link_path, canal_id, imagem } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Informe o título' });
     const corMap = { atualizacao: COR.roxo, correcao: COR.laranja, novidade: COR.verde, aviso: COR.azul };
     let canalNome;
@@ -148,6 +148,7 @@ router.post('/comunicar', async (req, res) => {
         ...(categoria ? [{ name: 'Tipo', value: categoria, inline: true }] : []),
       ],
       linkPath: (link_path && /^\/[\w\-/]*$/.test(link_path)) ? link_path : undefined,
+      imagem: imagem || undefined,
       footer: { text: 'Kronos — Comunicado da equipe' },
       timestamp: new Date().toISOString(),
     }, { canalId: canal_id, canalNome });

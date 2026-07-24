@@ -50,6 +50,7 @@ router.post('/', autenticar, async (req, res) => {
       title: `☕ Coffee Break${titulo ? ': ' + titulo : ''}`,
       description: `📍 ${unidade}${cidade ? ' — ' + cidade : ''}\n🗓️ ${fmtDataBR(data)}${horario ? ' às ' + horario : ''}${observacao ? '\n\n' + observacao : ''}`,
       color: DISCORD_COR.laranja,
+      imagem: imagem || null,
       linkPath: '/coffee-breaks',
       footer: { text: 'Kronos — Coffee Break' },
       timestamp: new Date().toISOString(),
