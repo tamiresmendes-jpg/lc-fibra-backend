@@ -1,5 +1,5 @@
 const { run, all } = require('../config/database');
-const { postWebhook, garantirTabela, registrarEnvio, COR } = require('./discord');
+const { postWebhook, garantirTabela, registrarEnvio, resolverWebhook, COR } = require('./discord');
 
 // Data de hoje no fuso de São Paulo (YYYY-MM-DD)
 function hojeSP() {
@@ -39,8 +39,11 @@ async function enviarAniversariantesDoDia() {
 
       if (!aniversariantes.length) continue;
 
+      // Usa o canal configurado para o evento de aniversário (não o webhook antigo)
+      const url = await resolverWebhook(cfg.empresa_id, cfg, 'aniversario');
+      if (!url) continue;
       const nomes = aniversariantes.map(a => `🎂 **${a.nome}**`).join('\n');
-      const ok = await postWebhook(cfg.webhook_url, {
+      const ok = await postWebhook(url, {
         title: '🎉 Aniversariantes de hoje!',
         description: `Hoje é dia de comemorar:\n\n${nomes}\n\nQue todos possam celebrar com muita alegria! 🥳`,
         color: COR.laranja,
