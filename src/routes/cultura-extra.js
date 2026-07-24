@@ -3,6 +3,7 @@ const router = express.Router();
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 // ── EVENTOS ─────────────────────────────────────────────────────────────────
 router.get('/eventos', autenticar, async (req, res) => {
@@ -180,6 +181,17 @@ router.post('/mural', autenticar, async (req, res) => {
        data_expiracao || null, data_agendamento || null, imagem || null, req.usuario.id]
     );
     res.status(201).json(await get(`SELECT * FROM cultura_mural WHERE id = ?`, [id]));
+    // Não notifica avisos agendados para o futuro (só quando publicados de fato)
+    if (!data_agendamento) {
+      notificarDiscord(req.usuario.empresa_id, 'mural', {
+        title: `📌 Mural: ${titulo}`,
+        description: (conteudo || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 500) || undefined,
+        color: DISCORD_COR.azul,
+        linkPath: '/cultura/mural',
+        footer: { text: 'Kronos — Mural de Avisos' },
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    }
   } catch { res.status(500).json({ erro: 'Erro ao criar aviso' }); }
 });
 

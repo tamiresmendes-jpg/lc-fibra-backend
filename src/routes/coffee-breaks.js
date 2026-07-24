@@ -3,6 +3,9 @@ const router = express.Router();
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
+
+function fmtDataBR(d) { try { return new Date(d + 'T12:00').toLocaleDateString('pt-BR'); } catch { return d; } }
 
 router.get('/', autenticar, async (req, res) => {
   try {
@@ -25,6 +28,14 @@ router.post('/', autenticar, async (req, res) => {
       [id, req.usuario.empresa_id, unidade, cidade || null, data, horario || null, titulo || null, observacao || null, imagem || null]
     );
     res.status(201).json(await get(`SELECT * FROM coffee_breaks WHERE id = ?`, [id]));
+    notificarDiscord(req.usuario.empresa_id, 'coffee', {
+      title: `☕ Coffee Break${titulo ? ': ' + titulo : ''}`,
+      description: `📍 ${unidade}${cidade ? ' — ' + cidade : ''}\n🗓️ ${fmtDataBR(data)}${horario ? ' às ' + horario : ''}${observacao ? '\n\n' + observacao : ''}`,
+      color: DISCORD_COR.laranja,
+      linkPath: '/coffee-breaks',
+      footer: { text: 'Kronos — Coffee Break' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
   } catch { res.status(500).json({ erro: 'Erro ao criar coffee break' }); }
 });
 
