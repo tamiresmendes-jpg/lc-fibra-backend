@@ -7,6 +7,9 @@ const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/disc
 
 function fmtDataBR(d) { try { return new Date(d + 'T12:00').toLocaleDateString('pt-BR'); } catch { return d; } }
 
+// Vincula o card do Mural ao coffee break (para remover junto se excluir)
+;(async () => { try { await run('ALTER TABLE cultura_mural ADD COLUMN IF NOT EXISTS coffee_id TEXT'); } catch {} })();
+
 router.get('/', autenticar, async (req, res) => {
   try {
     const rows = await all(
@@ -28,6 +31,21 @@ router.post('/', autenticar, async (req, res) => {
       [id, req.usuario.empresa_id, unidade, cidade || null, data, horario || null, titulo || null, observacao || null, imagem || null]
     );
     res.status(201).json(await get(`SELECT * FROM coffee_breaks WHERE id = ?`, [id]));
+
+    // Publica também no Mural de Avisos (fica no histórico do mês)
+    try {
+      const conteudoMural = [
+        `📍 ${unidade}${cidade ? ' — ' + cidade : ''}`,
+        `🗓️ ${fmtDataBR(data)}${horario ? ' às ' + horario : ''}`,
+        observacao || '',
+      ].filter(Boolean).join('<br>');
+      await run(
+        `INSERT INTO cultura_mural (id,empresa_id,titulo,conteudo,tipo,fixado,imagem,criado_por,coffee_id)
+         VALUES (?,?,?,?,?,?,?,?,?)`,
+        [uuidv4(), req.usuario.empresa_id, `☕ Coffee Break${titulo ? ': ' + titulo : ''}`, conteudoMural, 'evento', 0, imagem || null, req.usuario.id, id]
+      );
+    } catch (e) { /* mural é complementar; não bloqueia o coffee */ }
+
     notificarDiscord(req.usuario.empresa_id, 'coffee', {
       title: `☕ Coffee Break${titulo ? ': ' + titulo : ''}`,
       description: `📍 ${unidade}${cidade ? ' — ' + cidade : ''}\n🗓️ ${fmtDataBR(data)}${horario ? ' às ' + horario : ''}${observacao ? '\n\n' + observacao : ''}`,
@@ -59,6 +77,7 @@ router.delete('/:id', autenticar, async (req, res) => {
     const existente = await get(`SELECT id FROM coffee_breaks WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!existente) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`UPDATE coffee_breaks SET ativo = 0 WHERE id = ?`, [req.params.id]);
+    try { await run(`DELETE FROM cultura_mural WHERE coffee_id = ?`, [req.params.id]); } catch {}
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao remover coffee break' }); }
 });
