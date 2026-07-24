@@ -45,7 +45,7 @@ router.get('/config', async (req, res) => {
 // ── Canais (webhooks) ──────────────────────────────────────────────────────
 router.get('/canais', async (req, res) => {
   try {
-    if (!soAdminGestor(req, res)) return;
+    if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     res.json(await getCanais(req.usuario.empresa_id));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -137,7 +137,7 @@ router.post('/testar', async (req, res) => {
 // POST — "Comunicar à equipe" (aviso manual do que foi alterado)
 router.post('/comunicar', async (req, res) => {
   try {
-    if (!soAdminGestor(req, res)) return;
+    if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const { titulo, descricao, categoria, link_path, canal_id, imagem } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Informe o título' });
     const corMap = { atualizacao: COR.roxo, correcao: COR.laranja, novidade: COR.verde, aviso: COR.azul };
