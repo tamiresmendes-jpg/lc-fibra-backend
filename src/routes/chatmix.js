@@ -413,43 +413,69 @@ router.get('/por-atendente', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Meta por Atendente (satisfação, taxa de resposta, metas atingidas)
+// Gera o texto da coluna "Situação" no estilo do relatório do setor
+function situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa) {
+  if (bateSat && bateTaxa) return 'Atingiu ambas as metas.';
+  const sat = percSat >= 98 ? 'Excelente satisfação' : percSat >= 93 ? 'Boa satisfação' : bateSat ? 'Atingiu a satisfação' : 'Satisfação abaixo da meta';
+  if (bateSat && !bateTaxa) {
+    const falta = metaTaxa - taxaResp;
+    const resp = taxaResp >= metaTaxa * 0.9 ? 'próxima da meta de resposta'
+      : taxaResp < metaTaxa * 0.75 ? 'baixa taxa de resposta'
+        : falta <= 12 ? 'abaixo da meta de resposta' : 'precisa aumentar a taxa de resposta';
+    return `${sat}, ${resp}.`;
+  }
+  if (!bateSat && bateTaxa) return `${sat}, boa taxa de resposta.`;
+  return `${sat} e taxa de resposta abaixo da meta.`;
+}
+
+// Meta por Atendente (satisfação e taxa de resposta) — no formato do Relatório de Satisfação
 router.get('/meta', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
-    // Metas (com defaults do POP-PRO-013)
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
-    const metaNota = Number(req.query.meta_nota || 4.5);
-    const metaTaxa = Number(req.query.meta_taxa || 60);
+    const metaTaxa = Number(req.query.meta_taxa || 55);
     const params = [emp, di, df];
     const rows = await all(
       `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE respondida)::int AS respondidas,
-        COUNT(*) FILTER (WHERE nota = 5)::int AS satisfeito,
-        COUNT(*) FILTER (WHERE nota = 1)::int AS insatisfeito,
+        COUNT(*) FILTER (WHERE nota = 5)::int AS satisfeitas,
+        COUNT(*) FILTER (WHERE nota = 1)::int AS insatisfeitas,
         COUNT(*) FILTER (WHERE nota IS NOT NULL AND nota NOT IN (1,5))::int AS invalidas,
         AVG(nota) FILTER (WHERE nota IS NOT NULL) AS media
        FROM chatmix_atendimentos
        WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL${filtros(req, params)}
        GROUP BY 1 ORDER BY total DESC`, params);
     const itens = rows.map(r => {
-      const validas = r.satisfeito + r.insatisfeito;
-      const percSat = validas ? Math.round((r.satisfeito / validas) * 1000) / 10 : null;
-      const taxaResp = r.total ? Math.round((r.respondidas / r.total) * 1000) / 10 : 0;
+      const validas = r.satisfeitas + r.insatisfeitas;           // válidas = satisfeitas + insatisfeitas
+      const percSat = validas ? Math.round((r.satisfeitas / validas) * 10000) / 100 : null; // satisfeitas / válidas
+      const taxaResp = r.total ? Math.round((validas / r.total) * 10000) / 100 : 0;          // válidas / total
       const media = r.media != null ? Math.round(r.media * 100) / 100 : null;
       const bateSat = percSat != null && percSat >= metaSatisfacao;
-      const bateNota = media != null && media >= metaNota;
       const bateTaxa = taxaResp >= metaTaxa;
       return {
-        atendente: r.nome, total: r.total, respondidas: r.respondidas,
-        satisfeito: r.satisfeito, insatisfeito: r.insatisfeito, invalidas: r.invalidas,
+        atendente: r.nome, total: r.total,
+        validas, invalidas: r.invalidas, satisfeitas: r.satisfeitas, insatisfeitas: r.insatisfeitas,
         media_notas: media, perc_satisfacao: percSat, taxa_resposta: taxaResp,
-        bate_satisfacao: bateSat, bate_nota: bateNota, bate_taxa: bateTaxa,
-        bonificacao: bateSat && bateNota && bateTaxa,
+        bate_satisfacao: bateSat, bate_taxa: bateTaxa,
+        bonificacao: bateSat && bateTaxa,
+        situacao: percSat == null ? 'Sem pesquisas no período.' : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
     });
-    res.json({ periodo: { di, df }, metas: { satisfacao: metaSatisfacao, nota: metaNota, taxa: metaTaxa }, itens });
+    // Resumo do setor
+    const totAtend = itens.reduce((s, i) => s + i.total, 0);
+    const totValidas = itens.reduce((s, i) => s + i.validas, 0);
+    const totSatisf = itens.reduce((s, i) => s + i.satisfeitas, 0);
+    const ambas = itens.filter(i => i.bonificacao);
+    const resumo = {
+      total_atendimentos: totAtend,
+      atendentes_avaliados: itens.length,
+      media_satisfacao: totValidas ? Math.round((totSatisf / totValidas) * 10000) / 100 : null,
+      media_taxa_resposta: totAtend ? Math.round((totValidas / totAtend) * 10000) / 100 : null,
+      atingiram_ambas: ambas.length,
+      perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
+      destaques: ambas.map(i => i.atendente),
+    };
+    res.json({ periodo: { di, df }, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, itens, resumo });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
