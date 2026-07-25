@@ -154,10 +154,21 @@ router.get('/indicadores', async (req, res) => {
     const di = req.query.data_inicial || hoje;
     const df = req.query.data_final || hoje;
 
-    const [{ itens, total, amostrado }, count] = await Promise.all([
+    const [{ itens: todos, total: totalGeral, amostrado }, count] = await Promise.all([
       buscarFechados(cfg, di, df),
       chamar(cfg, '/attendances/count').then(r => r.json?.attendances || null).catch(() => null),
     ]);
+
+    // Lista de canais disponíveis (para o seletor no dashboard) — sempre do conjunto completo
+    const canaisSet = {};
+    todos.forEach(a => { const n = a.channel?.name; if (n) canaisSet[n] = (canaisSet[n] || 0) + 1; });
+    const canais = Object.keys(canaisSet).sort();
+
+    // Filtro por canal (a API só filtra por data no servidor, então filtramos aqui)
+    const canalFiltro = (req.query.canal || '').trim();
+    const itens = canalFiltro ? todos.filter(a => (a.channel?.name || '') === canalFiltro) : todos;
+    // Com filtro de canal, o total exato do servidor não vale; usamos a contagem da amostra filtrada
+    const total = canalFiltro ? itens.length : totalGeral;
 
     let somaDur = 0, comDur = 0;
     let somaNota = 0, qtdNota = 0;
@@ -185,7 +196,9 @@ router.get('/indicadores', async (req, res) => {
 
     res.json({
       periodo: { data_inicial: di, data_final: df },
-      amostrado, // true quando o total é maior que a amostra baixada (rankings são da amostra)
+      canais, // canais disponíveis para o seletor
+      canal_selecionado: canalFiltro || null,
+      amostrado, // rankings/satisfação são calculados sobre a amostra baixada
       amostra_qtd: itens.length,
       cards: {
         total,
