@@ -319,6 +319,28 @@ function fmt(seg) { // reaproveita fmtDuracao já definido acima
   return fmtDuracao(seg);
 }
 
+// Monta cláusulas de filtro (departamento/atendente) reaproveitando params posicionais
+function filtros(req, params) {
+  let sql = '';
+  const dep = (req.query.departamento || '').trim();
+  const at = (req.query.atendente || '').trim();
+  if (dep) { params.push(dep); sql += ` AND COALESCE(departamento,'Sem departamento') = $${params.length}`; }
+  if (at) { params.push(at); sql += ` AND COALESCE(atendente_nome,'Automação/Bot') = $${params.length}`; }
+  return sql;
+}
+
+// Listas para os seletores (departamentos e atendentes sincronizados no período)
+router.get('/listas', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const deps = await all(`SELECT DISTINCT departamento AS nome FROM chatmix_atendimentos
+      WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND departamento IS NOT NULL ORDER BY 1`, [emp, di, df]);
+    const ats = await all(`SELECT DISTINCT atendente_nome AS nome FROM chatmix_atendimentos
+      WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL ORDER BY 1`, [emp, di, df]);
+    res.json({ departamentos: deps.map(d => d.nome), atendentes: ats.map(a => a.nome) });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Status da sincronização (para a UI saber a cobertura dos dados)
 router.get('/sync/status', async (req, res) => {
   try {
@@ -340,13 +362,14 @@ router.get('/por-departamento', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const dias = diasEntre(di, df);
+    const params = [emp, di, df];
     const rows = await all(
       `SELECT COALESCE(departamento, 'Sem departamento') AS nome,
         COUNT(*)::int AS total,
         AVG(EXTRACT(EPOCH FROM (closed_at - created_at))) FILTER (WHERE closed_at IS NOT NULL AND created_at IS NOT NULL) AS tma_seg
        FROM chatmix_atendimentos
-       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3
-       GROUP BY 1 ORDER BY total DESC`, [emp, di, df]);
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3${filtros(req, params)}
+       GROUP BY 1 ORDER BY total DESC`, params);
     const totalGeral = rows.reduce((s, r) => s + r.total, 0) || 1;
     res.json({
       periodo: { di, df, dias },
@@ -366,13 +389,14 @@ router.get('/por-atendente', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const dias = diasEntre(di, df);
+    const params = [emp, di, df];
     const rows = await all(
       `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
         COUNT(*)::int AS total,
         AVG(EXTRACT(EPOCH FROM (closed_at - created_at))) FILTER (WHERE closed_at IS NOT NULL AND created_at IS NOT NULL) AS tma_seg
        FROM chatmix_atendimentos
-       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3
-       GROUP BY 1 ORDER BY total DESC`, [emp, di, df]);
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3${filtros(req, params)}
+       GROUP BY 1 ORDER BY total DESC`, params);
     const totalGeral = rows.reduce((s, r) => s + r.total, 0) || 1;
     res.json({
       periodo: { di, df, dias },
@@ -395,6 +419,7 @@ router.get('/meta', async (req, res) => {
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
     const metaNota = Number(req.query.meta_nota || 4.5);
     const metaTaxa = Number(req.query.meta_taxa || 60);
+    const params = [emp, di, df];
     const rows = await all(
       `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
         COUNT(*)::int AS total,
@@ -404,8 +429,8 @@ router.get('/meta', async (req, res) => {
         COUNT(*) FILTER (WHERE nota IS NOT NULL AND nota NOT IN (1,5))::int AS invalidas,
         AVG(nota) FILTER (WHERE nota IS NOT NULL) AS media
        FROM chatmix_atendimentos
-       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
-       GROUP BY 1 ORDER BY total DESC`, [emp, di, df]);
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL${filtros(req, params)}
+       GROUP BY 1 ORDER BY total DESC`, params);
     const itens = rows.map(r => {
       const validas = r.satisfeito + r.insatisfeito;
       const percSat = validas ? Math.round((r.satisfeito / validas) * 1000) / 10 : null;
