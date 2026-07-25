@@ -319,13 +319,15 @@ function fmt(seg) { // reaproveita fmtDuracao já definido acima
   return fmtDuracao(seg);
 }
 
-// Monta cláusulas de filtro (departamento/atendente) reaproveitando params posicionais
+// Monta cláusulas de filtro (departamento/atendente) reaproveitando params posicionais.
+// Aceita múltiplos valores separados por vírgula (ex.: atendente=Ana,Bruna).
+function listaParam(v) { return String(v || '').split(',').map(s => s.trim()).filter(Boolean); }
 function filtros(req, params) {
   let sql = '';
-  const dep = (req.query.departamento || '').trim();
-  const at = (req.query.atendente || '').trim();
-  if (dep) { params.push(dep); sql += ` AND COALESCE(departamento,'Sem departamento') = $${params.length}`; }
-  if (at) { params.push(at); sql += ` AND COALESCE(atendente_nome,'Automação/Bot') = $${params.length}`; }
+  const deps = listaParam(req.query.departamento);
+  const ats = listaParam(req.query.atendente);
+  if (deps.length) { params.push(deps); sql += ` AND COALESCE(departamento,'Sem departamento') = ANY($${params.length})`; }
+  if (ats.length) { params.push(ats); sql += ` AND COALESCE(atendente_nome,'Automação/Bot') = ANY($${params.length})`; }
   return sql;
 }
 
