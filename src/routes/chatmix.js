@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { run, get } = require('../config/database');
+const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 
 router.use(autenticar);
@@ -301,6 +301,128 @@ router.get('/ao-vivo', async (req, res) => {
         classificacoes: (a.classifications || []).map(c => c.name),
       })),
     });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ===================== RELATÓRIOS (lêem do banco sincronizado) =====================
+// Os relatórios abaixo usam a data de ENCERRAMENTO (closed_at), como no painel do Chatmix.
+
+function periodo(req) {
+  const hoje = new Date().toISOString().slice(0, 10);
+  return { di: req.query.data_inicial || hoje, df: req.query.data_final || hoje };
+}
+function diasEntre(di, df) {
+  const a = Date.parse(di), b = Date.parse(df);
+  return Math.max(1, Math.round((b - a) / 86400000) + 1);
+}
+function fmt(seg) { // reaproveita fmtDuracao já definido acima
+  return fmtDuracao(seg);
+}
+
+// Status da sincronização (para a UI saber a cobertura dos dados)
+router.get('/sync/status', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const est = await get('SELECT * FROM chatmix_sync_estado WHERE empresa_id = $1', [emp]) || {};
+    const ext = await get(`SELECT COUNT(*)::int AS total, MIN(closed_at) AS mais_antigo, MAX(closed_at) AS mais_recente,
+      MAX(atualizado_em) AS ultima_atualizacao FROM chatmix_atendimentos WHERE empresa_id = $1`, [emp]);
+    res.json({
+      total_registros: ext?.total || 0,
+      periodo_coberto: { de: ext?.mais_antigo || null, ate: ext?.mais_recente || null },
+      ultima_atualizacao: ext?.ultima_atualizacao || null,
+      pagina_atual: est.page || null, ultima_pagina: est.last_page || null, ciclos_completos: est.ciclo || 0,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Atendimentos por Departamento (Total, Média/dia, T.M.A) — T.M.E/T.M.R não vêm na API
+router.get('/por-departamento', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const dias = diasEntre(di, df);
+    const rows = await all(
+      `SELECT COALESCE(departamento, 'Sem departamento') AS nome,
+        COUNT(*)::int AS total,
+        AVG(EXTRACT(EPOCH FROM (closed_at - created_at))) FILTER (WHERE closed_at IS NOT NULL AND created_at IS NOT NULL) AS tma_seg
+       FROM chatmix_atendimentos
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3
+       GROUP BY 1 ORDER BY total DESC`, [emp, di, df]);
+    const totalGeral = rows.reduce((s, r) => s + r.total, 0) || 1;
+    res.json({
+      periodo: { di, df, dias },
+      itens: rows.map(r => ({
+        departamento: r.nome, total: r.total,
+        media_dia: Math.round((r.total / dias) * 100) / 100,
+        participacao: Math.round((r.total / totalGeral) * 1000) / 10,
+        tma_seg: Math.round(r.tma_seg || 0), tma_fmt: fmt(r.tma_seg || 0),
+      })),
+      total_geral: totalGeral,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Visão geral por Atendente (%, T.M.A, Média/dia, Total)
+router.get('/por-atendente', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const dias = diasEntre(di, df);
+    const rows = await all(
+      `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
+        COUNT(*)::int AS total,
+        AVG(EXTRACT(EPOCH FROM (closed_at - created_at))) FILTER (WHERE closed_at IS NOT NULL AND created_at IS NOT NULL) AS tma_seg
+       FROM chatmix_atendimentos
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3
+       GROUP BY 1 ORDER BY total DESC`, [emp, di, df]);
+    const totalGeral = rows.reduce((s, r) => s + r.total, 0) || 1;
+    res.json({
+      periodo: { di, df, dias },
+      itens: rows.map(r => ({
+        atendente: r.nome, total: r.total,
+        media_dia: Math.round((r.total / dias) * 100) / 100,
+        participacao: Math.round((r.total / totalGeral) * 1000) / 10,
+        tma_seg: Math.round(r.tma_seg || 0), tma_fmt: fmt(r.tma_seg || 0),
+      })),
+      total_geral: totalGeral,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Meta por Atendente (satisfação, taxa de resposta, metas atingidas)
+router.get('/meta', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    // Metas (com defaults do POP-PRO-013)
+    const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
+    const metaNota = Number(req.query.meta_nota || 4.5);
+    const metaTaxa = Number(req.query.meta_taxa || 60);
+    const rows = await all(
+      `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE respondida)::int AS respondidas,
+        COUNT(*) FILTER (WHERE nota = 5)::int AS satisfeito,
+        COUNT(*) FILTER (WHERE nota = 1)::int AS insatisfeito,
+        COUNT(*) FILTER (WHERE nota IS NOT NULL AND nota NOT IN (1,5))::int AS invalidas,
+        AVG(nota) FILTER (WHERE nota IS NOT NULL) AS media
+       FROM chatmix_atendimentos
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
+       GROUP BY 1 ORDER BY total DESC`, [emp, di, df]);
+    const itens = rows.map(r => {
+      const validas = r.satisfeito + r.insatisfeito;
+      const percSat = validas ? Math.round((r.satisfeito / validas) * 1000) / 10 : null;
+      const taxaResp = r.total ? Math.round((r.respondidas / r.total) * 1000) / 10 : 0;
+      const media = r.media != null ? Math.round(r.media * 100) / 100 : null;
+      const bateSat = percSat != null && percSat >= metaSatisfacao;
+      const bateNota = media != null && media >= metaNota;
+      const bateTaxa = taxaResp >= metaTaxa;
+      return {
+        atendente: r.nome, total: r.total, respondidas: r.respondidas,
+        satisfeito: r.satisfeito, insatisfeito: r.insatisfeito, invalidas: r.invalidas,
+        media_notas: media, perc_satisfacao: percSat, taxa_resposta: taxaResp,
+        bate_satisfacao: bateSat, bate_nota: bateNota, bate_taxa: bateTaxa,
+        bonificacao: bateSat && bateNota && bateTaxa,
+      };
+    });
+    res.json({ periodo: { di, df }, metas: { satisfacao: metaSatisfacao, nota: metaNota, taxa: metaTaxa }, itens });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

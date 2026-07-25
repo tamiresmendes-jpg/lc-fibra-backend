@@ -120,6 +120,7 @@ conectar()
     app.listen(PORT, () => console.log(`Servidor rodando na porta ${PORT}`));
     require('./jobs/chatAceite').iniciarJob();
     require('./utils/discordScheduler').iniciar();
+    require('./jobs/chatmixSync').iniciar();
   })
   .catch((err) => {
     console.error('Falha ao conectar ao banco:', err.message);
