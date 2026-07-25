@@ -71,6 +71,15 @@ function segundosEntre(inicio, fim) {
   if (isNaN(a) || isNaN(b) || b < a) return null;
   return Math.round((b - a) / 1000);
 }
+// Nome do atendente (user tem first_name/last_name; bot/automação vem null)
+function nomeAtendente(a) {
+  if (!a.user) return 'Automação/Bot';
+  return [a.user.first_name, a.user.last_name].filter(Boolean).join(' ').trim() || 'Automação/Bot';
+}
+function nomeDepartamento(a) {
+  return a.department?.title || a.department?.name || null;
+}
+
 function fmtDuracao(seg) {
   if (seg == null) return '—';
   seg = Math.max(0, Math.round(seg));
@@ -121,10 +130,10 @@ router.post('/testar', async (req, res) => {
   } catch (e) { res.json({ ok: false, erro: 'Falha de conexão: ' + e.message }); }
 });
 
-// Busca atendimentos finalizados paginando. A API limita per_page e tem rate limit,
-// então usamos per_page=50, uma pausa entre páginas e um teto de páginas (amostra).
-// O total EXATO vem do meta.total (não precisa baixar tudo).
-async function buscarFechados(cfg, di, df, maxPaginas = 20) {
+// Busca atendimentos finalizados paginando. IMPORTANTE: a rota /closed permite só
+// 2 requisições por minuto (limite do Chatmix). Por isso puxamos no máximo 2 páginas
+// (~100 atendimentos recentes) como amostra. O total EXATO vem do meta.total.
+async function buscarFechados(cfg, di, df, maxPaginas = 2) {
   const itens = [];
   let page = 1, last = 1, total = 0;
   const per = 50;
@@ -159,30 +168,39 @@ router.get('/indicadores', async (req, res) => {
       chamar(cfg, '/attendances/count').then(r => r.json?.attendances || null).catch(() => null),
     ]);
 
-    // Lista de canais disponíveis (para o seletor no dashboard) — sempre do conjunto completo
-    const canaisSet = {};
-    todos.forEach(a => { const n = a.channel?.name; if (n) canaisSet[n] = (canaisSet[n] || 0) + 1; });
+    // Listas para os seletores (do conjunto completo baixado)
+    const canaisSet = {}, depsSet = {};
+    todos.forEach(a => {
+      const n = a.channel?.name; if (n) canaisSet[n] = true;
+      const d = nomeDepartamento(a); if (d) depsSet[d] = true;
+    });
     const canais = Object.keys(canaisSet).sort();
+    const departamentos = Object.keys(depsSet).sort();
 
-    // Filtro por canal (a API só filtra por data no servidor, então filtramos aqui)
+    // Filtros por canal e/ou departamento (a API só filtra por data no servidor, então filtramos aqui)
     const canalFiltro = (req.query.canal || '').trim();
-    const itens = canalFiltro ? todos.filter(a => (a.channel?.name || '') === canalFiltro) : todos;
-    // Com filtro de canal, o total exato do servidor não vale; usamos a contagem da amostra filtrada
-    const total = canalFiltro ? itens.length : totalGeral;
+    const depFiltro = (req.query.departamento || '').trim();
+    const itens = todos.filter(a =>
+      (!canalFiltro || (a.channel?.name || '') === canalFiltro) &&
+      (!depFiltro || nomeDepartamento(a) === depFiltro));
+    // Com filtro, o total exato do servidor não vale; usamos a contagem da amostra filtrada
+    const total = (canalFiltro || depFiltro) ? itens.length : totalGeral;
 
     let somaDur = 0, comDur = 0;
     let somaNota = 0, qtdNota = 0;
     const distNotas = {}; // nota -> quantidade
     const comentarios = [];
-    const porCanal = {}, porDia = {}, porAtendente = {}, porClassificacao = {};
+    const porCanal = {}, porDia = {}, porAtendente = {}, porClassificacao = {}, porDepartamento = {};
     for (const a of itens) {
       const dur = segundosEntre(a.created_at, a.closed_at);
       if (dur != null) { somaDur += dur; comDur++; }
       const canal = a.channel?.name || '—';
       porCanal[canal] = (porCanal[canal] || 0) + 1;
+      const dep = nomeDepartamento(a) || 'Sem departamento';
+      porDepartamento[dep] = (porDepartamento[dep] || 0) + 1;
       const dia = (a.created_at || '').slice(0, 10);
       if (dia) porDia[dia] = (porDia[dia] || 0) + 1;
-      const at = a.user?.name || 'Automação/Bot';
+      const at = nomeAtendente(a);
       porAtendente[at] = (porAtendente[at] || 0) + 1;
       (a.classifications || []).forEach(c => { const n = c.name || '—'; porClassificacao[n] = (porClassificacao[n] || 0) + 1; });
       (a.satisfaction_surveys || []).forEach(s => {
@@ -197,7 +215,9 @@ router.get('/indicadores', async (req, res) => {
     res.json({
       periodo: { data_inicial: di, data_final: df },
       canais, // canais disponíveis para o seletor
+      departamentos, // departamentos disponíveis para o seletor
       canal_selecionado: canalFiltro || null,
+      departamento_selecionado: depFiltro || null,
       amostrado, // rankings/satisfação são calculados sobre a amostra baixada
       amostra_qtd: itens.length,
       cards: {
@@ -216,6 +236,7 @@ router.get('/indicadores', async (req, res) => {
         distribuicao: Object.entries(distNotas).map(([nota, qtd]) => ({ nota: Number(nota), qtd })).sort((a, b) => b.nota - a.nota),
         comentarios,
       },
+      por_departamento: ordenar(porDepartamento),
       por_canal: ordenar(porCanal),
       por_atendente: ordenar(porAtendente),
       por_classificacao: ordenar(porClassificacao),
@@ -231,12 +252,19 @@ router.get('/atendimentos', async (req, res) => {
     const cfg = await carregarCfg(req.usuario.empresa_id);
     if (!cfg.token) return res.status(400).json({ erro: 'Integração do Chatmix não configurada.', nao_configurado: true });
     const hoje = new Date().toISOString().slice(0, 10);
-    const r = await chamar(cfg, '/attendances/closed', {
+    // A busca por protocolo/telefone é feita no servidor (a API aceita esses filtros)
+    const buscaBruta = (req.query.busca || '').trim();
+    const params = {
       date_start: req.query.data_inicial || hoje,
       date_end: req.query.data_final || hoje,
       per_page: Math.min(parseInt(req.query.per_page || '30', 10), 50),
       page: req.query.page || 1,
-    });
+    };
+    if (buscaBruta) {
+      if (/^\d{6,}$/.test(buscaBruta.replace(/\D/g, '')) && buscaBruta.replace(/\D/g, '').length >= 8) params.phone = buscaBruta.replace(/\D/g, '');
+      else if (/^\w+$/.test(buscaBruta)) params.protocol = buscaBruta;
+    }
+    const r = await chamar(cfg, '/attendances/closed', params);
     if (r.status !== 200 || !r.json) return res.status(502).json({ erro: r.json?.error || ('Erro Chatmix HTTP ' + r.status) });
     const busca = (req.query.busca || '').toLowerCase().trim();
     let dados = (r.json.data || []).map(a => ({
@@ -244,7 +272,7 @@ router.get('/atendimentos', async (req, res) => {
       duracao: fmtDuracao(segundosEntre(a.created_at, a.closed_at)),
       canal: a.channel?.name || '—', tipo_canal: a.channel?.type || '',
       cliente: a.client?.name || '—', contato: a.client?.user || '',
-      atendente: a.user?.name || 'Automação/Bot',
+      atendente: nomeAtendente(a), departamento: nomeDepartamento(a) || '—',
       classificacoes: (a.classifications || []).map(c => c.name),
     }));
     if (busca) dados = dados.filter(a =>
