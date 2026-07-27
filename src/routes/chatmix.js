@@ -153,94 +153,69 @@ async function buscarFechados(cfg, di, df, maxPaginas = 2) {
   return { itens, total, amostrado: total > itens.length };
 }
 
-// ---------- INDICADORES ----------
+// ---------- INDICADORES ---------- (lê do histórico sincronizado, sem amostra)
 router.get('/indicadores', async (req, res) => {
   try {
     await garantir();
-    const cfg = await carregarCfg(req.usuario.empresa_id);
+    const emp = req.usuario.empresa_id;
+    const cfg = await carregarCfg(emp);
     if (!cfg.token) return res.status(400).json({ erro: 'Integração do Chatmix não configurada.', nao_configurado: true });
-    const hoje = new Date().toISOString().slice(0, 10);
-    const di = req.query.data_inicial || hoje;
-    const df = req.query.data_final || hoje;
+    const { di, df } = periodo(req);
 
-    const [{ itens: todos, total: totalGeral, amostrado }, count] = await Promise.all([
-      buscarFechados(cfg, di, df),
-      chamar(cfg, '/attendances/count').then(r => r.json?.attendances || null).catch(() => null),
+    // "Ao vivo" continua vindo da API (rápido, limite 25/min); se falhar, ignora
+    const count = await chamar(cfg, '/attendances/count').then(r => r.json?.attendances || null).catch(() => null);
+
+    // Filtros (canal/departamento) reaproveitados
+    const params = [emp, di, df];
+    const flt = filtros(req, params);
+    const base = `FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3${flt}`;
+
+    const [cardRow, porCanal, porAtend, porDep, porDia, canaisAll, depsAll] = await Promise.all([
+      get(`SELECT COUNT(*)::int total,
+             AVG(EXTRACT(EPOCH FROM (closed_at-created_at))) FILTER (WHERE closed_at IS NOT NULL AND created_at IS NOT NULL) tma,
+             COUNT(*) FILTER (WHERE nota IS NOT NULL)::int resp,
+             AVG(nota) FILTER (WHERE nota IS NOT NULL) media,
+             COUNT(*) FILTER (WHERE nota=5)::int satisfeitas,
+             COUNT(*) FILTER (WHERE nota=1)::int insatisfeitas ${base}`, params),
+      all(`SELECT COALESCE(canal,'—') nome, COUNT(*)::int qtd ${base} GROUP BY 1 ORDER BY qtd DESC`, params),
+      all(`SELECT COALESCE(atendente_nome,'Automação/Bot') nome, COUNT(*)::int qtd ${base} GROUP BY 1 ORDER BY qtd DESC`, params),
+      all(`SELECT COALESCE(departamento,'Sem departamento') nome, COUNT(*)::int qtd ${base} GROUP BY 1 ORDER BY qtd DESC`, params),
+      all(`SELECT closed_at::date::text dia, COUNT(*)::int qtd ${base} GROUP BY 1 ORDER BY 1`, params),
+      all(`SELECT DISTINCT canal AS n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND canal IS NOT NULL ORDER BY 1`, [emp, di, df]),
+      all(`SELECT DISTINCT departamento AS n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND departamento IS NOT NULL ORDER BY 1`, [emp, di, df]),
     ]);
 
-    // Listas para os seletores (do conjunto completo baixado)
-    const canaisSet = {}, depsSet = {};
-    todos.forEach(a => {
-      const n = a.channel?.name; if (n) canaisSet[n] = true;
-      const d = nomeDepartamento(a); if (d) depsSet[d] = true;
-    });
-    const canais = Object.keys(canaisSet).sort();
-    const departamentos = Object.keys(depsSet).sort();
+    // Cobertura da sincronização: o período já foi todo baixado?
+    const estado = await get('SELECT MIN(closed_at)::date AS min FROM chatmix_atendimentos WHERE empresa_id=$1', [emp]);
+    const minCoberto = estado?.min ? String(estado.min).slice(0, 10) : null;
+    const sincronizando = !minCoberto || di < minCoberto; // pediu período mais antigo do que já foi baixado
 
-    // Filtros por canal e/ou departamento (a API só filtra por data no servidor, então filtramos aqui)
-    const canalFiltro = (req.query.canal || '').trim();
-    const depFiltro = (req.query.departamento || '').trim();
-    const itens = todos.filter(a =>
-      (!canalFiltro || (a.channel?.name || '') === canalFiltro) &&
-      (!depFiltro || nomeDepartamento(a) === depFiltro));
-    // Com filtro, o total exato do servidor não vale; usamos a contagem da amostra filtrada
-    const total = (canalFiltro || depFiltro) ? itens.length : totalGeral;
-
-    let somaDur = 0, comDur = 0;
-    let somaNota = 0, qtdNota = 0;
-    const distNotas = {}; // nota -> quantidade
-    const comentarios = [];
-    const porCanal = {}, porDia = {}, porAtendente = {}, porClassificacao = {}, porDepartamento = {};
-    for (const a of itens) {
-      const dur = segundosEntre(a.created_at, a.closed_at);
-      if (dur != null) { somaDur += dur; comDur++; }
-      const canal = a.channel?.name || '—';
-      porCanal[canal] = (porCanal[canal] || 0) + 1;
-      const dep = nomeDepartamento(a) || 'Sem departamento';
-      porDepartamento[dep] = (porDepartamento[dep] || 0) + 1;
-      const dia = (a.created_at || '').slice(0, 10);
-      if (dia) porDia[dia] = (porDia[dia] || 0) + 1;
-      const at = nomeAtendente(a);
-      porAtendente[at] = (porAtendente[at] || 0) + 1;
-      (a.classifications || []).forEach(c => { const n = c.name || '—'; porClassificacao[n] = (porClassificacao[n] || 0) + 1; });
-      (a.satisfaction_surveys || []).forEach(s => {
-        const nota = Number(s.satisfaction);
-        if (!isNaN(nota) && s.satisfaction != null) { somaNota += nota; qtdNota++; distNotas[nota] = (distNotas[nota] || 0) + 1; }
-        const txt = s.comments || s.content;
-        if (txt && comentarios.length < 20) comentarios.push({ nota: s.satisfaction, texto: txt, cliente: a.client?.name || '—' });
-      });
-    }
-    const ordenar = obj => Object.entries(obj).map(([nome, qtd]) => ({ nome, qtd })).sort((a, b) => b.qtd - a.qtd);
-
+    const media = cardRow?.media != null ? Math.round(cardRow.media * 100) / 100 : null;
     res.json({
       periodo: { data_inicial: di, data_final: df },
-      canais, // canais disponíveis para o seletor
-      departamentos, // departamentos disponíveis para o seletor
-      canal_selecionado: canalFiltro || null,
-      departamento_selecionado: depFiltro || null,
-      amostrado, // rankings/satisfação são calculados sobre a amostra baixada
-      amostra_qtd: itens.length,
+      canais: canaisAll.map(c => c.n),
+      departamentos: depsAll.map(d => d.n),
+      sincronizando, min_coberto: minCoberto,
       cards: {
-        total,
-        tma_seg: comDur ? Math.round(somaDur / comDur) : 0,
-        tma_fmt: fmtDuracao(comDur ? somaDur / comDur : 0),
-        satisfacao_media: qtdNota ? Math.round((somaNota / qtdNota) * 100) / 100 : null,
-        satisfacao_respostas: qtdNota,
+        total: cardRow?.total || 0,
+        tma_seg: Math.round(cardRow?.tma || 0), tma_fmt: fmtDuracao(cardRow?.tma || 0),
+        satisfacao_media: media, satisfacao_respostas: cardRow?.resp || 0,
         ao_vivo_aguardando: count?.waiting ?? null,
         ao_vivo_automacao: count?.automation ?? null,
         ao_vivo_atendimento: count?.progress ?? null,
       },
       satisfacao: {
-        media: qtdNota ? Math.round((somaNota / qtdNota) * 100) / 100 : null,
-        respostas: qtdNota,
-        distribuicao: Object.entries(distNotas).map(([nota, qtd]) => ({ nota: Number(nota), qtd })).sort((a, b) => b.nota - a.nota),
-        comentarios,
+        media, respostas: cardRow?.resp || 0,
+        distribuicao: [
+          { nota: 5, qtd: cardRow?.satisfeitas || 0 },
+          { nota: 1, qtd: cardRow?.insatisfeitas || 0 },
+        ].filter(d => d.qtd > 0),
+        comentarios: [],
       },
-      por_departamento: ordenar(porDepartamento),
-      por_canal: ordenar(porCanal),
-      por_atendente: ordenar(porAtendente),
-      por_classificacao: ordenar(porClassificacao),
-      por_dia: Object.entries(porDia).map(([dia, qtd]) => ({ dia, qtd })).sort((a, b) => a.dia.localeCompare(b.dia)),
+      por_departamento: porDep,
+      por_canal: porCanal,
+      por_atendente: porAtend,
+      por_dia: porDia,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
