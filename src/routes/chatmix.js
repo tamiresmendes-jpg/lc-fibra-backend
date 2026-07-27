@@ -293,49 +293,107 @@ async function listaAoVivo(cfg, caminho) {
   return itens;
 }
 
+// Segundos desde um horário do Chatmix (string em BRT, -3)
+function segDesde(str) {
+  if (!str) return null;
+  const t = Date.parse(String(str).replace(' ', 'T') + '-03:00');
+  if (isNaN(t)) return null;
+  return Math.max(0, Math.round((Date.now() - t) / 1000));
+}
+function fmtEspera(seg) {
+  if (seg == null) return '—';
+  const d = Math.floor(seg / 86400), h = Math.floor((seg % 86400) / 3600), m = Math.floor((seg % 3600) / 60);
+  if (d > 0) return `${d}d ${h}h ${m}min`;
+  if (h > 0) return `${h}h ${m}min`;
+  return `${m} min`;
+}
+
 router.get('/status', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id;
     const cfg = await carregarCfg(emp);
     if (!cfg.token) return res.status(400).json({ erro: 'Integração do Chatmix não configurada.', nao_configurado: true });
 
-    const hoje = new Date().toISOString().slice(0, 10);
-    const [count, andamento, aguardando, automacao, mapaDeps, fin] = await Promise.all([
+    const hoje = new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10); // hoje em BRT
+    const [count, andamento0, aguardando0, automacao0, mapaDeps] = await Promise.all([
       chamar(cfg, '/attendances/count').then(r => r.json?.attendances || null).catch(() => null),
       listaAoVivo(cfg, '/attendances/in-progress').catch(() => []),
       listaAoVivo(cfg, '/attendances/waiting').catch(() => []),
       listaAoVivo(cfg, '/attendances/automation').catch(() => []),
       all('SELECT dep_id, nome FROM chatmix_departamentos WHERE empresa_id=$1', [emp]),
-      get(`SELECT COUNT(*)::int n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date = $2`, [emp, hoje]),
     ]);
-    const depNome = {}; mapaDeps.forEach(d => { depNome[d.dep_id] = d.nome; });
+    const depNome = {}, depId = {};
+    mapaDeps.forEach(d => { depNome[d.dep_id] = d.nome; depId[String(d.nome).toLowerCase()] = String(d.dep_id); });
     const nomeDep = id => depNome[id] || (id ? 'Depto ' + id : 'Sem departamento');
     const nomeAt = u => u ? [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || 'Sem nome' : '—';
 
-    // Por atendente (só faz sentido para "em andamento", que tem atendente)
+    // Filtro por departamento (nome -> id)
+    const depFiltro = (req.query.departamento || '').trim();
+    const depFiltroId = depFiltro ? depId[depFiltro.toLowerCase()] : null;
+    const passa = a => !depFiltro || String(a.departament_id) === depFiltroId;
+    const andamento = andamento0.filter(passa);
+    const aguardando = aguardando0.filter(passa);
+    const automacao = automacao0.filter(passa);
+
+    // Encerrados hoje e tempo médio por atendente (do banco) — respeitando o filtro
+    const paramsDb = [emp, hoje];
+    let fltDb = '';
+    if (depFiltro) { paramsDb.push(depFiltro); fltDb = ` AND COALESCE(departamento,'Sem departamento') = $${paramsDb.length}`; }
+    const [encHojeRows, iniHoje, encHojeTot] = await Promise.all([
+      all(`SELECT COALESCE(atendente_nome,'Automação/Bot') nome, COUNT(*)::int enc,
+             AVG(EXTRACT(EPOCH FROM (closed_at-created_at))) tma
+           FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date=$2${fltDb} GROUP BY 1`, paramsDb),
+      get(`SELECT COUNT(*)::int n FROM chatmix_atendimentos WHERE empresa_id=$1 AND created_at::date=$2${fltDb}`, paramsDb),
+      get(`SELECT COUNT(*)::int n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date=$2${fltDb}`, paramsDb),
+    ]);
+    const encPorAt = {}; encHojeRows.forEach(r => { encPorAt[r.nome] = { enc: r.enc, tma: r.tma }; });
+
+    // Por atendente: em andamento (ao vivo) + encerrados hoje + tempo médio (banco)
     const porAtend = {};
     andamento.forEach(a => {
       const nome = nomeAt(a.user);
-      const o = porAtend[nome] || (porAtend[nome] = { atendente: nome, em_andamento: 0, departamento: nomeDep(a.departament_id) });
+      const o = porAtend[nome] || (porAtend[nome] = { atendente: nome, departamento: nomeDep(a.departament_id), em_andamento: 0, em_espera: 0, encerrados_hoje: 0, tempo_medio: '—' });
       o.em_andamento++;
     });
+    // adiciona quem encerrou hoje mas não está em atendimento agora
+    Object.entries(encPorAt).forEach(([nome, v]) => {
+      const o = porAtend[nome] || (porAtend[nome] = { atendente: nome, departamento: '—', em_andamento: 0, em_espera: 0, encerrados_hoje: 0, tempo_medio: '—' });
+      o.encerrados_hoje = v.enc; o.tempo_medio = fmtDuracao(v.tma || 0);
+    });
 
-    // Por departamento (andamento + aguardando + automação)
+    // Por departamento
     const porDep = {};
     const bump = (id, campo) => { const n = nomeDep(id); const o = porDep[n] || (porDep[n] = { departamento: n, em_andamento: 0, aguardando: 0, automacao: 0 }); o[campo]++; };
     andamento.forEach(a => bump(a.departament_id, 'em_andamento'));
     aguardando.forEach(a => bump(a.departament_id, 'aguardando'));
     automacao.forEach(a => bump(a.departament_id, 'automacao'));
 
+    // Métricas de espera (fila) e maior espera (fila + andamento)
+    const esperas = aguardando.map(a => segDesde(a.created_at)).filter(x => x != null);
+    const esperaMedia = esperas.length ? Math.round(esperas.reduce((s, x) => s + x, 0) / esperas.length) : 0;
+    const todasEsperas = [...esperas, ...andamento.map(a => segDesde(a.created_at)).filter(x => x != null)];
+    const maiorEspera = todasEsperas.length ? Math.max(...todasEsperas) : 0;
+
+    const emAnd = depFiltro ? andamento.length : (count?.progress ?? andamento.length);
+    const emEsp = depFiltro ? aguardando.length : (count?.waiting ?? aguardando.length);
+    const emAuto = depFiltro ? automacao.length : (count?.automation ?? automacao.length);
+    const encHoje = encHojeTot?.n || 0;
+    const ini = iniHoje?.n || 0;
+
     res.json({
       atualizado_em: new Date().toISOString(),
+      departamentos: mapaDeps.map(d => d.nome).sort(),
+      departamento_selecionado: depFiltro || null,
       totais: {
-        em_andamento: count?.progress ?? andamento.length,
-        aguardando: count?.waiting ?? aguardando.length,
-        automacao: count?.automation ?? automacao.length,
-        finalizados_hoje: fin?.n || 0,
+        em_andamento: emAnd, aguardando: emEsp, automacao: emAuto, finalizados_hoje: encHoje,
       },
-      por_atendente: Object.values(porAtend).sort((a, b) => b.em_andamento - a.em_andamento),
+      metricas: {
+        espera_media_fmt: fmtEspera(esperaMedia),
+        maior_espera_fmt: fmtEspera(maiorEspera),
+        iniciados_hoje: ini,
+        resolucao_dia: ini ? Math.round((encHoje / ini) * 1000) / 10 : 0,
+      },
+      por_atendente: Object.values(porAtend).sort((a, b) => (b.em_andamento - a.em_andamento) || (b.encerrados_hoje - a.encerrados_hoje)),
       por_departamento: Object.values(porDep).sort((a, b) => (b.em_andamento + b.aguardando + b.automacao) - (a.em_andamento + a.aguardando + a.automacao)),
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
