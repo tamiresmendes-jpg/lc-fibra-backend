@@ -63,6 +63,10 @@ async function garantirTabelas() {
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_sync_em TIMESTAMP`);  // null = mensagens ainda não contadas
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS satisfacao_msg TEXT`);    // satisfeito|insatisfeito|invalida|null (deduzido das mensagens)
   await run(`CREATE INDEX IF NOT EXISTS idx_cxatend_msgsync ON chatmix_atendimentos (empresa_id, closed_at) WHERE msgs_sync_em IS NULL`);
+  await run(`CREATE TABLE IF NOT EXISTS chatmix_departamentos (
+    empresa_id TEXT NOT NULL, dep_id BIGINT NOT NULL, nome TEXT,
+    PRIMARY KEY (empresa_id, dep_id)
+  )`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_config (
     empresa_id TEXT PRIMARY KEY,
     preco_msg NUMERIC DEFAULT 0.0350,
@@ -102,6 +106,12 @@ async function chamar(token, caminho, params = {}) {
 function normalizaData(s) { return s ? String(s).replace(' ', 'T') : null; }
 
 async function salvarAtendimento(empresaId, a) {
+  // Mantém o mapa de departamentos (id -> nome) para a tela de status ao vivo
+  if (a.department?.id && a.department?.title) {
+    run(`INSERT INTO chatmix_departamentos (empresa_id, dep_id, nome) VALUES ($1,$2,$3)
+         ON CONFLICT (empresa_id, dep_id) DO UPDATE SET nome=EXCLUDED.nome`,
+      [empresaId, a.department.id, a.department.title]).catch(() => {});
+  }
   const atendenteNome = a.user ? [a.user.first_name, a.user.last_name].filter(Boolean).join(' ').trim() : null;
   const surveys = a.satisfaction_surveys || [];
   const survey = surveys.find(s => s.satisfaction != null);
@@ -234,18 +244,26 @@ async function tick() {
     if (!empresas.length) return;
     const { empresa_id, token } = empresas[0];
 
-    // Alterna entre contar mensagens (satisfação) e puxar atendimentos (histórico),
-    // pra os dois avançarem juntos dividindo o limite de 2/min. Ticks pares = mensagens.
     contadorTick++;
     const cfg = await get('SELECT mensagens_desde FROM chatmix_config WHERE empresa_id=$1', [empresa_id]);
-    if (cfg?.mensagens_desde && contadorTick % 2 === 0) {
-      const m = await passoMensagem(empresa_id, token, cfg.mensagens_desde);
-      if (m.fez) {
-        if (m.erro) console.warn(`[chatmixSync] msgs ${empresa_id} at.${m.id}: ${m.erro}`);
-        else console.log(`[chatmixSync] msgs at.${m.id}: env=${m.env} rec=${m.rec} sat=${m.satisfacao || '-'}`);
-        return; // usou o "orçamento" de requisição deste tick
+    const hojeD = hojeISO();
+
+    // DIA ATUAL EM TEMPO REAL: se há conversa de HOJE ainda sem mensagens, processa já (prioridade total).
+    if (cfg?.mensagens_desde) {
+      const pendHoje = await get(
+        `SELECT COUNT(*)::int n FROM chatmix_atendimentos
+         WHERE empresa_id=$1 AND msgs_sync_em IS NULL AND closed_at::date = $2`, [empresa_id, hojeD]);
+      const desde = cfg.mensagens_desde;
+      // Resto (dias anteriores) em segundo plano: alterna com a sincronização de atendimentos.
+      const fazerMsg = (pendHoje?.n > 0) || (contadorTick % 2 === 0);
+      if (fazerMsg) {
+        const m = await passoMensagem(empresa_id, token, desde);
+        if (m.fez) {
+          if (m.erro) console.warn(`[chatmixSync] msgs ${empresa_id} at.${m.id}: ${m.erro}`);
+          else console.log(`[chatmixSync] msgs at.${m.id}: env=${m.env} rec=${m.rec} sat=${m.satisfacao || '-'}`);
+          return;
+        }
       }
-      // sem mensagem pendente → cai pra atendimentos
     }
 
     const res = await passo(empresa_id, token);

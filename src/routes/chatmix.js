@@ -279,6 +279,68 @@ router.get('/ao-vivo', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ===================== STATUS AO VIVO =====================
+async function listaAoVivo(cfg, caminho) {
+  const itens = [];
+  for (let page = 1; page <= 3; page++) {
+    const r = await chamar(cfg, caminho, { per_page: 100, page });
+    if (r.status !== 200 || !r.json) break;
+    const dados = Array.isArray(r.json.data) ? r.json.data : [];
+    itens.push(...dados);
+    const last = r.json.meta?.last_page || 1;
+    if (page >= last) break;
+  }
+  return itens;
+}
+
+router.get('/status', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const cfg = await carregarCfg(emp);
+    if (!cfg.token) return res.status(400).json({ erro: 'Integração do Chatmix não configurada.', nao_configurado: true });
+
+    const hoje = new Date().toISOString().slice(0, 10);
+    const [count, andamento, aguardando, automacao, mapaDeps, fin] = await Promise.all([
+      chamar(cfg, '/attendances/count').then(r => r.json?.attendances || null).catch(() => null),
+      listaAoVivo(cfg, '/attendances/in-progress').catch(() => []),
+      listaAoVivo(cfg, '/attendances/waiting').catch(() => []),
+      listaAoVivo(cfg, '/attendances/automation').catch(() => []),
+      all('SELECT dep_id, nome FROM chatmix_departamentos WHERE empresa_id=$1', [emp]),
+      get(`SELECT COUNT(*)::int n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date = $2`, [emp, hoje]),
+    ]);
+    const depNome = {}; mapaDeps.forEach(d => { depNome[d.dep_id] = d.nome; });
+    const nomeDep = id => depNome[id] || (id ? 'Depto ' + id : 'Sem departamento');
+    const nomeAt = u => u ? [u.first_name, u.last_name].filter(Boolean).join(' ').trim() || 'Sem nome' : '—';
+
+    // Por atendente (só faz sentido para "em andamento", que tem atendente)
+    const porAtend = {};
+    andamento.forEach(a => {
+      const nome = nomeAt(a.user);
+      const o = porAtend[nome] || (porAtend[nome] = { atendente: nome, em_andamento: 0, departamento: nomeDep(a.departament_id) });
+      o.em_andamento++;
+    });
+
+    // Por departamento (andamento + aguardando + automação)
+    const porDep = {};
+    const bump = (id, campo) => { const n = nomeDep(id); const o = porDep[n] || (porDep[n] = { departamento: n, em_andamento: 0, aguardando: 0, automacao: 0 }); o[campo]++; };
+    andamento.forEach(a => bump(a.departament_id, 'em_andamento'));
+    aguardando.forEach(a => bump(a.departament_id, 'aguardando'));
+    automacao.forEach(a => bump(a.departament_id, 'automacao'));
+
+    res.json({
+      atualizado_em: new Date().toISOString(),
+      totais: {
+        em_andamento: count?.progress ?? andamento.length,
+        aguardando: count?.waiting ?? aguardando.length,
+        automacao: count?.automation ?? automacao.length,
+        finalizados_hoje: fin?.n || 0,
+      },
+      por_atendente: Object.values(porAtend).sort((a, b) => b.em_andamento - a.em_andamento),
+      por_departamento: Object.values(porDep).sort((a, b) => (b.em_andamento + b.aguardando + b.automacao) - (a.em_andamento + a.aguardando + a.automacao)),
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ===================== RELATÓRIOS (lêem do banco sincronizado) =====================
 // Os relatórios abaixo usam a data de ENCERRAMENTO (closed_at), como no painel do Chatmix.
 
