@@ -6,8 +6,9 @@
 
 const { run, get, all } = require('../config/database');
 const { notificar } = require('../utils/discord');
-const FILA_MIN = 2;   // alerta: cliente na fila há mais de X min
-const RESP_MIN = 5;   // alerta: cliente esperando resposta da atendente há mais de X min
+const FILA_SEG = 30;        // alerta: cliente na fila há mais de 30 segundos
+const RESP_SEG = 8 * 60;    // alerta: cliente esperando resposta da atendente há mais de 8 min
+const JANELA_ALERTA_H = 23; // alerta: janela de 24h prestes a fechar (avisa a partir de 23h)
 
 const BASE = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
@@ -338,33 +339,60 @@ async function verificarAlertas(empresaId, token) {
   const depNome = {}; deps.forEach(d => { depNome[d.dep_id] = d.nome; });
   const nd = id => depNome[id] || (id ? 'Depto ' + id : '—');
   const nomeCli = a => a.client?.name || a.client?.user || 'Cliente';
+  const prot = a => String(a.protocol || '—');
+  const nomeAt = a => a.user ? [a.user.first_name, a.user.last_name].filter(Boolean).join(' ').trim() : 'Sem atendente';
 
-  // Fila parada: aguardando há mais de FILA_MIN
+  // 1) Fila > 30 segundos → cliente, protocolo, departamento
   for (const a of wq) {
     const seg = segDesdeBRT(a.created_at);
-    if (seg != null && seg >= FILA_MIN * 60 && !(await jaAlertou(empresaId, a.id, 'fila'))) {
+    if (seg != null && seg >= FILA_SEG && !(await jaAlertou(empresaId, a.id, 'fila'))) {
       await notificar(empresaId, 'chatmix', {
         title: '⏳ Cliente aguardando na fila',
         description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** na fila.`,
         color: 0xf59e0b,
-        fields: [{ name: 'Departamento', value: nd(a.departament_id), inline: true }, { name: 'Protocolo', value: String(a.protocol || '—'), inline: true }],
+        fields: [
+          { name: 'Cliente', value: nomeCli(a), inline: true },
+          { name: 'Departamento', value: nd(a.departament_id), inline: true },
+          { name: 'Protocolo', value: prot(a), inline: true },
+        ],
       });
       await marcarAlerta(empresaId, a.id, 'fila');
     }
   }
-  // Cliente esperando resposta da atendente (última interação foi do cliente) há mais de RESP_MIN
+  // 2) Cliente esperando resposta (última interação foi do cliente) > 8 min → cliente, protocolo, depto, atendente
   for (const a of ip) {
-    if (a.last_interaction !== 'client') continue;
-    const seg = segDesdeBRT(a.last_activity || a.created_at);
-    if (seg != null && seg >= RESP_MIN * 60 && !(await jaAlertou(empresaId, a.id, 'sem_resposta'))) {
-      const at = a.user ? [a.user.first_name, a.user.last_name].filter(Boolean).join(' ').trim() : 'Sem atendente';
+    if (a.last_interaction === 'client') {
+      const seg = segDesdeBRT(a.last_activity || a.created_at);
+      if (seg != null && seg >= RESP_SEG && !(await jaAlertou(empresaId, a.id, 'sem_resposta'))) {
+        await notificar(empresaId, 'chatmix', {
+          title: '🔔 Cliente esperando resposta da atendente',
+          description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** sem resposta.`,
+          color: 0xef4444,
+          fields: [
+            { name: 'Cliente', value: nomeCli(a), inline: true },
+            { name: 'Atendente', value: nomeAt(a), inline: true },
+            { name: 'Departamento', value: nd(a.departament_id), inline: true },
+            { name: 'Protocolo', value: prot(a), inline: true },
+          ],
+        });
+        await marcarAlerta(empresaId, a.id, 'sem_resposta');
+      }
+    }
+    // 3) Janela de 24h prestes a fechar (a partir de 23h desde a última atividade) → avisa pra mandar mensagem
+    const segAtiv = segDesdeBRT(a.last_activity || a.created_at);
+    if (segAtiv != null && segAtiv >= JANELA_ALERTA_H * 3600 && segAtiv < 24 * 3600 && !(await jaAlertou(empresaId, a.id, 'janela24h'))) {
+      const faltaMin = Math.max(0, Math.round((24 * 3600 - segAtiv) / 60));
       await notificar(empresaId, 'chatmix', {
-        title: '🔔 Cliente esperando resposta',
-        description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** sem resposta.`,
-        color: 0xef4444,
-        fields: [{ name: 'Atendente', value: at, inline: true }, { name: 'Departamento', value: nd(a.departament_id), inline: true }],
+        title: '⚠️ Janela de 24h vai fechar!',
+        description: `A janela de atendimento de **${nomeCli(a)}** fecha em ~**${faltaMin} min**. Envie uma mensagem ao cliente para **manter a comunicação aberta** (senão perde a janela gratuita e a meta).`,
+        color: 0xdc2626,
+        fields: [
+          { name: 'Cliente', value: nomeCli(a), inline: true },
+          { name: 'Departamento', value: nd(a.departament_id), inline: true },
+          { name: 'Atendente', value: nomeAt(a), inline: true },
+        ],
       });
-      await marcarAlerta(empresaId, a.id, 'sem_resposta');
+      await marcarAlerta(empresaId, a.id, 'janela24h');
     }
   }
 }
