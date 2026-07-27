@@ -454,4 +454,94 @@ router.get('/meta', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ===================== MENSAGENS & CUSTO =====================
+
+// Config de cobrança (preço por mensagem entregue e data de início da contagem)
+async function garantirMsgConfig(emp) {
+  let c = await get('SELECT * FROM chatmix_config WHERE empresa_id=$1', [emp]);
+  if (!c) {
+    const hoje = new Date().toISOString().slice(0, 10);
+    await run('INSERT INTO chatmix_config (empresa_id, preco_msg, mensagens_desde) VALUES ($1, 0.0350, $2) ON CONFLICT (empresa_id) DO NOTHING', [emp, hoje]);
+    c = await get('SELECT * FROM chatmix_config WHERE empresa_id=$1', [emp]);
+  }
+  return c;
+}
+
+router.get('/msg-config', async (req, res) => {
+  try {
+    const c = await garantirMsgConfig(req.usuario.empresa_id);
+    res.json({ preco_msg: Number(c.preco_msg), mensagens_desde: c.mensagens_desde ? String(c.mensagens_desde).slice(0, 10) : null });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/msg-config', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    await garantirMsgConfig(req.usuario.empresa_id);
+    const preco = req.body.preco_msg != null ? Number(req.body.preco_msg) : undefined;
+    const desde = (req.body.mensagens_desde || '').trim() || undefined;
+    if (preco != null && !isNaN(preco)) await run('UPDATE chatmix_config SET preco_msg=$2 WHERE empresa_id=$1', [req.usuario.empresa_id, preco]);
+    if (desde) await run('UPDATE chatmix_config SET mensagens_desde=$2 WHERE empresa_id=$1', [req.usuario.empresa_id, desde]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Mensagens & custo por período (lê do que já foi contado; cobrável = enviadas entregues não-internas)
+router.get('/mensagens', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const cfg = await garantirMsgConfig(emp);
+    const preco = Number(cfg.preco_msg) || 0.035;
+
+    const params = [emp, di, df];
+    const flt = filtros(req, params);
+    const base = `FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3${flt}`;
+
+    const [tot, agg, porAtend, porDep, porCanal] = await Promise.all([
+      get(`SELECT COUNT(*)::int total, COUNT(*) FILTER (WHERE msgs_sync_em IS NOT NULL)::int contadas ${base}`, params),
+      get(`SELECT COALESCE(SUM(msgs_enviadas),0)::int env, COALESCE(SUM(msgs_recebidas),0)::int rec, COALESCE(SUM(msgs_internas),0)::int intn ${base} AND msgs_sync_em IS NOT NULL`, params),
+      all(`SELECT COALESCE(atendente_nome,'Automação/Bot') nome, COALESCE(SUM(msgs_enviadas),0)::int env, COALESCE(SUM(msgs_recebidas),0)::int rec, COUNT(*) FILTER (WHERE msgs_sync_em IS NOT NULL)::int conversas ${base} AND msgs_sync_em IS NOT NULL GROUP BY 1 ORDER BY env DESC`, params),
+      all(`SELECT COALESCE(departamento,'Sem departamento') nome, COALESCE(SUM(msgs_enviadas),0)::int env, COALESCE(SUM(msgs_recebidas),0)::int rec ${base} AND msgs_sync_em IS NOT NULL GROUP BY 1 ORDER BY env DESC`, params),
+      all(`SELECT COALESCE(canal,'—') nome, COALESCE(SUM(msgs_enviadas),0)::int env, COALESCE(SUM(msgs_recebidas),0)::int rec ${base} AND msgs_sync_em IS NOT NULL GROUP BY 1 ORDER BY env DESC`, params),
+    ]);
+    const custo = e => Math.round((e || 0) * preco * 100) / 100;
+    res.json({
+      periodo: { di, df }, preco_msg: preco,
+      mensagens_desde: cfg.mensagens_desde ? String(cfg.mensagens_desde).slice(0, 10) : null,
+      cobertura: { total_conversas: tot?.total || 0, conversas_contadas: tot?.contadas || 0 },
+      totais: {
+        enviadas: agg?.env || 0, recebidas: agg?.rec || 0, internas: agg?.intn || 0,
+        trocadas: (agg?.env || 0) + (agg?.rec || 0),
+        custo: custo(agg?.env),
+      },
+      por_atendente: porAtend.map(r => ({ nome: r.nome, enviadas: r.env, recebidas: r.rec, conversas: r.conversas, custo: custo(r.env) })),
+      por_departamento: porDep.map(r => ({ nome: r.nome, enviadas: r.env, recebidas: r.rec, custo: custo(r.env) })),
+      por_canal: porCanal.map(r => ({ nome: r.nome, enviadas: r.env, recebidas: r.rec, custo: custo(r.env) })),
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Média de conversas por dia / semana / mês
+router.get('/medias', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const dias = diasEntre(di, df);
+    const params = [emp, di, df];
+    const flt = filtros(req, params);
+    const base = `FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3${flt}`;
+    const tot = await get(`SELECT COUNT(*)::int total, COUNT(DISTINCT closed_at::date)::int dias_com_dados ${base}`, params);
+    const total = tot?.total || 0;
+    const porDep = await all(`SELECT COALESCE(departamento,'Sem departamento') nome, COUNT(*)::int total ${base} GROUP BY 1 ORDER BY total DESC`, params);
+    const r1 = n => Math.round(n * 10) / 10;
+    res.json({
+      periodo: { di, df, dias },
+      total_conversas: total,
+      media_dia: r1(total / dias),
+      media_semana: r1(total / (dias / 7)),
+      media_mes: r1(total / (dias / 30)),
+      por_departamento: porDep.map(d => ({ nome: d.nome, total: d.total, media_dia: r1(d.total / dias) })),
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 module.exports = router;

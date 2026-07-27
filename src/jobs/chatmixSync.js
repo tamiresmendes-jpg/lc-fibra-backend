@@ -33,6 +33,17 @@ async function garantirTabelas() {
     PRIMARY KEY (empresa_id, atendimento_id)
   )`);
   await run(`CREATE INDEX IF NOT EXISTS idx_cxatend_periodo ON chatmix_atendimentos (empresa_id, created_at)`);
+  // Colunas de mensagens (cobrança por mensagem entregue da empresa)
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_enviadas INTEGER`);   // sent, entregues, não-internas (cobráveis)
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_recebidas INTEGER`);  // do cliente (grátis)
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_internas INTEGER`);   // notas internas (não cobram)
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_sync_em TIMESTAMP`);  // null = mensagens ainda não contadas
+  await run(`CREATE INDEX IF NOT EXISTS idx_cxatend_msgsync ON chatmix_atendimentos (empresa_id, closed_at) WHERE msgs_sync_em IS NULL`);
+  await run(`CREATE TABLE IF NOT EXISTS chatmix_config (
+    empresa_id TEXT PRIMARY KEY,
+    preco_msg NUMERIC DEFAULT 0.0350,
+    mensagens_desde DATE
+  )`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_sync_estado (
     empresa_id TEXT PRIMARY KEY,
     page INTEGER DEFAULT 1,
@@ -137,6 +148,32 @@ async function passo(empresaId, token) {
   return { ok: true, page, lastPage, janela: `${ds}..${de}`, recebidos: dados.length, total: total?.n || 0, fase };
 }
 
+// Conta mensagens de UM atendimento (o mais recente ainda não contado, a partir de mensagens_desde).
+// Cobrável = type 'sent' + origin != 'internal' + ack >= 2 (entregue). Recebidas do cliente = grátis.
+async function passoMensagem(empresaId, token, desde) {
+  const alvo = await get(
+    `SELECT atendimento_id FROM chatmix_atendimentos
+     WHERE empresa_id=$1 AND msgs_sync_em IS NULL AND closed_at::date >= $2
+     ORDER BY closed_at DESC LIMIT 1`, [empresaId, desde]);
+  if (!alvo) return { fez: false };
+  const id = alvo.atendimento_id;
+  const r = await chamar(token, `/attendances/${id}/messages`, { limit: 500 });
+  if (r.status !== 200) return { fez: true, erro: 'HTTP ' + r.status };
+  const j = r.json;
+  const msgs = Array.isArray(j) ? j : (j?.data || (j ? Object.values(j).filter(v => v && typeof v === 'object' && v.type) : []));
+  let env = 0, rec = 0, intn = 0;
+  for (const m of msgs) {
+    if (m.type === 'received') { rec++; continue; }
+    if (m.type === 'sent') {
+      if (m.origin === 'internal') { intn++; continue; }
+      if (Number(m.ack) >= 2) env++; // entregue/lido
+    }
+  }
+  await run(`UPDATE chatmix_atendimentos SET msgs_enviadas=$3, msgs_recebidas=$4, msgs_internas=$5, msgs_sync_em=NOW()
+             WHERE empresa_id=$1 AND atendimento_id=$2`, [empresaId, id, env, rec, intn]);
+  return { fez: true, id, env, rec, intn };
+}
+
 let rodando = false;
 async function tick() {
   if (rodando) return;
@@ -151,6 +188,20 @@ async function tick() {
       ORDER BY ult ASC LIMIT 1`);
     if (!empresas.length) return;
     const { empresa_id, token } = empresas[0];
+
+    // Prioriza contar mensagens das conversas novas (a partir de mensagens_desde),
+    // que é o dado da cobrança. Se não há pendências, avança a sincronização de atendimentos.
+    const cfg = await get('SELECT mensagens_desde FROM chatmix_config WHERE empresa_id=$1', [empresa_id]);
+    if (cfg?.mensagens_desde) {
+      const desde = String(cfg.mensagens_desde).slice(0, 10);
+      const m = await passoMensagem(empresa_id, token, desde);
+      if (m.fez) {
+        if (m.erro) console.warn(`[chatmixSync] msgs ${empresa_id} at.${m.id}: ${m.erro}`);
+        else console.log(`[chatmixSync] msgs at.${m.id}: enviadas=${m.env} recebidas=${m.rec} internas=${m.intn}`);
+        return; // usou o "orçamento" de requisição deste tick
+      }
+    }
+
     const res = await passo(empresa_id, token);
     if (res.ok) console.log(`[chatmixSync] ${empresa_id}: janela ${res.janela} pág ${res.page}/${res.lastPage} (+${res.recebidos}) total ${res.total} [${res.fase}]`);
     else console.warn(`[chatmixSync] empresa ${empresa_id}: falha HTTP ${res.status}`);
