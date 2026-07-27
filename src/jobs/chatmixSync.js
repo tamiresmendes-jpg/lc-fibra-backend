@@ -14,7 +14,7 @@ const PER_PAGE = 50;
 const JANELA_SPAN = 2;           // 3 dias inclusivos por janela
 const MAX_PAGE = 100;            // teto de página da API
 const BACKFILL_MAX_DIAS = 730;   // até ~2 anos de histórico para trás
-const INTERVALO_MS = 35 * 1000;  // ~1,7 req/min (limite é 2/min)
+const INTERVALO_MS = 32 * 1000;  // ~1,87 req/min (limite é 2/min por empresa)
 
 const espera = ms => new Promise(r => setTimeout(r, ms));
 function addDias(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
