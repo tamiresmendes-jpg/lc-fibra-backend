@@ -410,13 +410,15 @@ router.get('/meta', async (req, res) => {
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
     const metaTaxa = Number(req.query.meta_taxa || 55);
     const params = [emp, di, df];
+    // Satisfação vem da dedução pelas mensagens (satisfacao_msg): satisfeito|insatisfeito|invalida.
+    // Só conta conversas com mensagens já processadas (msgs_sync_em não nulo).
     const rows = await all(
       `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE nota = 5)::int AS satisfeitas,
-        COUNT(*) FILTER (WHERE nota = 1)::int AS insatisfeitas,
-        COUNT(*) FILTER (WHERE nota IS NOT NULL AND nota NOT IN (1,5))::int AS invalidas,
-        AVG(nota) FILTER (WHERE nota IS NOT NULL) AS media
+        COUNT(*) FILTER (WHERE msgs_sync_em IS NOT NULL)::int AS processadas,
+        COUNT(*) FILTER (WHERE satisfacao_msg = 'satisfeito')::int AS satisfeitas,
+        COUNT(*) FILTER (WHERE satisfacao_msg = 'insatisfeito')::int AS insatisfeitas,
+        COUNT(*) FILTER (WHERE satisfacao_msg = 'invalida')::int AS invalidas
        FROM chatmix_atendimentos
        WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL${filtros(req, params)}
        GROUP BY 1 ORDER BY total DESC`, params);
@@ -424,25 +426,26 @@ router.get('/meta', async (req, res) => {
       const validas = r.satisfeitas + r.insatisfeitas;           // válidas = satisfeitas + insatisfeitas
       const percSat = validas ? Math.round((r.satisfeitas / validas) * 10000) / 100 : null; // satisfeitas / válidas
       const taxaResp = r.total ? Math.round((validas / r.total) * 10000) / 100 : 0;          // válidas / total
-      const media = r.media != null ? Math.round(r.media * 100) / 100 : null;
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
       return {
-        atendente: r.nome, total: r.total,
+        atendente: r.nome, total: r.total, processadas: r.processadas,
         validas, invalidas: r.invalidas, satisfeitas: r.satisfeitas, insatisfeitas: r.insatisfeitas,
-        media_notas: media, perc_satisfacao: percSat, taxa_resposta: taxaResp,
+        perc_satisfacao: percSat, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
         bonificacao: bateSat && bateTaxa,
-        situacao: percSat == null ? 'Sem pesquisas no período.' : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
+        situacao: percSat == null ? 'Sem pesquisas processadas ainda.' : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
     });
     // Resumo do setor
     const totAtend = itens.reduce((s, i) => s + i.total, 0);
+    const totProc = itens.reduce((s, i) => s + i.processadas, 0);
     const totValidas = itens.reduce((s, i) => s + i.validas, 0);
     const totSatisf = itens.reduce((s, i) => s + i.satisfeitas, 0);
     const ambas = itens.filter(i => i.bonificacao);
     const resumo = {
       total_atendimentos: totAtend,
+      conversas_processadas: totProc,
       atendentes_avaliados: itens.length,
       media_satisfacao: totValidas ? Math.round((totSatisf / totValidas) * 10000) / 100 : null,
       media_taxa_resposta: totAtend ? Math.round((totValidas / totAtend) * 10000) / 100 : null,
