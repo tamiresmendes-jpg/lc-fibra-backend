@@ -199,8 +199,7 @@ async function tick() {
     // que é o dado da cobrança. Se não há pendências, avança a sincronização de atendimentos.
     const cfg = await get('SELECT mensagens_desde FROM chatmix_config WHERE empresa_id=$1', [empresa_id]);
     if (cfg?.mensagens_desde) {
-      const desde = String(cfg.mensagens_desde).slice(0, 10);
-      const m = await passoMensagem(empresa_id, token, desde);
+      const m = await passoMensagem(empresa_id, token, cfg.mensagens_desde); // pg formata Date corretamente
       if (m.fez) {
         if (m.erro) console.warn(`[chatmixSync] msgs ${empresa_id} at.${m.id}: ${m.erro}`);
         else console.log(`[chatmixSync] msgs at.${m.id}: enviadas=${m.env} recebidas=${m.rec} internas=${m.intn}`);

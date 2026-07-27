@@ -455,6 +455,12 @@ router.get('/meta', async (req, res) => {
 });
 
 // ===================== MENSAGENS & CUSTO =====================
+// Postgres devolve DATE como objeto Date do JS; formata como YYYY-MM-DD sem virar "Mon Jul 27"
+function fmtData(v) {
+  if (!v) return null;
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  return String(v).slice(0, 10);
+}
 
 // Config de cobrança (preço por mensagem entregue e data de início da contagem)
 async function garantirMsgConfig(emp) {
@@ -470,7 +476,7 @@ async function garantirMsgConfig(emp) {
 router.get('/msg-config', async (req, res) => {
   try {
     const c = await garantirMsgConfig(req.usuario.empresa_id);
-    res.json({ preco_msg: Number(c.preco_msg), mensagens_desde: c.mensagens_desde ? String(c.mensagens_desde).slice(0, 10) : null });
+    res.json({ preco_msg: Number(c.preco_msg), mensagens_desde: fmtData(c.mensagens_desde) });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -507,7 +513,7 @@ router.get('/mensagens', async (req, res) => {
     const custo = e => Math.round((e || 0) * preco * 100) / 100;
     res.json({
       periodo: { di, df }, preco_msg: preco,
-      mensagens_desde: cfg.mensagens_desde ? String(cfg.mensagens_desde).slice(0, 10) : null,
+      mensagens_desde: fmtData(cfg.mensagens_desde),
       cobertura: { total_conversas: tot?.total || 0, conversas_contadas: tot?.contadas || 0 },
       totais: {
         enviadas: agg?.env || 0, recebidas: agg?.rec || 0, internas: agg?.intn || 0,
