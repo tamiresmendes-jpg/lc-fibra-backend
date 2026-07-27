@@ -9,10 +9,12 @@ const { run, get, all } = require('../config/database');
 const BASE = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
 const PER_PAGE = 50;
-const JANELA_DIAS = 30;          // janela móvel sincronizada (máx. 30 dias pela API)
+const JANELA_SPAN = 29;          // janela de 30 dias inclusivos (máx. permitido pela API)
+const BACKFILL_MAX_DIAS = 730;   // até ~2 anos de histórico para trás
 const INTERVALO_MS = 35 * 1000;  // ~1,7 req/min (limite é 2/min)
 
 const espera = ms => new Promise(r => setTimeout(r, ms));
+function addDias(iso, n) { const d = new Date(iso + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return d.toISOString().slice(0, 10); }
 
 async function garantirTabelas() {
   await run(`CREATE TABLE IF NOT EXISTS chatmix_atendimentos (
@@ -86,15 +88,18 @@ async function salvarAtendimento(empresaId, a) {
 
 // Executa UM passo (uma página) para uma empresa
 async function passo(empresaId, token) {
+  const hoje = hojeISO();
+  const janelaRecente = () => ({ ds: addDias(hoje, -JANELA_SPAN), de: hoje });
   let estado = await get('SELECT * FROM chatmix_sync_estado WHERE empresa_id = $1', [empresaId]);
   if (!estado) {
+    const jr = janelaRecente();
     await run('INSERT INTO chatmix_sync_estado (empresa_id, page, date_start, date_end) VALUES ($1,1,$2,$3)',
-      [empresaId, isoMenosDias(JANELA_DIAS), hojeISO()]);
+      [empresaId, jr.ds, jr.de]);
     estado = await get('SELECT * FROM chatmix_sync_estado WHERE empresa_id = $1', [empresaId]);
   }
   const page = estado.page || 1;
-  const ds = estado.date_start || isoMenosDias(JANELA_DIAS);
-  const de = estado.date_end || hojeISO();
+  const ds = estado.date_start || janelaRecente().ds;
+  const de = estado.date_end || hoje;
 
   const r = await chamar(token, '/attendances/closed', { date_start: ds, date_end: de, per_page: PER_PAGE, page });
   if (r.status !== 200 || !r.json) return { ok: false, status: r.status };
@@ -102,14 +107,26 @@ async function passo(empresaId, token) {
   const dados = Array.isArray(r.json.data) ? r.json.data : [];
   for (const a of dados) await salvarAtendimento(empresaId, a);
   const lastPage = r.json.meta?.last_page || 1;
+  const janelaTotal = r.json.meta?.total || 0;
 
   const total = await get('SELECT COUNT(*)::int AS n FROM chatmix_atendimentos WHERE empresa_id = $1', [empresaId]);
 
   let novaPage = page + 1, novoDs = ds, novoDe = de, ciclo = estado.ciclo || 0;
-  let fimCiclo = false;
+  let fimCiclo = false, fase = 'backfill';
   if (novaPage > lastPage) {
-    // Terminou de varrer a janela → recomeça do início com a janela atualizada
-    novaPage = 1; novoDs = isoMenosDias(JANELA_DIAS); novoDe = hojeISO(); ciclo += 1; fimCiclo = true;
+    // Terminou de varrer esta janela de 30 dias.
+    const limiteBackfill = addDias(hoje, -BACKFILL_MAX_DIAS);
+    if (janelaTotal > 0 && ds > limiteBackfill) {
+      // Havia dados → volta 30 dias no tempo (backfill do histórico)
+      novoDe = addDias(ds, -1);
+      novoDs = addDias(novoDe, -JANELA_SPAN);
+      novaPage = 1;
+    } else {
+      // Janela vazia (chegou no começo do histórico) ou atingiu o limite →
+      // recomeça da janela recente para manter tudo atualizado.
+      const jr = janelaRecente();
+      novoDs = jr.ds; novoDe = jr.de; novaPage = 1; ciclo += 1; fimCiclo = true; fase = 'refresh';
+    }
   }
   await run(
     `UPDATE chatmix_sync_estado SET page=$2, last_page=$3, date_start=$4, date_end=$5, ciclo=$6,
@@ -117,7 +134,7 @@ async function passo(empresaId, token) {
      WHERE empresa_id=$1`,
     [empresaId, novaPage, lastPage, novoDs, novoDe, ciclo, total?.n || 0]
   );
-  return { ok: true, page, lastPage, recebidos: dados.length, total: total?.n || 0 };
+  return { ok: true, page, lastPage, janela: `${ds}..${de}`, recebidos: dados.length, total: total?.n || 0, fase };
 }
 
 let rodando = false;
@@ -135,7 +152,7 @@ async function tick() {
     if (!empresas.length) return;
     const { empresa_id, token } = empresas[0];
     const res = await passo(empresa_id, token);
-    if (res.ok) console.log(`[chatmixSync] empresa ${empresa_id}: pág ${res.page}/${res.lastPage}, +${res.recebidos}, total ${res.total}`);
+    if (res.ok) console.log(`[chatmixSync] ${empresa_id}: janela ${res.janela} pág ${res.page}/${res.lastPage} (+${res.recebidos}) total ${res.total} [${res.fase}]`);
     else console.warn(`[chatmixSync] empresa ${empresa_id}: falha HTTP ${res.status}`);
   } catch (e) {
     console.error('[chatmixSync]', e.message);
