@@ -85,8 +85,9 @@ async function garantirTabelas() {
   )`);
 }
 
-function hojeISO() { return new Date().toISOString().slice(0, 10); }
-function isoMenosDias(dias) { const d = new Date(); d.setDate(d.getDate() - dias); return d.toISOString().slice(0, 10); }
+// Chatmix trabalha em horário de Brasília (BRT, -3). "Hoje" tem que ser o dia em BRT.
+function hojeISO() { return new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10); }
+function isoMenosDias(dias) { return new Date(Date.now() - 3 * 3600 * 1000 - dias * 86400000).toISOString().slice(0, 10); }
 
 async function chamar(token, caminho, params = {}) {
   const qs = new URLSearchParams();
@@ -228,6 +229,24 @@ async function passoMensagem(empresaId, token, desde) {
   return { fez: true, id, env, rec, intn, satisfacao };
 }
 
+// Mantém o DIA ATUAL sempre completo (tempo real): escaneia a janela de hoje,
+// 1 página por tick (os encerrados mais novos aparecem na página 1).
+let refreshPage = 1;
+async function refreshHojePasso(empresaId, token) {
+  const hoje = hojeISO();
+  const antes = await get('SELECT COUNT(*)::int n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date=$2', [empresaId, hoje]);
+  const r = await chamar(token, '/attendances/closed', { date_start: hoje, date_end: hoje, per_page: PER_PAGE, page: refreshPage });
+  if (r.status !== 200 || !r.json) { refreshPage = 1; return { fez: true, erro: 'HTTP ' + r.status }; }
+  const dados = Array.isArray(r.json.data) ? r.json.data : [];
+  for (const a of dados) await salvarAtendimento(empresaId, a);
+  const depois = await get('SELECT COUNT(*)::int n FROM chatmix_atendimentos WHERE empresa_id=$1 AND closed_at::date=$2', [empresaId, hoje]);
+  const novos = (depois?.n || 0) - (antes?.n || 0);
+  const last = Math.min(r.json.meta?.last_page || 1, MAX_PAGE);
+  // Se achou novos, vai mais fundo pra pegar o resto; senão volta pra página 1 (catch dos próximos).
+  refreshPage = (novos > 0 && refreshPage < last) ? refreshPage + 1 : 1;
+  return { fez: true, page: r.json.meta?.current_page || refreshPage, novos, total_hoje: depois?.n || 0 };
+}
+
 let rodando = false;
 let contadorTick = 0;
 async function tick() {
@@ -248,14 +267,24 @@ async function tick() {
     const cfg = await get('SELECT mensagens_desde FROM chatmix_config WHERE empresa_id=$1', [empresa_id]);
     const hojeD = hojeISO();
 
-    // DIA ATUAL EM TEMPO REAL: se há conversa de HOJE ainda sem mensagens, processa já (prioridade total).
+    // 1) DIA ATUAL EM TEMPO REAL — atendimentos: a cada ~2 ticks, atualiza a janela de hoje.
+    if (contadorTick % 2 === 1) {
+      const rh = await refreshHojePasso(empresa_id, token);
+      if (rh.fez && !rh.erro && (rh.novos > 0 || rh.page > 1)) {
+        console.log(`[chatmixSync] hoje: pág ${rh.page} +${rh.novos} (total hoje ${rh.total_hoje})`);
+        return;
+      }
+      if (rh.erro) return;
+    }
+
+    // 2) DIA ATUAL EM TEMPO REAL — mensagens: conversa de hoje sem mensagens → processa já.
     if (cfg?.mensagens_desde) {
       const pendHoje = await get(
         `SELECT COUNT(*)::int n FROM chatmix_atendimentos
          WHERE empresa_id=$1 AND msgs_sync_em IS NULL AND closed_at::date = $2`, [empresa_id, hojeD]);
       const desde = cfg.mensagens_desde;
-      // Resto (dias anteriores) em segundo plano: alterna com a sincronização de atendimentos.
-      const fazerMsg = (pendHoje?.n > 0) || (contadorTick % 2 === 0);
+      // Dias anteriores (mensagens) em segundo plano: entram em parte dos ticks.
+      const fazerMsg = (pendHoje?.n > 0) || (contadorTick % 4 === 0);
       if (fazerMsg) {
         const m = await passoMensagem(empresa_id, token, desde);
         if (m.fez) {
@@ -266,6 +295,7 @@ async function tick() {
       }
     }
 
+    // 3) SEGUNDO PLANO — backfill do histórico de atendimentos (rumo a janeiro/2026).
     const res = await passo(empresa_id, token);
     if (res.ok) console.log(`[chatmixSync] ${empresa_id}: janela ${res.janela} pág ${res.page}/${res.lastPage} (+${res.recebidos}) total ${res.total} [${res.fase}]`);
     else console.warn(`[chatmixSync] empresa ${empresa_id}: falha HTTP ${res.status}`);
