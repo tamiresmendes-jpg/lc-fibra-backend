@@ -9,7 +9,10 @@ const { run, get, all } = require('../config/database');
 const BASE = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
 const PER_PAGE = 50;
-const JANELA_SPAN = 29;          // janela de 30 dias inclusivos (máx. permitido pela API)
+// A API limita page<=100 e per_page<=50 => teto de 5.000 registros por janela de datas.
+// Com ~1.000 atendimentos/dia, usamos janelas de 3 dias (≈3 mil) para não estourar.
+const JANELA_SPAN = 2;           // 3 dias inclusivos por janela
+const MAX_PAGE = 100;            // teto de página da API
 const BACKFILL_MAX_DIAS = 730;   // até ~2 anos de histórico para trás
 const INTERVALO_MS = 35 * 1000;  // ~1,7 req/min (limite é 2/min)
 
@@ -117,8 +120,11 @@ async function passo(empresaId, token) {
 
   const dados = Array.isArray(r.json.data) ? r.json.data : [];
   for (const a of dados) await salvarAtendimento(empresaId, a);
-  const lastPage = r.json.meta?.last_page || 1;
   const janelaTotal = r.json.meta?.total || 0;
+  // A API não deixa passar da página 100; se a janela tiver mais, paramos em 100
+  // (com janelas de 3 dias isso praticamente nunca acontece).
+  const lastPage = Math.min(r.json.meta?.last_page || 1, MAX_PAGE);
+  if ((r.json.meta?.last_page || 1) > MAX_PAGE) console.warn(`[chatmixSync] janela ${ds}..${de} tem ${janelaTotal} registros (>5000); alguns mais antigos podem faltar`);
 
   const total = await get('SELECT COUNT(*)::int AS n FROM chatmix_atendimentos WHERE empresa_id = $1', [empresaId]);
 
