@@ -351,7 +351,6 @@ async function verificarAlertas(empresaId, token) {
         description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** na fila.`,
         color: 0xf59e0b,
         fields: [
-          { name: 'Cliente', value: nomeCli(a), inline: true },
           { name: 'Departamento', value: nd(a.departament_id), inline: true },
           { name: 'Protocolo', value: prot(a), inline: true },
         ],
@@ -369,7 +368,6 @@ async function verificarAlertas(empresaId, token) {
           description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** sem resposta.`,
           color: 0xef4444,
           fields: [
-            { name: 'Cliente', value: nomeCli(a), inline: true },
             { name: 'Atendente', value: nomeAt(a), inline: true },
             { name: 'Departamento', value: nd(a.departament_id), inline: true },
             { name: 'Protocolo', value: prot(a), inline: true },
@@ -387,7 +385,6 @@ async function verificarAlertas(empresaId, token) {
         description: `A janela de atendimento de **${nomeCli(a)}** fecha em ~**${faltaMin} min**. Envie uma mensagem ao cliente para **manter a comunicação aberta** (senão perde a janela gratuita e a meta).`,
         color: 0xdc2626,
         fields: [
-          { name: 'Cliente', value: nomeCli(a), inline: true },
           { name: 'Departamento', value: nd(a.departament_id), inline: true },
           { name: 'Atendente', value: nomeAt(a), inline: true },
         ],
