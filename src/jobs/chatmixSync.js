@@ -13,7 +13,7 @@ const PER_PAGE = 50;
 // Com ~1.000 atendimentos/dia, usamos janelas de 3 dias (≈3 mil) para não estourar.
 const JANELA_SPAN = 2;           // 3 dias inclusivos por janela
 const MAX_PAGE = 100;            // teto de página da API
-const BACKFILL_MAX_DIAS = 730;   // até ~2 anos de histórico para trás
+const FLOOR_DATE = '2026-01-01'; // backfill de atendimentos vai até aqui (janeiro/2026)
 const INTERVALO_MS = 32 * 1000;  // ~1,87 req/min (limite é 2/min por empresa)
 
 const espera = ms => new Promise(r => setTimeout(r, ms));
@@ -153,8 +153,7 @@ async function passo(empresaId, token) {
   let fimCiclo = false, fase = 'backfill';
   if (novaPage > lastPage) {
     // Terminou de varrer esta janela de 30 dias.
-    const limiteBackfill = addDias(hoje, -BACKFILL_MAX_DIAS);
-    if (janelaTotal > 0 && ds > limiteBackfill) {
+    if (janelaTotal > 0 && ds > FLOOR_DATE) {
       // Havia dados → volta 30 dias no tempo (backfill do histórico)
       novoDe = addDias(ds, -1);
       novoDs = addDias(novoDe, -JANELA_SPAN);
@@ -220,6 +219,7 @@ async function passoMensagem(empresaId, token, desde) {
 }
 
 let rodando = false;
+let contadorTick = 0;
 async function tick() {
   if (rodando) return;
   rodando = true;
@@ -234,16 +234,18 @@ async function tick() {
     if (!empresas.length) return;
     const { empresa_id, token } = empresas[0];
 
-    // Prioriza contar mensagens das conversas novas (a partir de mensagens_desde),
-    // que é o dado da cobrança. Se não há pendências, avança a sincronização de atendimentos.
+    // Alterna entre contar mensagens (satisfação) e puxar atendimentos (histórico),
+    // pra os dois avançarem juntos dividindo o limite de 2/min. Ticks pares = mensagens.
+    contadorTick++;
     const cfg = await get('SELECT mensagens_desde FROM chatmix_config WHERE empresa_id=$1', [empresa_id]);
-    if (cfg?.mensagens_desde) {
-      const m = await passoMensagem(empresa_id, token, cfg.mensagens_desde); // pg formata Date corretamente
+    if (cfg?.mensagens_desde && contadorTick % 2 === 0) {
+      const m = await passoMensagem(empresa_id, token, cfg.mensagens_desde);
       if (m.fez) {
         if (m.erro) console.warn(`[chatmixSync] msgs ${empresa_id} at.${m.id}: ${m.erro}`);
-        else console.log(`[chatmixSync] msgs at.${m.id}: enviadas=${m.env} recebidas=${m.rec} internas=${m.intn}`);
+        else console.log(`[chatmixSync] msgs at.${m.id}: env=${m.env} rec=${m.rec} sat=${m.satisfacao || '-'}`);
         return; // usou o "orçamento" de requisição deste tick
       }
+      // sem mensagem pendente → cai pra atendimentos
     }
 
     const res = await passo(empresa_id, token);
