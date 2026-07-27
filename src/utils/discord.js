@@ -12,12 +12,12 @@ const COR = {
 };
 
 // Eventos que podem ser direcionados a um canal
-const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'comunicado', 'coffee', 'mural', 'cultura'];
+const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
 // Mapa evento → coluna de habilitação (liga/desliga)
 const EVENTO_COL = {
   ciencia: 'ev_ciencia', pop: 'ev_pop', processo: 'ev_processo',
   aniversario: 'ev_aniversario', comunicado: 'ev_comunicado', manual: 'ev_comunicado',
-  coffee: 'ev_coffee', mural: 'ev_mural', cultura: 'ev_cultura',
+  coffee: 'ev_coffee', mural: 'ev_mural', cultura: 'ev_cultura', chatmix: 'ev_chatmix',
 };
 
 // ── Migração / criação de tabelas ─────────────────────────────────────────
@@ -44,6 +44,7 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_cultura INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS servidor_id TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS canal_embed TEXT'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_chatmix INTEGER DEFAULT 1'); } catch {}
     try {
       await run(`CREATE TABLE IF NOT EXISTS discord_canais (
         id TEXT PRIMARY KEY,

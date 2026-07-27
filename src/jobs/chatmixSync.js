@@ -5,6 +5,9 @@
 // relatório (departamento, atendente, meta) leem do banco — rápido e completo.
 
 const { run, get, all } = require('../config/database');
+const { notificar } = require('../utils/discord');
+const FILA_MIN = 2;   // alerta: cliente na fila há mais de X min
+const RESP_MIN = 5;   // alerta: cliente esperando resposta da atendente há mais de X min
 
 const BASE = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
@@ -66,6 +69,10 @@ async function garantirTabelas() {
   await run(`CREATE TABLE IF NOT EXISTS chatmix_departamentos (
     empresa_id TEXT NOT NULL, dep_id BIGINT NOT NULL, nome TEXT,
     PRIMARY KEY (empresa_id, dep_id)
+  )`);
+  await run(`CREATE TABLE IF NOT EXISTS chatmix_alertas (
+    empresa_id TEXT NOT NULL, atendimento_id BIGINT NOT NULL, tipo TEXT NOT NULL,
+    alertado_em TIMESTAMP DEFAULT NOW(), PRIMARY KEY (empresa_id, atendimento_id, tipo)
   )`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_config (
     empresa_id TEXT PRIMARY KEY,
@@ -306,14 +313,81 @@ async function tick() {
   }
 }
 
+// ── Alertas ao vivo (Discord): fila parada e cliente esperando resposta ──
+function segDesdeBRT(str) {
+  if (!str) return null;
+  const t = Date.parse(String(str).replace(' ', 'T') + '-03:00');
+  return isNaN(t) ? null : Math.round((Date.now() - t) / 1000);
+}
+function fmtMin(seg) { const m = Math.floor((seg || 0) / 60); const h = Math.floor(m / 60); return h > 0 ? `${h}h${m % 60}min` : `${m} min`; }
+
+async function jaAlertou(emp, id, tipo) {
+  const r = await get('SELECT 1 FROM chatmix_alertas WHERE empresa_id=$1 AND atendimento_id=$2 AND tipo=$3', [emp, id, tipo]);
+  return !!r;
+}
+async function marcarAlerta(emp, id, tipo) {
+  await run('INSERT INTO chatmix_alertas (empresa_id, atendimento_id, tipo) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING', [emp, id, tipo]);
+}
+
+async function verificarAlertas(empresaId, token) {
+  const [wq, ip, deps] = await Promise.all([
+    chamar(token, '/attendances/waiting', { per_page: 100 }).then(r => r.json?.data || []).catch(() => []),
+    chamar(token, '/attendances/in-progress', { per_page: 100 }).then(r => r.json?.data || []).catch(() => []),
+    all('SELECT dep_id, nome FROM chatmix_departamentos WHERE empresa_id=$1', [empresaId]),
+  ]);
+  const depNome = {}; deps.forEach(d => { depNome[d.dep_id] = d.nome; });
+  const nd = id => depNome[id] || (id ? 'Depto ' + id : '—');
+  const nomeCli = a => a.client?.name || a.client?.user || 'Cliente';
+
+  // Fila parada: aguardando há mais de FILA_MIN
+  for (const a of wq) {
+    const seg = segDesdeBRT(a.created_at);
+    if (seg != null && seg >= FILA_MIN * 60 && !(await jaAlertou(empresaId, a.id, 'fila'))) {
+      await notificar(empresaId, 'chatmix', {
+        title: '⏳ Cliente aguardando na fila',
+        description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** na fila.`,
+        color: 0xf59e0b,
+        fields: [{ name: 'Departamento', value: nd(a.departament_id), inline: true }, { name: 'Protocolo', value: String(a.protocol || '—'), inline: true }],
+      });
+      await marcarAlerta(empresaId, a.id, 'fila');
+    }
+  }
+  // Cliente esperando resposta da atendente (última interação foi do cliente) há mais de RESP_MIN
+  for (const a of ip) {
+    if (a.last_interaction !== 'client') continue;
+    const seg = segDesdeBRT(a.last_activity || a.created_at);
+    if (seg != null && seg >= RESP_MIN * 60 && !(await jaAlertou(empresaId, a.id, 'sem_resposta'))) {
+      const at = a.user ? [a.user.first_name, a.user.last_name].filter(Boolean).join(' ').trim() : 'Sem atendente';
+      await notificar(empresaId, 'chatmix', {
+        title: '🔔 Cliente esperando resposta',
+        description: `**${nomeCli(a)}** está há **${fmtMin(seg)}** sem resposta.`,
+        color: 0xef4444,
+        fields: [{ name: 'Atendente', value: at, inline: true }, { name: 'Departamento', value: nd(a.departament_id), inline: true }],
+      });
+      await marcarAlerta(empresaId, a.id, 'sem_resposta');
+    }
+  }
+}
+
+let timerAlerta = null;
+async function tickAlertas() {
+  try {
+    const emps = await all(`SELECT c.empresa_id, c.token FROM integracao_chatmix c WHERE c.token IS NOT NULL AND c.token <> ''`);
+    for (const e of emps) await verificarAlertas(e.empresa_id, e.token).catch(err => console.error('[chatmixAlertas]', err.message));
+  } catch (e) { console.error('[chatmixAlertas]', e.message); }
+}
+
 let timer = null;
 async function iniciar() {
   try {
     await garantirTabelas();
     if (timer) clearInterval(timer);
     timer = setInterval(tick, INTERVALO_MS);
-    console.log(`[chatmixSync] iniciado (1 página a cada ${INTERVALO_MS / 1000}s)`);
+    if (timerAlerta) clearInterval(timerAlerta);
+    timerAlerta = setInterval(tickAlertas, 60 * 1000); // alertas ao vivo a cada 60s (endpoints 25/min)
+    console.log(`[chatmixSync] iniciado (1 página a cada ${INTERVALO_MS / 1000}s + alertas 60s)`);
     setTimeout(tick, 5000); // primeiro passo logo após subir
+    setTimeout(tickAlertas, 15000);
   } catch (e) { console.error('[chatmixSync] falha ao iniciar:', e.message); }
 }
 
