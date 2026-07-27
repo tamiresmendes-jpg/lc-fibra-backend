@@ -343,8 +343,9 @@ async function verificarAlertas(empresaId, token) {
   const nomeAt = a => a.user ? [a.user.first_name, a.user.last_name].filter(Boolean).join(' ').trim() : 'Sem atendente';
 
   // 1) Fila > 30 segundos → cliente, protocolo, departamento
+  // Usa last_activity (entrada na fila / último evento), não created_at (1ª mensagem).
   for (const a of wq) {
-    const seg = segDesdeBRT(a.created_at);
+    const seg = segDesdeBRT(a.last_activity || a.created_at);
     if (seg != null && seg >= FILA_SEG && !(await jaAlertou(empresaId, a.id, 'fila'))) {
       await notificar(empresaId, 'chatmix', {
         title: '⏳ Cliente aguardando na fila',
