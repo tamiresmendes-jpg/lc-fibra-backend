@@ -1204,6 +1204,7 @@ async function initSchema() {
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS turnos_almoco TEXT`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS turnos_sabado TEXT`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS lanches TEXT`);
+  await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS colunas_atend TEXT`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS publicada INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS observacao TEXT`);
   await pool.query(`

@@ -220,6 +220,10 @@ router.patch('/:id/turnos', async (req, res) => {
       sets.push('lanches=?');
       params.push(req.body.lanches === null ? null : JSON.stringify(req.body.lanches));
     }
+    if ('colunas_atend' in req.body) {
+      sets.push('colunas_atend=?');
+      params.push(req.body.colunas_atend === null ? null : JSON.stringify(req.body.colunas_atend));
+    }
     if (sets.length) {
       params.push(req.params.id);
       await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=?`, params);
