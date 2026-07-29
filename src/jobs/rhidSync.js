@@ -32,7 +32,29 @@ async function garantir() {
     PRIMARY KEY (empresa_id, id_person, data)
   )`);
   await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT true`);
+  await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS extra50_min INTEGER DEFAULT 0`);
+  await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS extra100_min INTEGER DEFAULT 0`);
+  await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS sobreaviso_min INTEGER DEFAULT 0`);
   pronto = true;
+}
+
+// Split de horas extras por percentual (50% x 100%) usando os campos do RHID.
+// percentuaisExtra = [50,100,...]; horaExtraDeCadaPercentual = minutos de cada um.
+function splitExtras(dia) {
+  let e50 = 0, e100 = 0;
+  const perc = Array.isArray(dia.percentuaisExtra) ? dia.percentuaisExtra : [];
+  const horas = Array.isArray(dia.horaExtraDeCadaPercentual) ? dia.horaExtraDeCadaPercentual : [];
+  if (perc.length && horas.length) {
+    perc.forEach((p, i) => {
+      const min = Math.round(horas[i] || 0);
+      if (Number(p) >= 100) e100 += min; else e50 += min;
+    });
+  } else {
+    // fallback: usa a regra domingo/feriado/folga
+    const tot = Math.round(dia.horasExtrasCalculadas || 0);
+    if (ehCem(dia)) e100 += tot; else e50 += tot;
+  }
+  return { e50, e100 };
 }
 
 function baseDe(cfg) { return (cfg.base_url || BASE_PADRAO).replace(/\/+$/, ''); }
@@ -118,13 +140,15 @@ async function sincronizarEmpresa(empresa_id, cfg) {
         const dias = parseApuracao(r.texto, r.json);
         for (const dia of dias) {
           const data = ymd(new Date(dia.date));
+          const { e50, e100 } = splitExtras(dia);
           await run(
             `INSERT INTO rhid_ponto_dia
-              (empresa_id,id_person,nome,id_department,departamento,data,trabalhado_min,extra_min,extra_cem,noturno_min,falta_min,falta_dia,atraso_min,saldo_min,abono_min,atestado,ativo,atualizado_em)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
+              (empresa_id,id_person,nome,id_department,departamento,data,trabalhado_min,extra_min,extra_cem,extra50_min,extra100_min,sobreaviso_min,noturno_min,falta_min,falta_dia,atraso_min,saldo_min,abono_min,atestado,ativo,atualizado_em)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
              ON CONFLICT (empresa_id,id_person,data) DO UPDATE SET
                nome=EXCLUDED.nome, id_department=EXCLUDED.id_department, departamento=EXCLUDED.departamento,
                trabalhado_min=EXCLUDED.trabalhado_min, extra_min=EXCLUDED.extra_min, extra_cem=EXCLUDED.extra_cem,
+               extra50_min=EXCLUDED.extra50_min, extra100_min=EXCLUDED.extra100_min, sobreaviso_min=EXCLUDED.sobreaviso_min,
                noturno_min=EXCLUDED.noturno_min, falta_min=EXCLUDED.falta_min, falta_dia=EXCLUDED.falta_dia,
                atraso_min=EXCLUDED.atraso_min, saldo_min=EXCLUDED.saldo_min, abono_min=EXCLUDED.abono_min,
                atestado=EXCLUDED.atestado, ativo=EXCLUDED.ativo, atualizado_em=NOW()`,
@@ -133,6 +157,8 @@ async function sincronizarEmpresa(empresa_id, cfg) {
               Math.round(dia.totalHorasTrabalhadas || 0),
               Math.round(dia.horasExtrasCalculadas || 0),
               ehCem(dia),
+              e50, e100,
+              Math.round(dia.sobreavisoTrabalhado || 0),
               Math.round(dia.horasTotalNoturno || 0),
               Math.round((dia.horasApenasFalta || 0) + (dia.horasFaltaAtraso || 0)),
               !!dia.faltaDiaInteiro,

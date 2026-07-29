@@ -330,11 +330,13 @@ router.get('/indicadores', async (req, res) => {
       const k = r.id_person;
       const p = pessoas[k] || (pessoas[k] = {
         id_person: k, nome: r.nome, departamento: r.departamento || 'Sem departamento',
-        trabalhado: 0, extra50: 0, extra100: 0, noturno: 0, falta_min: 0, falta_dias: 0, atraso: 0,
+        trabalhado: 0, extra50: 0, extra100: 0, sobreaviso: 0, noturno: 0, falta_min: 0, falta_dias: 0, atraso: 0,
         atestados: 0, _saldoData: null, saldo: 0,
       });
       p.trabalhado += r.trabalhado_min || 0;
-      if (r.extra_cem) p.extra100 += r.extra_min || 0; else p.extra50 += r.extra_min || 0;
+      p.extra50 += r.extra50_min || 0;
+      p.extra100 += r.extra100_min || 0;
+      p.sobreaviso += r.sobreaviso_min || 0;
       p.noturno += r.noturno_min || 0;
       p.falta_min += r.falta_min || 0;
       if (r.falta_dia) p.falta_dias += 1;
@@ -355,6 +357,7 @@ router.get('/indicadores', async (req, res) => {
       saldo_min: soma('saldo'), saldo_fmt: fmtMin(soma('saldo')),
       extra50_min: soma('extra50'), extra50_fmt: fmtMin(soma('extra50')),
       extra100_min: soma('extra100'), extra100_fmt: fmtMin(soma('extra100')),
+      sobreaviso_min: soma('sobreaviso'), sobreaviso_fmt: fmtMin(soma('sobreaviso')),
       noturno_min: soma('noturno'), noturno_fmt: fmtMin(soma('noturno')),
       falta_min: soma('falta_min'), falta_fmt: fmtMin(soma('falta_min')),
       falta_dias: soma('falta_dias'),
@@ -364,16 +367,17 @@ router.get('/indicadores', async (req, res) => {
     // Por departamento
     const dep = {};
     for (const p of lista) {
-      const d = dep[p.departamento] || (dep[p.departamento] = { departamento: p.departamento, funcionarios: 0, trabalhado: 0, extra: 0, falta_dias: 0, falta_min: 0, saldo: 0 });
-      d.funcionarios++; d.trabalhado += p.trabalhado; d.extra += p.extra50 + p.extra100; d.falta_dias += p.falta_dias; d.falta_min += p.falta_min; d.saldo += p.saldo;
+      const d = dep[p.departamento] || (dep[p.departamento] = { departamento: p.departamento, funcionarios: 0, trabalhado: 0, extra50: 0, extra100: 0, sobreaviso: 0, falta_dias: 0, falta_min: 0, saldo: 0 });
+      d.funcionarios++; d.trabalhado += p.trabalhado; d.extra50 += p.extra50; d.extra100 += p.extra100; d.sobreaviso += p.sobreaviso; d.falta_dias += p.falta_dias; d.falta_min += p.falta_min; d.saldo += p.saldo;
     }
     const por_departamento = Object.values(dep).map(d => ({
-      ...d, trabalhado_fmt: fmtMin(d.trabalhado), extra_fmt: fmtMin(d.extra), falta_fmt: fmtMin(d.falta_min), saldo_fmt: fmtMin(d.saldo),
+      ...d, trabalhado_fmt: fmtMin(d.trabalhado), extra50_fmt: fmtMin(d.extra50), extra100_fmt: fmtMin(d.extra100),
+      sobreaviso_fmt: fmtMin(d.sobreaviso), falta_fmt: fmtMin(d.falta_min), saldo_fmt: fmtMin(d.saldo),
     })).sort((a, b) => b.trabalhado - a.trabalhado);
 
     const fmtLista = lista.map(p => ({
       ...p, trabalhado_fmt: fmtMin(p.trabalhado), extra50_fmt: fmtMin(p.extra50), extra100_fmt: fmtMin(p.extra100),
-      noturno_fmt: fmtMin(p.noturno), falta_fmt: fmtMin(p.falta_min), atraso_fmt: fmtMin(p.atraso), saldo_fmt: fmtMin(p.saldo),
+      sobreaviso_fmt: fmtMin(p.sobreaviso), noturno_fmt: fmtMin(p.noturno), falta_fmt: fmtMin(p.falta_min), atraso_fmt: fmtMin(p.atraso), saldo_fmt: fmtMin(p.saldo),
     }));
 
     res.json({
