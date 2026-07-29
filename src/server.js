@@ -122,6 +122,7 @@ conectar()
     require('./jobs/chatAceite').iniciarJob();
     require('./utils/discordScheduler').iniciar();
     require('./jobs/chatmixSync').iniciar();
+    require('./jobs/rhidSync').iniciar();
   })
   .catch((err) => {
     console.error('Falha ao conectar ao banco:', err.message);

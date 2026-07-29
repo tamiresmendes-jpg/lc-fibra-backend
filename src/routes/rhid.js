@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { run, get } = require('../config/database');
+const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 
 router.use(autenticar);
@@ -278,6 +278,113 @@ router.get('/batidas', async (req, res) => {
       marcacoes.push({ nsr: l.slice(0, 9), dataHora, pis, raw: l });
     }
     res.json({ idEquipamento, total_linhas: linhas.length, total_marcacoes: marcacoes.length, marcacoes: marcacoes.slice(0, 2000) });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ---------- LISTAS (para filtros do dashboard) ----------
+router.get('/listas', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const deps = await all(`SELECT DISTINCT departamento FROM rhid_ponto_dia WHERE empresa_id=$1 AND departamento IS NOT NULL ORDER BY departamento`, [emp]);
+    const pes = await all(`SELECT DISTINCT id_person, nome FROM rhid_ponto_dia WHERE empresa_id=$1 ORDER BY nome`, [emp]);
+    res.json({
+      departamentos: deps.map(d => d.departamento),
+      pessoas: pes.map(p => ({ id: p.id_person, nome: p.nome })),
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+function fmtMin(min) {
+  const neg = min < 0; min = Math.abs(Math.round(min || 0));
+  const h = Math.floor(min / 60), m = min % 60;
+  return (neg ? '-' : '') + h + ':' + String(m).padStart(2, '0');
+}
+
+// ---------- INDICADORES (dashboard, lê do banco sincronizado) ----------
+router.get('/indicadores', async (req, res) => {
+  try {
+    await garantir();
+    const emp = req.usuario.empresa_id;
+    const hoje = new Date();
+    const iniMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const dataIni = req.query.dataIni || `${iniMes.getFullYear()}-${String(iniMes.getMonth()+1).padStart(2,'0')}-01`;
+    const dataFinal = req.query.dataFinal || hoje.toISOString().slice(0, 10);
+
+    const cond = ['empresa_id=$1', 'data >= $2', 'data <= $3'];
+    const params = [emp, dataIni, dataFinal];
+    if (req.query.departamento) { params.push(req.query.departamento); cond.push(`departamento = $${params.length}`); }
+    if (req.query.idPerson) { params.push(parseInt(req.query.idPerson, 10)); cond.push(`id_person = $${params.length}`); }
+
+    const rows = await all(`SELECT * FROM rhid_ponto_dia WHERE ${cond.join(' AND ')}`, params);
+
+    if (rows.length === 0) {
+      const algum = await get('SELECT COUNT(*) c, MAX(atualizado_em) u FROM rhid_ponto_dia WHERE empresa_id=$1', [emp]);
+      return res.json({ vazio: true, sincronizando: !algum || Number(algum.c) === 0, atualizado_em: algum?.u || null, periodo: { dataIni, dataFinal }, cards: {}, por_departamento: [], por_pessoa: [], ranking_faltas_dias: [], ranking_faltas_horas: [] });
+    }
+
+    // Agrega por pessoa
+    const pessoas = {};
+    let ultimaData = null;
+    for (const r of rows) {
+      const k = r.id_person;
+      const p = pessoas[k] || (pessoas[k] = {
+        id_person: k, nome: r.nome, departamento: r.departamento || 'Sem departamento',
+        trabalhado: 0, extra50: 0, extra100: 0, noturno: 0, falta_min: 0, falta_dias: 0, atraso: 0,
+        atestados: 0, _saldoData: null, saldo: 0,
+      });
+      p.trabalhado += r.trabalhado_min || 0;
+      if (r.extra_cem) p.extra100 += r.extra_min || 0; else p.extra50 += r.extra_min || 0;
+      p.noturno += r.noturno_min || 0;
+      p.falta_min += r.falta_min || 0;
+      if (r.falta_dia) p.falta_dias += 1;
+      p.atraso += r.atraso_min || 0;
+      if (r.atestado) p.atestados += 1;
+      // saldo do banco = valor do dia mais recente (é saldo acumulado, não somar)
+      const dstr = (r.data instanceof Date) ? r.data.toISOString().slice(0,10) : String(r.data).slice(0,10);
+      if (!p._saldoData || dstr > p._saldoData) { p._saldoData = dstr; p.saldo = r.saldo_min || 0; }
+      if (!ultimaData || dstr > ultimaData) ultimaData = dstr;
+    }
+    const lista = Object.values(pessoas);
+
+    // Cards gerais
+    const soma = (f) => lista.reduce((a, p) => a + p[f], 0);
+    const cards = {
+      funcionarios: lista.length,
+      total_trabalhado_min: soma('trabalhado'), total_trabalhado_fmt: fmtMin(soma('trabalhado')),
+      saldo_min: soma('saldo'), saldo_fmt: fmtMin(soma('saldo')),
+      extra50_min: soma('extra50'), extra50_fmt: fmtMin(soma('extra50')),
+      extra100_min: soma('extra100'), extra100_fmt: fmtMin(soma('extra100')),
+      noturno_min: soma('noturno'), noturno_fmt: fmtMin(soma('noturno')),
+      falta_min: soma('falta_min'), falta_fmt: fmtMin(soma('falta_min')),
+      falta_dias: soma('falta_dias'),
+      atestados: soma('atestados'),
+    };
+
+    // Por departamento
+    const dep = {};
+    for (const p of lista) {
+      const d = dep[p.departamento] || (dep[p.departamento] = { departamento: p.departamento, funcionarios: 0, trabalhado: 0, extra: 0, falta_dias: 0, falta_min: 0, saldo: 0 });
+      d.funcionarios++; d.trabalhado += p.trabalhado; d.extra += p.extra50 + p.extra100; d.falta_dias += p.falta_dias; d.falta_min += p.falta_min; d.saldo += p.saldo;
+    }
+    const por_departamento = Object.values(dep).map(d => ({
+      ...d, trabalhado_fmt: fmtMin(d.trabalhado), extra_fmt: fmtMin(d.extra), falta_fmt: fmtMin(d.falta_min), saldo_fmt: fmtMin(d.saldo),
+    })).sort((a, b) => b.trabalhado - a.trabalhado);
+
+    const fmtLista = lista.map(p => ({
+      ...p, trabalhado_fmt: fmtMin(p.trabalhado), extra50_fmt: fmtMin(p.extra50), extra100_fmt: fmtMin(p.extra100),
+      noturno_fmt: fmtMin(p.noturno), falta_fmt: fmtMin(p.falta_min), atraso_fmt: fmtMin(p.atraso), saldo_fmt: fmtMin(p.saldo),
+    }));
+
+    res.json({
+      periodo: { dataIni, dataFinal },
+      atualizado_em: ultimaData,
+      cards,
+      por_departamento,
+      por_pessoa: fmtLista.sort((a, b) => b.trabalhado - a.trabalhado),
+      ranking_faltas_dias: [...fmtLista].filter(p => p.falta_dias > 0).sort((a, b) => b.falta_dias - a.falta_dias).slice(0, 15),
+      ranking_faltas_horas: [...fmtLista].filter(p => p.falta_min > 0).sort((a, b) => b.falta_min - a.falta_min).slice(0, 15),
+      ranking_atrasos: [...fmtLista].filter(p => p.atraso > 0).sort((a, b) => b.atraso - a.atraso).slice(0, 15),
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
