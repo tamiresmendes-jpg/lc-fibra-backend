@@ -105,12 +105,109 @@ async function enviarAniversarioEmpresaDoDia() {
   }
 }
 
+// ── DAY OFF de aniversário (regra do RH portada do frontend) ──────────────
+const FERIADOS_NACIONAIS = ['01-01', '04-21', '05-01', '09-07', '10-12', '11-02', '11-15', '11-20', '12-25'];
+const mmdd = d => `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+const ymdD = d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+function ehFeriado(d, fer) { return fer.recorrentes.has(mmdd(d)) || fer.fixas.has(ymdD(d)); }
+function recuaDia(d, fer) { let t = 0; while ((d.getDay() === 0 || ehFeriado(d, fer)) && t < 60) { d.setDate(d.getDate() - 1); t++; } return d; }
+function avancaDia(d, fer) { let t = 0; while ((d.getDay() === 0 || ehFeriado(d, fer)) && t < 60) { d.setDate(d.getDate() + 1); t++; } return d; }
+function calcDayOffBk(nascStr, ano, fer, feriasUsuario) {
+  const nasc = new Date(String(nascStr).slice(0, 10) + 'T12:00');
+  const aniv = new Date(ano, nasc.getMonth(), nasc.getDate(), 12, 0, 0);
+  if (feriasUsuario && feriasUsuario.length) {
+    const anivYmd = ymdD(aniv);
+    const periodo = feriasUsuario.find(p => p.ini <= anivYmd && anivYmd <= p.fim);
+    if (periodo) { const ret = new Date(periodo.fim + 'T12:00'); ret.setDate(ret.getDate() + 1); return avancaDia(ret, fer); }
+  }
+  return recuaDia(aniv, fer);
+}
+
+async function enviarDayOffDoDia() {
+  try {
+    await garantirTabela();
+    await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_dayoff_env TEXT`);
+    const hojeStr = hojeSP();
+    if (horaSP() < 8) return;
+
+    const empresas = await all(
+      `SELECT * FROM integracao_discord
+       WHERE ativo = 1 AND ev_aniversario = 1 AND webhook_url IS NOT NULL
+       AND (ultimo_dayoff_env IS DISTINCT FROM $1)`,
+      [hojeStr]
+    );
+
+    for (const cfg of empresas) {
+      await run('UPDATE integracao_discord SET ultimo_dayoff_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
+
+      // Feriados da empresa (+ nacionais fixos)
+      const fer = { recorrentes: new Set(FERIADOS_NACIONAIS), fixas: new Set() };
+      try {
+        const fs = await all('SELECT data, recorrente, validacao, ativo FROM feriados WHERE empresa_id = $1', [cfg.empresa_id]);
+        for (const f of fs) {
+          if (f.validacao === 'rejeitado' || f.ativo === 0 || f.ativo === false) continue;
+          const data = String(f.data || '').slice(0, 10); if (data.length < 10) continue;
+          if (f.recorrente) fer.recorrentes.add(data.slice(5)); else fer.fixas.add(data);
+        }
+      } catch {}
+
+      // Férias válidas
+      const feriasMap = {};
+      try {
+        const fv = await all("SELECT usuario_id, status, data_inicio, data_fim FROM ferias WHERE empresa_id = $1", [cfg.empresa_id]);
+        for (const f of fv) {
+          if (!['aprovado', 'em_andamento', 'concluido'].includes(f.status)) continue;
+          const ini = String(f.data_inicio || '').slice(0, 10), fim = String(f.data_fim || '').slice(0, 10);
+          if (ini.length < 10 || fim.length < 10) continue;
+          (feriasMap[f.usuario_id] = feriasMap[f.usuario_id] || []).push({ ini, fim });
+        }
+      } catch {}
+
+      const colabs = await all(
+        `SELECT id, nome, data_nascimento FROM usuarios
+         WHERE empresa_id = $1 AND ativo = 1 AND data_nascimento IS NOT NULL
+         AND (COALESCE(tipo_usuario,'colaborador')='colaborador' OR COALESCE(mostrar_aniversario,0)=1)`,
+        [cfg.empresa_id]
+      );
+
+      const ano = new Date(hojeStr + 'T12:00').getFullYear();
+      const doDia = [];
+      for (const c of colabs) {
+        const doff = calcDayOffBk(c.data_nascimento, ano, fer, feriasMap[c.id]);
+        if (ymdD(doff) !== hojeStr) continue;
+        // Se o aniversário é HOJE também, o disparo de aniversário já cobre → não duplica
+        const nasc = new Date(String(c.data_nascimento).slice(0, 10) + 'T12:00');
+        const anivHoje = mmdd(nasc) === mmdd(new Date(hojeStr + 'T12:00'));
+        if (anivHoje) continue;
+        doDia.push(c.nome);
+      }
+      if (!doDia.length) continue;
+
+      const url = await resolverWebhook(cfg.empresa_id, cfg, 'aniversario');
+      if (!url) continue;
+      const nomes = doDia.map(n => `☀️ **${n}**`).join('\n');
+      const ok = await postWebhook(url, {
+        title: '☀️ Day off de aniversário hoje!',
+        description: `Aproveite a folga! Hoje é o day off de:\n\n${nomes}`,
+        color: COR.laranja,
+        footer: { text: 'Kronos — Day off de aniversário' },
+        timestamp: new Date().toISOString(),
+      });
+      registrarEnvio(cfg.empresa_id, 'aniversario', `Day off de aniversário (${doDia.length})`, ok, ok ? null : 'Falha no envio');
+    }
+  } catch (e) {
+    console.error('[DiscordScheduler/dayoff]', e.message);
+  }
+}
+
 // Inicia verificação periódica (a cada 30 min). Em processo (PM2 mantém vivo).
 function iniciar() {
   setTimeout(enviarAniversariantesDoDia, 20000); // 20s após subir
   setTimeout(enviarAniversarioEmpresaDoDia, 25000);
+  setTimeout(enviarDayOffDoDia, 30000);
   setInterval(enviarAniversariantesDoDia, 30 * 60 * 1000);
   setInterval(enviarAniversarioEmpresaDoDia, 30 * 60 * 1000);
+  setInterval(enviarDayOffDoDia, 30 * 60 * 1000);
 }
 
-module.exports = { iniciar, enviarAniversariantesDoDia, enviarAniversarioEmpresaDoDia };
+module.exports = { iniciar, enviarAniversariantesDoDia, enviarAniversarioEmpresaDoDia, enviarDayOffDoDia };
