@@ -14,7 +14,6 @@ async function enviarAniversariantesDoDia() {
   try {
     await garantirTabela();
     const hoje = hojeSP();
-    if (horaSP() < 8) return; // só a partir das 8h
 
     const empresas = await all(
       `SELECT * FROM integracao_discord
@@ -24,6 +23,7 @@ async function enviarAniversariantesDoDia() {
     );
 
     for (const cfg of empresas) {
+      if (horaSP() < (cfg.hora_disparo ?? 8)) continue; // respeita a hora de disparo configurada
       // Marca já como enviado (evita duplicar se demorar)
       await run('UPDATE integracao_discord SET ultimo_aniv_env = $1 WHERE empresa_id = $2', [hoje, cfg.empresa_id]);
 
@@ -63,16 +63,16 @@ async function enviarAniversarioEmpresaDoDia() {
     await garantirTabela();
     await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_aniv_emp_env TEXT`);
     const hoje = hojeSP();
-    if (horaSP() < 8) return; // só a partir das 8h
 
     const empresas = await all(
       `SELECT * FROM integracao_discord
-       WHERE ativo = 1 AND ev_aniversario = 1 AND webhook_url IS NOT NULL
+       WHERE ativo = 1 AND ev_aniversario_empresa = 1 AND webhook_url IS NOT NULL
        AND (ultimo_aniv_emp_env IS DISTINCT FROM $1)`,
       [hoje]
     );
 
     for (const cfg of empresas) {
+      if (horaSP() < (cfg.hora_disparo ?? 8)) continue;
       await run('UPDATE integracao_discord SET ultimo_aniv_emp_env = $1 WHERE empresa_id = $2', [hoje, cfg.empresa_id]);
 
       const lista = await all(
@@ -88,7 +88,7 @@ async function enviarAniversarioEmpresaDoDia() {
       );
       if (!lista.length) continue;
 
-      const url = await resolverWebhook(cfg.empresa_id, cfg, 'aniversario');
+      const url = await resolverWebhook(cfg.empresa_id, cfg, 'aniversario_empresa');
       if (!url) continue;
       const nomes = lista.map(a => `🏢 **${a.nome}** — ${a.anos} ano${a.anos !== 1 ? 's' : ''} de casa`).join('\n');
       const ok = await postWebhook(url, {
@@ -128,16 +128,16 @@ async function enviarDayOffDoDia() {
     await garantirTabela();
     await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_dayoff_env TEXT`);
     const hojeStr = hojeSP();
-    if (horaSP() < 8) return;
 
     const empresas = await all(
       `SELECT * FROM integracao_discord
-       WHERE ativo = 1 AND ev_aniversario = 1 AND webhook_url IS NOT NULL
+       WHERE ativo = 1 AND ev_dayoff = 1 AND webhook_url IS NOT NULL
        AND (ultimo_dayoff_env IS DISTINCT FROM $1)`,
       [hojeStr]
     );
 
     for (const cfg of empresas) {
+      if (horaSP() < (cfg.hora_disparo ?? 8)) continue;
       await run('UPDATE integracao_discord SET ultimo_dayoff_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
 
       // Feriados da empresa (+ nacionais fixos)
@@ -183,7 +183,7 @@ async function enviarDayOffDoDia() {
       }
       if (!doDia.length) continue;
 
-      const url = await resolverWebhook(cfg.empresa_id, cfg, 'aniversario');
+      const url = await resolverWebhook(cfg.empresa_id, cfg, 'dayoff');
       if (!url) continue;
       const nomes = doDia.map(n => `☀️ **${n}**`).join('\n');
       const ok = await postWebhook(url, {
