@@ -2,7 +2,22 @@ const express = require('express');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
-const { getConfig, getCanais, postWebhook, notificar, registrarEnvio, COR } = require('../utils/discord');
+const { getConfig, getCanais, postWebhook, notificar, registrarEnvio, resolverWebhook, COR } = require('../utils/discord');
+
+// Mensagens de exemplo por evento (para o botão "Testar")
+const EXEMPLOS = {
+  ciencia:   { title: '📢 Novo aviso publicado', description: '**[EXEMPLO]** "Atualização do procedimento de atendimento" foi publicado na Central de Ciência.' },
+  pop:       { title: '📄 Novo POP', description: '**[EXEMPLO]** POP "Abertura de chamado" v1.0 publicado.' },
+  processo:  { title: '🔧 Novo processo', description: '**[EXEMPLO]** Processo "Onboarding de cliente" criado.' },
+  aniversario: { title: '🎉 Aniversariantes', description: '**[EXEMPLO]** 🎂 **Maria Silva**\n🎂 **João Souza**\n\nQue comemorem com alegria! 🥳' },
+  aniversario_empresa: { title: '🎊 Aniversário de empresa', description: '**[EXEMPLO]** 🏢 **Ana Costa** — 3 anos de casa 💜' },
+  dayoff:    { title: '☀️ Day off de aniversário', description: '**[EXEMPLO]** ☀️ **Carlos Lima** está de day off hoje. Aproveite a folga!' },
+  comunicado:{ title: '📣 Comunicado', description: '**[EXEMPLO]** Reunião geral amanhã às 9h.' },
+  coffee:    { title: '☕ Coffee Break', description: '**[EXEMPLO]** Coffee Break — Matriz · Belém · 24/08 às 08h.' },
+  mural:     { title: '📌 Mural de Avisos', description: '**[EXEMPLO]** Novo aviso no mural: "Campanha de vacinação".' },
+  cultura:   { title: '💜 Cultura', description: '**[EXEMPLO]** Novo reconhecimento publicado para a equipe.' },
+  chatmix:   { title: '⚠️ Alerta de Atendimento', description: '**[EXEMPLO]** Cliente aguardando na fila há mais de 5 min.' },
+};
 
 const router = express.Router();
 router.use(autenticar);
@@ -146,6 +161,29 @@ router.post('/testar', async (req, res) => {
     });
     registrarEnvio(req.usuario.empresa_id, 'teste', 'Mensagem de teste', ok, ok ? null : 'Falha no envio', nomeCanal);
     if (!ok) return res.status(502).json({ erro: 'Não foi possível enviar. Verifique a URL do webhook.' });
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// POST — testa um evento específico (envia um exemplo no canal daquele evento)
+router.post('/testar-evento', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const { evento } = req.body;
+    const ex = EXEMPLOS[evento];
+    if (!ex) return res.status(400).json({ erro: 'Evento inválido' });
+    const cfg = await getConfig(req.usuario.empresa_id);
+    const url = await resolverWebhook(req.usuario.empresa_id, cfg, evento);
+    if (!url) return res.status(400).json({ erro: 'Cadastre um canal (webhook) primeiro.' });
+    const ok = await postWebhook(url, {
+      title: ex.title,
+      description: ex.description + '\n\n_Mensagem de teste enviada do Kronos._',
+      color: COR.roxo,
+      footer: { text: 'Kronos — Teste de notificação' },
+      timestamp: new Date().toISOString(),
+    });
+    registrarEnvio(req.usuario.empresa_id, evento, `Teste do evento ${evento}`, ok, ok ? null : 'Falha no envio');
+    if (!ok) return res.status(502).json({ erro: 'Não foi possível enviar. Verifique o canal/webhook.' });
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
