@@ -300,9 +300,14 @@ async function tick() {
       const pendHoje = await get(
         `SELECT COUNT(*)::int n FROM chatmix_atendimentos
          WHERE empresa_id=$1 AND msgs_sync_em IS NULL AND closed_at::date = $2`, [empresa_id, hojeD]);
+      // Mês atual tem PRIORIDADE: enquanto houver conversa do mês sem mensagem, processa a cada tick.
+      const inicioMes = hojeD.slice(0, 8) + '01';
+      const pendMes = await get(
+        `SELECT COUNT(*)::int n FROM chatmix_atendimentos
+         WHERE empresa_id=$1 AND msgs_sync_em IS NULL AND closed_at::date >= $2`, [empresa_id, inicioMes]);
       const desde = cfg.mensagens_desde;
-      // Dias anteriores (mensagens) em segundo plano: entram em parte dos ticks.
-      const fazerMsg = (pendHoje?.n > 0) || (contadorTick % 4 === 0);
+      // Prioriza hoje e o mês atual; dias mais antigos entram em parte dos ticks.
+      const fazerMsg = (pendHoje?.n > 0) || (pendMes?.n > 0) || (contadorTick % 4 === 0);
       if (fazerMsg) {
         const m = await passoMensagem(empresa_id, token, desde);
         if (m.fez) {
