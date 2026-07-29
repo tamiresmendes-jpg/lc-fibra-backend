@@ -406,6 +406,39 @@ function periodo(req) {
   const hoje = new Date().toISOString().slice(0, 10);
   return { di: req.query.data_inicial || hoje, df: req.query.data_final || hoje };
 }
+// Semana da Meta: começa no DOMINGO e termina no SÁBADO (padrão da empresa)
+function semanaAtual() {
+  const h = new Date();
+  const dow = h.getDay();                 // 0=domingo
+  const dom = new Date(h); dom.setDate(h.getDate() - dow);
+  const sab = new Date(dom); sab.setDate(dom.getDate() + 6);
+  const iso = d => d.toISOString().slice(0, 10);
+  return { di: iso(dom), df: iso(sab) };
+}
+// Período da Meta: usa o que veio na query; senão, a semana atual (domingo→sábado)
+function periodoMeta(req) {
+  if (req.query.data_inicial || req.query.data_final) return periodo(req);
+  return semanaAtual();
+}
+// Departamento derivado do NOME do atendente (ex.: "Maiza Suporte" → Suporte)
+const DEPT_SQL = `CASE
+  WHEN atendente_nome ILIKE '%financeiro%' THEN 'Financeiro'
+  WHEN atendente_nome ILIKE '%suporte%' THEN 'Suporte'
+  WHEN atendente_nome ILIKE '%recep%' OR atendente_nome ILIKE '%cancel%' THEN 'Recepção'
+  WHEN atendente_nome ILIKE '%noc%' THEN 'NOC'
+  WHEN atendente_nome ILIKE '%comercial%' THEN 'Comercial'
+  WHEN atendente_nome ILIKE '%remo%' OR atendente_nome ILIKE '%cobran%' THEN 'Cobrança/Remoção'
+  ELSE 'Outros' END`;
+function deptDeNome(nome) {
+  const n = (nome || '').toLowerCase();
+  if (n.includes('financeiro')) return 'Financeiro';
+  if (n.includes('suporte')) return 'Suporte';
+  if (n.includes('recep') || n.includes('cancel')) return 'Recepção';
+  if (n.includes('noc')) return 'NOC';
+  if (n.includes('comercial')) return 'Comercial';
+  if (n.includes('remo') || n.includes('cobran')) return 'Cobrança/Remoção';
+  return 'Outros';
+}
 function diasEntre(di, df) {
   const a = Date.parse(di), b = Date.parse(df);
   return Math.max(1, Math.round((b - a) / 86400000) + 1);
@@ -421,7 +454,7 @@ function filtros(req, params) {
   let sql = '';
   const deps = listaParam(req.query.departamento);
   const ats = listaParam(req.query.atendente);
-  if (deps.length) { params.push(deps); sql += ` AND COALESCE(departamento,'Sem departamento') = ANY($${params.length})`; }
+  if (deps.length) { params.push(deps); sql += ` AND (${DEPT_SQL}) = ANY($${params.length})`; }
   if (ats.length) { params.push(ats); sql += ` AND COALESCE(atendente_nome,'Automação/Bot') = ANY($${params.length})`; }
   return sql;
 }
@@ -430,8 +463,8 @@ function filtros(req, params) {
 router.get('/listas', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
-    const deps = await all(`SELECT DISTINCT departamento AS nome FROM chatmix_atendimentos
-      WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND departamento IS NOT NULL ORDER BY 1`, [emp, di, df]);
+    const deps = await all(`SELECT DISTINCT (${DEPT_SQL}) AS nome FROM chatmix_atendimentos
+      WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL ORDER BY 1`, [emp, di, df]);
     const ats = await all(`SELECT DISTINCT atendente_nome AS nome FROM chatmix_atendimentos
       WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL ORDER BY 1`, [emp, di, df]);
     res.json({ departamentos: deps.map(d => d.nome), atendentes: ats.map(a => a.nome) });
@@ -461,11 +494,11 @@ router.get('/por-departamento', async (req, res) => {
     const dias = diasEntre(di, df);
     const params = [emp, di, df];
     const rows = await all(
-      `SELECT COALESCE(departamento, 'Sem departamento') AS nome,
+      `SELECT (${DEPT_SQL}) AS nome,
         COUNT(*)::int AS total,
         AVG(EXTRACT(EPOCH FROM (closed_at - created_at))) FILTER (WHERE closed_at IS NOT NULL AND created_at IS NOT NULL) AS tma_seg
        FROM chatmix_atendimentos
-       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3${filtros(req, params)}
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL${filtros(req, params)}
        GROUP BY 1 ORDER BY total DESC`, params);
     const totalGeral = rows.reduce((s, r) => s + r.total, 0) || 1;
     res.json({
@@ -526,7 +559,7 @@ function situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa) {
 // Meta por Atendente (satisfação e taxa de resposta) — no formato do Relatório de Satisfação
 router.get('/meta', async (req, res) => {
   try {
-    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const emp = req.usuario.empresa_id; const { di, df } = periodoMeta(req);
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
     const metaTaxa = Number(req.query.meta_taxa || 55);
     const params = [emp, di, df];
@@ -541,8 +574,11 @@ router.get('/meta', async (req, res) => {
         COUNT(*) FILTER (WHERE nota = 1 OR (nota IS NULL AND satisfacao_msg = 'insatisfeito'))::int AS insatisfeitas,
         COUNT(*) FILTER (WHERE nota IS NULL AND satisfacao_msg = 'invalida')::int AS invalidas
        FROM chatmix_atendimentos
-       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL${filtros(req, params)}
+       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
+         AND (${DEPT_SQL}) IN ('Financeiro','Suporte')${filtros(req, params)}
        GROUP BY 1 ORDER BY total DESC`, params);
+    // Meta considera apenas Financeiro e Call Center (=Suporte)
+    const rotuloDept = nome => deptDeNome(nome) === 'Suporte' ? 'Call Center' : deptDeNome(nome);
     const itens = rows.map(r => {
       const validas = r.satisfeitas + r.insatisfeitas;           // válidas = satisfeitas + insatisfeitas
       const percSat = validas ? Math.round((r.satisfeitas / validas) * 10000) / 100 : null; // satisfeitas / válidas
@@ -550,7 +586,7 @@ router.get('/meta', async (req, res) => {
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
       return {
-        atendente: r.nome, total: r.total, processadas: r.processadas,
+        atendente: r.nome, departamento: rotuloDept(r.nome), total: r.total, processadas: r.processadas,
         validas, invalidas: r.invalidas, satisfeitas: r.satisfeitas, insatisfeitas: r.insatisfeitas,
         perc_satisfacao: percSat, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
@@ -558,6 +594,17 @@ router.get('/meta', async (req, res) => {
         situacao: percSat == null ? 'Sem pesquisas processadas ainda.' : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
     });
+    // Agrupa por departamento (Financeiro e Call Center)
+    const porDept = {};
+    for (const i of itens) {
+      const d = porDept[i.departamento] || (porDept[i.departamento] = { departamento: i.departamento, total: 0, satisfeitas: 0, validas: 0, atendentes: 0 });
+      d.total += i.total; d.satisfeitas += i.satisfeitas; d.validas += i.validas; d.atendentes++;
+    }
+    const departamentos = Object.values(porDept).map(d => ({
+      ...d,
+      perc_satisfacao: d.validas ? Math.round((d.satisfeitas / d.validas) * 10000) / 100 : null,
+      taxa_resposta: d.total ? Math.round((d.validas / d.total) * 10000) / 100 : 0,
+    }));
     // Resumo do setor
     const totAtend = itens.reduce((s, i) => s + i.total, 0);
     const totProc = itens.reduce((s, i) => s + i.processadas, 0);
@@ -574,7 +621,7 @@ router.get('/meta', async (req, res) => {
       perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
       destaques: ambas.map(i => i.atendente),
     };
-    res.json({ periodo: { di, df }, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, itens, resumo });
+    res.json({ periodo: { di, df }, semana: true, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
