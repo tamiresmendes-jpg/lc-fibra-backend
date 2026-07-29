@@ -38,11 +38,10 @@ function statusDaPlanilha(u) {
     if (/(inativ|demit|deslig|afast|f[ée]rias|^n[aã]o$|^n$|^0$|false)/.test(s)) return 0;
     if (/(ativ|^sim$|^s$|^1$|true)/.test(s)) return 1;
   }
-  // Convenção existente: tem "Número da Folha" preenchido = ativo
-  if (u.folha !== undefined) {
-    return (u.folha !== null && u.folha.toString().trim() !== '') ? 1 : 0;
-  }
-  return null; // sem sinal → não altera
+  // "Número da Folha" preenchido confirma ATIVO; vazio NÃO inativa (evita
+  // inativar em massa quem só está sem folha na planilha).
+  if (u.folha !== undefined && u.folha !== null && u.folha.toString().trim() !== '') return 1;
+  return null; // sem sinal → não altera o status salvo
 }
 
 // Listar usuários da empresa — sem avatar para não travar o sistema
@@ -328,20 +327,16 @@ router.post('/importar', async (req, res) => {
         // apenas a ação manual (botão de desativar) pode mudar o status deles.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
         const admissaoNorm = normalizarData(u.data_admissao);
-        const sinalStatus = statusDaPlanilha(u);
-        // Admin/gestor e contas protegidas NUNCA são inativados pela importação
-        const estaProtegido = existe.protegido_inativacao === 1 || existe.protegido_inativacao === true
-          || ['admin', 'gestor'].includes(existe.perfil);
-        const ativoFinal = estaProtegido ? existe.ativo : (sinalStatus === null ? 1 : sinalStatus);
+        // A importação NÃO altera o status (ativo) de quem já existe — apenas
+        // completa dados vazios. Inativar é sempre ação manual/explícita.
         await run(
           `UPDATE usuarios SET
              data_nascimento = COALESCE(data_nascimento, ?),
              data_admissao   = COALESCE(data_admissao, ?),
              matricula       = COALESCE(matricula, ?),
-             cidade          = COALESCE(cidade, ?),
-             ativo           = ?
+             cidade          = COALESCE(cidade, ?)
            WHERE id = ?`,
-          [dataNorm || null, admissaoNorm || null, u.matricula || null, u.cidade || null, ativoFinal, existe.id]
+          [dataNorm || null, admissaoNorm || null, u.matricula || null, u.cidade || null, existe.id]
         );
         resultados.push({ email: u.email, status: 'atualizado', nome: u.nome, ativo: ativoFinal });
         continue;
