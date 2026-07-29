@@ -338,7 +338,7 @@ router.post('/importar', async (req, res) => {
            WHERE id = ?`,
           [dataNorm || null, admissaoNorm || null, u.matricula || null, u.cidade || null, existe.id]
         );
-        resultados.push({ email: u.email, status: 'atualizado', nome: u.nome, ativo: ativoFinal });
+        resultados.push({ email: u.email, status: 'atualizado', nome: u.nome });
         continue;
       }
       try {
