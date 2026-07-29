@@ -27,9 +27,11 @@ async function garantir() {
     saldo_min INTEGER DEFAULT 0,
     abono_min INTEGER DEFAULT 0,
     atestado BOOLEAN DEFAULT false,
+    ativo BOOLEAN DEFAULT true,
     atualizado_em TIMESTAMP DEFAULT NOW(),
     PRIMARY KEY (empresa_id, id_person, data)
   )`);
+  await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS ativo BOOLEAN DEFAULT true`);
   pronto = true;
 }
 
@@ -118,14 +120,14 @@ async function sincronizarEmpresa(empresa_id, cfg) {
           const data = ymd(new Date(dia.date));
           await run(
             `INSERT INTO rhid_ponto_dia
-              (empresa_id,id_person,nome,id_department,departamento,data,trabalhado_min,extra_min,extra_cem,noturno_min,falta_min,falta_dia,atraso_min,saldo_min,abono_min,atestado,atualizado_em)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,NOW())
+              (empresa_id,id_person,nome,id_department,departamento,data,trabalhado_min,extra_min,extra_cem,noturno_min,falta_min,falta_dia,atraso_min,saldo_min,abono_min,atestado,ativo,atualizado_em)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
              ON CONFLICT (empresa_id,id_person,data) DO UPDATE SET
                nome=EXCLUDED.nome, id_department=EXCLUDED.id_department, departamento=EXCLUDED.departamento,
                trabalhado_min=EXCLUDED.trabalhado_min, extra_min=EXCLUDED.extra_min, extra_cem=EXCLUDED.extra_cem,
                noturno_min=EXCLUDED.noturno_min, falta_min=EXCLUDED.falta_min, falta_dia=EXCLUDED.falta_dia,
                atraso_min=EXCLUDED.atraso_min, saldo_min=EXCLUDED.saldo_min, abono_min=EXCLUDED.abono_min,
-               atestado=EXCLUDED.atestado, atualizado_em=NOW()`,
+               atestado=EXCLUDED.atestado, ativo=EXCLUDED.ativo, atualizado_em=NOW()`,
             [
               empresa_id, p.id, p.name || '', p.idDepartment ?? null, deptos[p.idDepartment] || null, data,
               Math.round(dia.totalHorasTrabalhadas || 0),
@@ -138,6 +140,7 @@ async function sincronizarEmpresa(empresa_id, cfg) {
               Math.round(dia.saldoBancoFinalDia || 0),
               Math.round(dia.minutosAbono || 0),
               temAtestado(dia),
+              p.status === 1,
             ]
           );
         }

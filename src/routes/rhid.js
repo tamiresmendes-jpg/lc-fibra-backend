@@ -286,7 +286,7 @@ router.get('/listas', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id;
     const deps = await all(`SELECT DISTINCT departamento FROM rhid_ponto_dia WHERE empresa_id=$1 AND departamento IS NOT NULL ORDER BY departamento`, [emp]);
-    const pes = await all(`SELECT DISTINCT id_person, nome FROM rhid_ponto_dia WHERE empresa_id=$1 ORDER BY nome`, [emp]);
+    const pes = await all(`SELECT DISTINCT id_person, nome FROM rhid_ponto_dia WHERE empresa_id=$1 AND ativo=true ORDER BY nome`, [emp]);
     res.json({
       departamentos: deps.map(d => d.departamento),
       pessoas: pes.map(p => ({ id: p.id_person, nome: p.nome })),
@@ -314,6 +314,7 @@ router.get('/indicadores', async (req, res) => {
     const params = [emp, dataIni, dataFinal];
     if (req.query.departamento) { params.push(req.query.departamento); cond.push(`departamento = $${params.length}`); }
     if (req.query.idPerson) { params.push(parseInt(req.query.idPerson, 10)); cond.push(`id_person = $${params.length}`); }
+    if (req.query.ativos !== 'false') cond.push(`ativo = true`); // por padrão, só ativos
 
     const rows = await all(`SELECT * FROM rhid_ponto_dia WHERE ${cond.join(' AND ')}`, params);
 
