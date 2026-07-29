@@ -33,6 +33,9 @@ router.get('/config', async (req, res) => {
       ev_aniversario_empresa: cfg.ev_aniversario_empresa !== 0,
       ev_dayoff: cfg.ev_dayoff !== 0,
       hora_disparo: cfg.hora_disparo ?? 8,
+      hora_aniversario: cfg.hora_aniversario ?? (cfg.hora_disparo ?? 8),
+      hora_aniversario_empresa: cfg.hora_aniversario_empresa ?? (cfg.hora_disparo ?? 8),
+      hora_dayoff: cfg.hora_dayoff ?? (cfg.hora_disparo ?? 8),
       ev_comunicado: cfg.ev_comunicado !== 0,
       ev_coffee: cfg.ev_coffee !== 0,
       ev_mural: cfg.ev_mural !== 0,
@@ -89,24 +92,28 @@ router.delete('/canais/:id', async (req, res) => {
 router.put('/config', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
-    const { ativo, sistema_url, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_aniversario_empresa, ev_dayoff, hora_disparo, ev_comunicado, ev_coffee, ev_mural, ev_cultura, ev_chatmix, canais_evento, servidor_id, canal_embed } = req.body;
+    const { ativo, sistema_url, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_aniversario_empresa, ev_dayoff, hora_disparo, hora_aniversario, hora_aniversario_empresa, hora_dayoff, ev_comunicado, ev_coffee, ev_mural, ev_cultura, ev_chatmix, canais_evento, servidor_id, canal_embed } = req.body;
     const b = v => (v ? 1 : 0);
     const mapaJson = canais_evento && typeof canais_evento === 'object' ? JSON.stringify(canais_evento) : null;
     const soDigitos = v => (v || '').replace(/\D/g, '') || null;
-    const horaNum = Math.max(0, Math.min(23, parseInt(hora_disparo, 10)));
+    const hh = (v, def) => { const n = parseInt(v, 10); return isNaN(n) ? def : Math.max(0, Math.min(23, n)); };
+    const horaNum = hh(hora_disparo, 8);
     await run(
-      `INSERT INTO integracao_discord (empresa_id, sistema_url, ativo, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_aniversario_empresa, ev_dayoff, hora_disparo, ev_comunicado, ev_coffee, ev_mural, ev_cultura, ev_chatmix, canais_evento, servidor_id, canal_embed, atualizado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18, NOW())
+      `INSERT INTO integracao_discord (empresa_id, sistema_url, ativo, ev_ciencia, ev_pop, ev_processo, ev_aniversario, ev_aniversario_empresa, ev_dayoff, hora_disparo, hora_aniversario, hora_aniversario_empresa, hora_dayoff, ev_comunicado, ev_coffee, ev_mural, ev_cultura, ev_chatmix, canais_evento, servidor_id, canal_embed, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21, NOW())
        ON CONFLICT (empresa_id) DO UPDATE SET
          sistema_url = EXCLUDED.sistema_url, ativo = EXCLUDED.ativo,
          ev_ciencia = EXCLUDED.ev_ciencia, ev_pop = EXCLUDED.ev_pop,
          ev_processo = EXCLUDED.ev_processo, ev_aniversario = EXCLUDED.ev_aniversario,
-         ev_aniversario_empresa = EXCLUDED.ev_aniversario_empresa, ev_dayoff = EXCLUDED.ev_dayoff, hora_disparo = EXCLUDED.hora_disparo,
+         ev_aniversario_empresa = EXCLUDED.ev_aniversario_empresa, ev_dayoff = EXCLUDED.ev_dayoff,
+         hora_disparo = EXCLUDED.hora_disparo, hora_aniversario = EXCLUDED.hora_aniversario,
+         hora_aniversario_empresa = EXCLUDED.hora_aniversario_empresa, hora_dayoff = EXCLUDED.hora_dayoff,
          ev_comunicado = EXCLUDED.ev_comunicado, ev_coffee = EXCLUDED.ev_coffee, ev_mural = EXCLUDED.ev_mural,
          ev_cultura = EXCLUDED.ev_cultura, ev_chatmix = EXCLUDED.ev_chatmix, canais_evento = EXCLUDED.canais_evento,
          servidor_id = EXCLUDED.servidor_id, canal_embed = EXCLUDED.canal_embed, atualizado_em = NOW()`,
       [req.usuario.empresa_id, (sistema_url || '').trim() || null, b(ativo),
-       b(ev_ciencia), b(ev_pop), b(ev_processo), b(ev_aniversario), b(ev_aniversario_empresa === undefined ? 1 : ev_aniversario_empresa), b(ev_dayoff === undefined ? 1 : ev_dayoff), (isNaN(horaNum) ? 8 : horaNum),
+       b(ev_ciencia), b(ev_pop), b(ev_processo), b(ev_aniversario), b(ev_aniversario_empresa === undefined ? 1 : ev_aniversario_empresa), b(ev_dayoff === undefined ? 1 : ev_dayoff),
+       horaNum, hh(hora_aniversario, horaNum), hh(hora_aniversario_empresa, horaNum), hh(hora_dayoff, horaNum),
        b(ev_comunicado), b(ev_coffee), b(ev_mural), b(ev_cultura), b(ev_chatmix === undefined ? 1 : ev_chatmix), mapaJson, soDigitos(servidor_id), soDigitos(canal_embed)]
     );
     res.json({ ok: true });

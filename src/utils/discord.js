@@ -51,6 +51,9 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_aniv_emp_env TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_dayoff_env TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_disparo INTEGER DEFAULT 8'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_aniversario INTEGER'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_aniversario_empresa INTEGER'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_dayoff INTEGER'); } catch {}
     try {
       await run(`CREATE TABLE IF NOT EXISTS discord_canais (
         id TEXT PRIMARY KEY,

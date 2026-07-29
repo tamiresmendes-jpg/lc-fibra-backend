@@ -23,7 +23,7 @@ async function enviarAniversariantesDoDia() {
     );
 
     for (const cfg of empresas) {
-      if (horaSP() < (cfg.hora_disparo ?? 8)) continue; // respeita a hora de disparo configurada
+      if (horaSP() < (cfg.hora_aniversario ?? cfg.hora_disparo ?? 8)) continue; // respeita a hora configurada
       // Marca já como enviado (evita duplicar se demorar)
       await run('UPDATE integracao_discord SET ultimo_aniv_env = $1 WHERE empresa_id = $2', [hoje, cfg.empresa_id]);
 
@@ -72,7 +72,7 @@ async function enviarAniversarioEmpresaDoDia() {
     );
 
     for (const cfg of empresas) {
-      if (horaSP() < (cfg.hora_disparo ?? 8)) continue;
+      if (horaSP() < (cfg.hora_aniversario_empresa ?? cfg.hora_disparo ?? 8)) continue;
       await run('UPDATE integracao_discord SET ultimo_aniv_emp_env = $1 WHERE empresa_id = $2', [hoje, cfg.empresa_id]);
 
       const lista = await all(
@@ -137,7 +137,7 @@ async function enviarDayOffDoDia() {
     );
 
     for (const cfg of empresas) {
-      if (horaSP() < (cfg.hora_disparo ?? 8)) continue;
+      if (horaSP() < (cfg.hora_dayoff ?? cfg.hora_disparo ?? 8)) continue;
       await run('UPDATE integracao_discord SET ultimo_dayoff_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
 
       // Feriados da empresa (+ nacionais fixos)
