@@ -327,17 +327,19 @@ router.post('/importar', async (req, res) => {
         // Colaboradores com protegido_inativacao=1 nunca são desativados pela planilha:
         // apenas a ação manual (botão de desativar) pode mudar o status deles.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
+        const admissaoNorm = normalizarData(u.data_admissao);
         const sinalStatus = statusDaPlanilha(u);
         const estaProtegido = existe.protegido_inativacao === 1 || existe.protegido_inativacao === true;
         const ativoFinal = estaProtegido ? existe.ativo : (sinalStatus === null ? 1 : sinalStatus);
         await run(
           `UPDATE usuarios SET
              data_nascimento = COALESCE(data_nascimento, ?),
+             data_admissao   = COALESCE(data_admissao, ?),
              matricula       = COALESCE(matricula, ?),
              cidade          = COALESCE(cidade, ?),
              ativo           = ?
            WHERE id = ?`,
-          [dataNorm || null, u.matricula || null, u.cidade || null, ativoFinal, existe.id]
+          [dataNorm || null, admissaoNorm || null, u.matricula || null, u.cidade || null, ativoFinal, existe.id]
         );
         resultados.push({ email: u.email, status: 'atualizado', nome: u.nome, ativo: ativoFinal });
         continue;
@@ -400,12 +402,13 @@ router.post('/importar', async (req, res) => {
         const ativo = sinalStatus === null ? 1 : sinalStatus;
 
         const data_nascimento = normalizarData(u.data_nascimento || u.aniversario || u.aniversário);
+        const data_admissao = normalizarData(u.data_admissao);
 
         await run(`
-        INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, ativo, matricula, data_nascimento, cidade)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO usuarios (id, empresa_id, nome, email, senha, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, ativo, matricula, data_nascimento, data_admissao, cidade)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `, [id, req.usuario.empresa_id, u.nome.trim(), u.email.trim(), senhaHash, perfil,
-               departamento_id, cargo_id, gestor_id, setor_id, u.funcao || null, ativo, u.matricula || null, data_nascimento, u.cidade || null]);
+               departamento_id, cargo_id, gestor_id, setor_id, u.funcao || null, ativo, u.matricula || null, data_nascimento, data_admissao, u.cidade || null]);
 
         idsNaPlanilha.add(id);
         resultados.push({ email: u.email, status: 'ok', nome: u.nome, ativo });
