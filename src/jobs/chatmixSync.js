@@ -30,16 +30,20 @@ const TAGS_INSATISFEITO = ['ruim', 'pessimo', 'horrivel', 'terrivel', 'fraco', '
 const TAGS_SATISFEITO = ['obrigado', 'obrigada', 'muito obrigado', 'muito obrigada', 'agradeco', 'agradeco muito', 'valeu', 'ok', 'obgd', 'obg', 'amem', 'ah sim', 'certo', 'ficou tudo certo', 'igualmente', 'ja foi resolvido', 'muito bom', 'muito obg', 'muito obrigado pelo atendimento', 'muito obrigada pelo atendimento', 'nao obrigada', 'nao obrigado', 'nao obgd', 'nota 10', 'otimo', 'para nos', 'pra vc tambem', 'pra voce tambem', 'satisfeita', 'satisfeito', 'satisfeito obrigado', 'satisfeita obrigada', 'ta bem', 'ta bom', 'ta ok', 'ta otimo', 'vc tambem', 'vc tambem', 'foi bom', 'foi otimo', 'foi excelente', 'foi top', 'top'].map(norm);
 const NUM_INSATISFEITO = ['0', '1'];
 const NUM_SATISFEITO = ['5', '10', '100', '1000'];
-function bateTag(texto, tags, nums) {
+// Emojis das tags de satisfação configuradas no Chatmix
+const EMOJI_INSATISFEITO = ['😞','😠','👎','😣','⚠️','🤯','😤','😡','😕','😓','😫','😩','😒','😖','❌'];
+const EMOJI_SATISFEITO = ['😊','🙂','😄','😃','😀','🙌','🙏','🤝','👍','🤗','✨','🌟','💛','✔️','🔝','🥰','😌','😍','😘','🤩','🥳','👏','❤️','🧡','💖','💕','🚀','✅'];
+function bateTag(texto, tags, nums, emojis) {
   const n = norm(texto);
   if (!n) return false;
-  if (nums.includes(n)) return true;                          // resposta numérica exata
+  if (nums.includes(n)) return true;                          // resposta numérica exata (5, 1, 10...)
+  if (emojis && emojis.some(e => texto.includes(e))) return true; // emoji da pesquisa (no texto original)
   return tags.some(t => t.length >= 4 ? n.includes(t) : n === t);
 }
 // Retorna 'satisfeito' | 'insatisfeito' | null para o texto de UMA resposta do cliente
 function classificaResposta(texto) {
-  if (bateTag(texto, TAGS_INSATISFEITO, NUM_INSATISFEITO)) return 'insatisfeito';
-  if (bateTag(texto, TAGS_SATISFEITO, NUM_SATISFEITO)) return 'satisfeito';
+  if (bateTag(texto, TAGS_INSATISFEITO, NUM_INSATISFEITO, EMOJI_INSATISFEITO)) return 'insatisfeito';
+  if (bateTag(texto, TAGS_SATISFEITO, NUM_SATISFEITO, EMOJI_SATISFEITO)) return 'satisfeito';
   return null;
 }
 
@@ -214,7 +218,7 @@ async function passoMensagem(empresaId, token, desde) {
     if (m.type === 'sent') {
       if (m.origin === 'internal') { intn++; }
       else if (Number(m.ack) >= 2) env++; // entregue/lido = cobrável
-      if (m.origin === 'survey') surveyTs = Number(m.timestamp) || surveyTs; // pergunta da pesquisa enviada
+      if (m.origin === 'survey' || m.origin === 'satisfaction') surveyTs = Number(m.timestamp) || surveyTs; // pergunta da pesquisa enviada
     } else if (m.type === 'received') {
       rec++;
       respostas.push({ ts: Number(m.timestamp) || 0, txt: conteudo(m.content) });

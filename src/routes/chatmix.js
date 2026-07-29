@@ -530,15 +530,16 @@ router.get('/meta', async (req, res) => {
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
     const metaTaxa = Number(req.query.meta_taxa || 55);
     const params = [emp, di, df];
-    // Satisfação vem da dedução pelas mensagens (satisfacao_msg): satisfeito|insatisfeito|invalida.
-    // Só conta conversas com mensagens já processadas (msgs_sync_em não nulo).
+    // Satisfação combina a NOTA OFICIAL da pesquisa (nota 5/1) com a dedução por
+    // mensagem (satisfacao_msg). A nota tem prioridade; a mensagem só entra quando
+    // não há nota. Assim não perdemos as respostas oficiais da pesquisa.
     const rows = await all(
       `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE msgs_sync_em IS NOT NULL)::int AS processadas,
-        COUNT(*) FILTER (WHERE satisfacao_msg = 'satisfeito')::int AS satisfeitas,
-        COUNT(*) FILTER (WHERE satisfacao_msg = 'insatisfeito')::int AS insatisfeitas,
-        COUNT(*) FILTER (WHERE satisfacao_msg = 'invalida')::int AS invalidas
+        COUNT(*) FILTER (WHERE nota IS NOT NULL OR satisfacao_msg IS NOT NULL)::int AS processadas,
+        COUNT(*) FILTER (WHERE nota = 5 OR (nota IS NULL AND satisfacao_msg = 'satisfeito'))::int AS satisfeitas,
+        COUNT(*) FILTER (WHERE nota = 1 OR (nota IS NULL AND satisfacao_msg = 'insatisfeito'))::int AS insatisfeitas,
+        COUNT(*) FILTER (WHERE nota IS NULL AND satisfacao_msg = 'invalida')::int AS invalidas
        FROM chatmix_atendimentos
        WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL${filtros(req, params)}
        GROUP BY 1 ORDER BY total DESC`, params);
