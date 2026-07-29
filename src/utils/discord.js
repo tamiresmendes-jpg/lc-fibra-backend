@@ -54,6 +54,8 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_aniversario INTEGER'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_aniversario_empresa INTEGER'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_dayoff INTEGER'); } catch {}
+    // Config por evento: { [evChave]: { modo:'realtime'|'agendado', antecedencia:0, hora:8 } }
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS notif_cfg TEXT'); } catch {}
     try {
       await run(`CREATE TABLE IF NOT EXISTS discord_canais (
         id TEXT PRIMARY KEY,
