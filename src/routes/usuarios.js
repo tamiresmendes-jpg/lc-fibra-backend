@@ -329,7 +329,9 @@ router.post('/importar', async (req, res) => {
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
         const admissaoNorm = normalizarData(u.data_admissao);
         const sinalStatus = statusDaPlanilha(u);
-        const estaProtegido = existe.protegido_inativacao === 1 || existe.protegido_inativacao === true;
+        // Admin/gestor e contas protegidas NUNCA são inativados pela importação
+        const estaProtegido = existe.protegido_inativacao === 1 || existe.protegido_inativacao === true
+          || ['admin', 'gestor'].includes(existe.perfil);
         const ativoFinal = estaProtegido ? existe.ativo : (sinalStatus === null ? 1 : sinalStatus);
         await run(
           `UPDATE usuarios SET
@@ -425,7 +427,7 @@ router.post('/importar', async (req, res) => {
       const placeholders = ids.map(() => '?').join(',');
       const r = await run(
         `UPDATE usuarios SET ativo = 0
-         WHERE empresa_id = ? AND ativo = 1 AND perfil <> 'admin'
+         WHERE empresa_id = ? AND ativo = 1 AND perfil NOT IN ('admin','gestor')
            AND COALESCE(protegido_inativacao, 0) = 0
            AND id <> ? AND id NOT IN (${placeholders})`,
         [req.usuario.empresa_id, req.usuario.id, ...ids]
