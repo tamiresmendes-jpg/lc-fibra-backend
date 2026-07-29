@@ -213,10 +213,10 @@ async function enviarDayOffDoDia() {
       const url = await resolverWebhook(cfg.empresa_id, cfg, 'dayoff');
       if (!url) continue;
       const quando = rotuloAntecedencia(ec.antecedencia);
-      const nomes = doDia.map(n => `☀️ **${n}**`).join('\n');
+      const nomes = doDia.map(n => `🌴 **${n}**, seu day off será ${quando} — aproveite sua folga! 🎉`).join('\n');
       const ok = await postWebhook(url, {
-        title: ec.antecedencia ? `☀️ Day off de aniversário ${quando}!` : '☀️ Day off de aniversário hoje!',
-        description: `${ec.antecedencia ? `Day off ${quando} de` : 'Aproveite a folga! Hoje é o day off de'}:\n\n${nomes}`,
+        title: `☀️ Day off de aniversário ${quando}!`,
+        description: nomes,
         color: COR.laranja,
         footer: { text: 'Kronos — Day off de aniversário' },
         timestamp: new Date().toISOString(),
@@ -228,14 +228,108 @@ async function enviarDayOffDoDia() {
   }
 }
 
+// ── FERIADO ───────────────────────────────────────────────────────────────
+const FER_NAC_NOMES = {
+  '01-01': 'Confraternização Universal', '04-21': 'Tiradentes', '05-01': 'Dia do Trabalho',
+  '09-07': 'Independência do Brasil', '10-12': 'Nossa Senhora Aparecida', '11-02': 'Finados',
+  '11-15': 'Proclamação da República', '11-20': 'Consciência Negra', '12-25': 'Natal',
+};
+async function enviarFeriadoDoDia() {
+  try {
+    await garantirTabela();
+    await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_feriado_env TEXT`);
+    const hojeStr = hojeSP();
+    const empresas = await all(
+      `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_feriado = 1 AND webhook_url IS NOT NULL
+       AND (ultimo_feriado_env IS DISTINCT FROM $1)`, [hojeStr]);
+    for (const cfg of empresas) {
+      const ec = evCfg(cfg, 'feriado', cfg.hora_disparo ?? 8);
+      if (ec.modo === 'realtime') continue;
+      if (horaSP() < ec.hora) continue;
+      await run('UPDATE integracao_discord SET ultimo_feriado_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
+      const alvo = dataAlvo(hojeStr, ec.antecedencia);
+      const alvoMMDD = `${String(alvo.mes).padStart(2,'0')}-${String(alvo.dia).padStart(2,'0')}`;
+      // procura feriado cadastrado (empresa) na data-alvo
+      let nome = null, tipo = null;
+      try {
+        const fs = await all('SELECT nome, tipo, data, recorrente, validacao, ativo FROM feriados WHERE empresa_id = $1', [cfg.empresa_id]);
+        for (const f of fs) {
+          if (f.validacao === 'rejeitado' || f.ativo === 0 || f.ativo === false) continue;
+          const data = String(f.data || '').slice(0, 10); if (data.length < 10) continue;
+          if (f.recorrente ? (data.slice(5) === alvoMMDD) : (data === alvo.ymd)) { nome = f.nome; tipo = f.tipo; break; }
+        }
+      } catch {}
+      if (!nome && FER_NAC_NOMES[alvoMMDD]) { nome = FER_NAC_NOMES[alvoMMDD]; tipo = 'nacional'; }
+      if (!nome) continue;
+      const url = await resolverWebhook(cfg.empresa_id, cfg, 'feriado');
+      if (!url) continue;
+      const quando = rotuloAntecedencia(ec.antecedencia);
+      const dataFmt = `${String(alvo.dia).padStart(2,'0')}/${String(alvo.mes).padStart(2,'0')}`;
+      const ok = await postWebhook(url, {
+        title: '🚩 Feriado',
+        description: `${quando === 'hoje' ? 'Hoje' : `${quando.charAt(0).toUpperCase()+quando.slice(1)} (${dataFmt})`} é feriado: **${nome}**${tipo ? ` _(${tipo})_` : ''}.`,
+        color: COR.laranja,
+        footer: { text: 'Kronos — Feriados' },
+        timestamp: new Date().toISOString(),
+      });
+      registrarEnvio(cfg.empresa_id, 'feriado', `Feriado ${quando}: ${nome}`, ok, ok ? null : 'Falha no envio');
+    }
+  } catch (e) { console.error('[DiscordScheduler/feriado]', e.message); }
+}
+
+// ── RHID: resumo de faltas do dia anterior ─────────────────────────────────
+async function enviarRhidResumoDoDia() {
+  try {
+    await garantirTabela();
+    await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_rhid_env TEXT`);
+    const hojeStr = hojeSP();
+    const empresas = await all(
+      `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_rhid = 1 AND webhook_url IS NOT NULL
+       AND (ultimo_rhid_env IS DISTINCT FROM $1)`, [hojeStr]);
+    for (const cfg of empresas) {
+      const ec = evCfg(cfg, 'rhid', cfg.hora_disparo ?? 8);
+      if (ec.modo === 'realtime') continue;
+      if (horaSP() < ec.hora) continue;
+      await run('UPDATE integracao_discord SET ultimo_rhid_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
+      // faltas do dia anterior
+      const ontem = new Date(hojeStr + 'T12:00'); ontem.setDate(ontem.getDate() - 1);
+      const ontemStr = ymdD(ontem);
+      let faltas = [];
+      try {
+        faltas = await all(
+          `SELECT nome, departamento FROM rhid_ponto_dia
+           WHERE empresa_id = $1 AND data = $2 AND falta_dia = true AND ativo = true ORDER BY nome`,
+          [cfg.empresa_id, ontemStr]);
+      } catch { continue; }
+      if (!faltas.length) continue;
+      const url = await resolverWebhook(cfg.empresa_id, cfg, 'rhid');
+      if (!url) continue;
+      const dataFmt = `${String(ontem.getDate()).padStart(2,'0')}/${String(ontem.getMonth()+1).padStart(2,'0')}`;
+      const linhas = faltas.map(f => `• **${f.nome}**${f.departamento ? ` (${f.departamento})` : ''}`).join('\n');
+      const ok = await postWebhook(url, {
+        title: `🕐 Ponto — Faltas de ${dataFmt}`,
+        description: `${faltas.length} colaborador(es) com falta:\n\n${linhas}`,
+        color: COR.laranja,
+        footer: { text: 'Kronos — Ponto (RHID)' },
+        timestamp: new Date().toISOString(),
+      });
+      registrarEnvio(cfg.empresa_id, 'rhid', `Faltas de ${dataFmt} (${faltas.length})`, ok, ok ? null : 'Falha no envio');
+    }
+  } catch (e) { console.error('[DiscordScheduler/rhid]', e.message); }
+}
+
 // Inicia verificação periódica (a cada 30 min). Em processo (PM2 mantém vivo).
 function iniciar() {
   setTimeout(enviarAniversariantesDoDia, 20000); // 20s após subir
   setTimeout(enviarAniversarioEmpresaDoDia, 25000);
   setTimeout(enviarDayOffDoDia, 30000);
+  setTimeout(enviarFeriadoDoDia, 35000);
+  setTimeout(enviarRhidResumoDoDia, 40000);
   setInterval(enviarAniversariantesDoDia, 30 * 60 * 1000);
   setInterval(enviarAniversarioEmpresaDoDia, 30 * 60 * 1000);
   setInterval(enviarDayOffDoDia, 30 * 60 * 1000);
+  setInterval(enviarFeriadoDoDia, 30 * 60 * 1000);
+  setInterval(enviarRhidResumoDoDia, 30 * 60 * 1000);
 }
 
-module.exports = { iniciar, enviarAniversariantesDoDia, enviarAniversarioEmpresaDoDia, enviarDayOffDoDia };
+module.exports = { iniciar, enviarAniversariantesDoDia, enviarAniversarioEmpresaDoDia, enviarDayOffDoDia, enviarFeriadoDoDia, enviarRhidResumoDoDia };

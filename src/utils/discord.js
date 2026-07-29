@@ -12,11 +12,12 @@ const COR = {
 };
 
 // Eventos que podem ser direcionados a um canal
-const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'aniversario_empresa', 'dayoff', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
+const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'aniversario_empresa', 'dayoff', 'feriado', 'rhid', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
 // Mapa evento → coluna de habilitação (liga/desliga)
 const EVENTO_COL = {
   ciencia: 'ev_ciencia', pop: 'ev_pop', processo: 'ev_processo',
   aniversario: 'ev_aniversario', aniversario_empresa: 'ev_aniversario_empresa', dayoff: 'ev_dayoff',
+  feriado: 'ev_feriado', rhid: 'ev_rhid',
   comunicado: 'ev_comunicado', manual: 'ev_comunicado',
   coffee: 'ev_coffee', mural: 'ev_mural', cultura: 'ev_cultura', chatmix: 'ev_chatmix',
 };
@@ -56,6 +57,10 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS hora_dayoff INTEGER'); } catch {}
     // Config por evento: { [evChave]: { modo:'realtime'|'agendado', antecedencia:0, hora:8 } }
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS notif_cfg TEXT'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_feriado INTEGER DEFAULT 1'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_rhid INTEGER DEFAULT 1'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_feriado_env TEXT'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_rhid_env TEXT'); } catch {}
     try {
       await run(`CREATE TABLE IF NOT EXISTS discord_canais (
         id TEXT PRIMARY KEY,
