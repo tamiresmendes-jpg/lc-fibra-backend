@@ -52,7 +52,7 @@ router.get('/', async (req, res) => {
     let sql = `
     SELECT u.id, u.nome, u.email, u.perfil, u.ativo, u.created_at,
            u.departamento_id, u.cargo_id, u.gestor_id, u.setor_id, u.funcao, u.bloqueado, u.sort_order, u.cor, u.nivel,
-           u.data_nascimento, u.matricula, u.cidade, u.permissoes_modulos, u.tipo_usuario, u.mostrar_aniversario,
+           u.data_nascimento, u.data_admissao, u.matricula, u.cidade, u.permissoes_modulos, u.tipo_usuario, u.mostrar_aniversario,
            d.nome as departamento_nome, c.nome as cargo_nome,
            g.nome as gestor_nome, s.nome as setor_nome
     FROM usuarios u
@@ -138,7 +138,7 @@ router.get('/:id', async (req, res) => {
 // Atualizar usuário
 router.put('/:id', async (req, res) => {
   try {
-    const { nome, email, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, cidade, avatar, tipo_usuario, protegido_inativacao } = req.body;
+    const { nome, email, perfil, departamento_id, cargo_id, gestor_id, setor_id, funcao, nivel, ativo, bloqueado, data_nascimento, data_admissao, cidade, avatar, tipo_usuario, protegido_inativacao } = req.body;
     const ehAdmin = req.usuario.perfil === 'admin';
 
     // Estado atual do usuário-alvo (mesma empresa). Usado para proteger campos sensíveis.
@@ -176,7 +176,7 @@ router.put('/:id', async (req, res) => {
       funcao || null, nivel || null,
       ativo !== undefined ? ativo : 1,
       bloqueado !== undefined ? bloqueado : 0,
-      data_nascimento || null, cidade || null, avatar || null,
+      data_nascimento || null, data_admissao || null, cidade || null, avatar || null,
       tipoFinal,
     ];
 
@@ -187,14 +187,14 @@ router.put('/:id', async (req, res) => {
       if (protegidoFinal !== undefined) {
         await run(`
           UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, data_admissao=?, cidade=?, avatar=?,
             tipo_usuario=?, permissoes_modulos=?, protegido_inativacao=?
           WHERE id=? AND empresa_id=?
         `, [...base, perms ? JSON.stringify(perms) : null, protegidoFinal, req.params.id, req.usuario.empresa_id]);
       } else {
         await run(`
           UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, data_admissao=?, cidade=?, avatar=?,
             tipo_usuario=?, permissoes_modulos=?
           WHERE id=? AND empresa_id=?
         `, [...base, perms ? JSON.stringify(perms) : null, req.params.id, req.usuario.empresa_id]);
@@ -203,14 +203,14 @@ router.put('/:id', async (req, res) => {
       if (protegidoFinal !== undefined) {
         await run(`
           UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, data_admissao=?, cidade=?, avatar=?,
             tipo_usuario=?, protegido_inativacao=?
           WHERE id=? AND empresa_id=?
         `, [...base, protegidoFinal, req.params.id, req.usuario.empresa_id]);
       } else {
         await run(`
           UPDATE usuarios SET nome=?, perfil=?, departamento_id=?, cargo_id=?, gestor_id=?,
-            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, cidade=?, avatar=?,
+            setor_id=?, funcao=?, nivel=?, ativo=?, bloqueado=?, data_nascimento=?, data_admissao=?, cidade=?, avatar=?,
             tipo_usuario=?
           WHERE id=? AND empresa_id=?
         `, [...base, req.params.id, req.usuario.empresa_id]);

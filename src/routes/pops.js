@@ -178,9 +178,22 @@ router.get('/', async (req, res) => {
     if (departamento_id) { sql += ` AND p.departamento_id = $${idx++}`; params.push(departamento_id); }
     if (categoria_id) { sql += ` AND p.categoria_id = $${idx++}`; params.push(categoria_id); }
     sql += ' ORDER BY p.updated_at DESC';
-    res.json(await all(sql, params));
+    const rows = await all(sql, params);
+    res.json(rows.filter(p => podeVerPop(p, req.usuario)));
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
+
+// Regra de visibilidade: POP não-restrito é público; restrito só p/ admin/gestor,
+// o criador, ou usuários na lista de permitidos.
+function podeVerPop(p, usuario) {
+  if (!p.restrito) return true;
+  if (['admin', 'gestor'].includes(usuario.perfil)) return true;
+  if (p.criado_por && p.criado_por === usuario.id) return true;
+  try {
+    const permitidos = p.usuarios_permitidos ? JSON.parse(p.usuarios_permitidos) : [];
+    return Array.isArray(permitidos) && permitidos.includes(usuario.id);
+  } catch { return false; }
+}
 
 // Criar POP
 router.post('/', async (req, res) => {
@@ -274,6 +287,7 @@ router.get('/:id', async (req, res) => {
       WHERE p.id = $1 AND p.empresa_id = $2
     `, [req.params.id, req.usuario.empresa_id]);
     if (!item) return res.status(404).json({ erro: 'POP não encontrado' });
+    if (!podeVerPop(item, req.usuario)) return res.status(403).json({ erro: 'Você não tem acesso a este POP.' });
 
     // Não contabiliza visualização do admin (acesso master)
     if (req.usuario.perfil !== 'admin') {

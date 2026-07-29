@@ -6,9 +6,9 @@
 
 const { run, get, all } = require('../config/database');
 const { notificar } = require('../utils/discord');
-const FILA_SEG = 30;        // alerta: cliente na fila há mais de 30 segundos
-const RESP_SEG = 8 * 60;    // alerta: cliente esperando resposta da atendente há mais de 8 min
-const JANELA_ALERTA_H = 23; // alerta: janela de 24h prestes a fechar (avisa a partir de 23h)
+const FILA_SEG = 5 * 60;    // alerta: cliente na fila há mais de 5 minutos
+const RESP_SEG = 15 * 60;   // alerta: cliente esperando resposta da atendente há mais de 15 min
+const JANELA_ALERTA_H = 23; // alerta: janela de 24h prestes a fechar (avisa a partir de 23h, perto de fechar)
 
 const BASE = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
