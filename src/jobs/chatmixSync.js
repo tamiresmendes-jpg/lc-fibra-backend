@@ -213,12 +213,15 @@ async function passoMensagem(empresaId, token, desde) {
   const conteudo = c => { if (!c) return ''; if (typeof c === 'string') return c; return c.content || c.text || c.title || ''; };
   let env = 0, rec = 0, intn = 0;
   let surveyTs = null;
+  let temGoogleReview = false; // mensagem de pesquisa do Google só é enviada quando o cliente é SATISFEITO
   const respostas = []; // respostas do cliente (para classificar após achar a pesquisa)
   for (const m of msgs) {
     if (m.type === 'sent') {
       if (m.origin === 'internal') { intn++; }
       else if (Number(m.ack) >= 2) env++; // entregue/lido = cobrável
       if (m.origin === 'survey' || m.origin === 'satisfaction') surveyTs = Number(m.timestamp) || surveyTs; // pergunta da pesquisa enviada
+      const tx = String(conteudo(m.content)).toLowerCase();
+      if (/google|g\.page|maps\.app\.goo|maps\.google|goo\.gl|g\.co\/|avali.*google|nos avalie|deixe sua avalia/.test(tx)) temGoogleReview = true;
     } else if (m.type === 'received') {
       rec++;
       respostas.push({ ts: Number(m.timestamp) || 0, txt: conteudo(m.content) });
@@ -236,6 +239,9 @@ async function passoMensagem(empresaId, token, desde) {
     }
     if (!satisfacao && posSurvey.length) satisfacao = 'invalida'; // respondeu, mas não bateu tag
   }
+  // A mensagem da pesquisa do Google só é disparada quando o cliente foi SATISFEITO.
+  // Se ela existe e não houve sinal de insatisfeito, consideramos satisfeito.
+  if (temGoogleReview && satisfacao !== 'insatisfeito') satisfacao = 'satisfeito';
   await run(`UPDATE chatmix_atendimentos SET msgs_enviadas=$3, msgs_recebidas=$4, msgs_internas=$5, satisfacao_msg=$6, msgs_sync_em=NOW()
              WHERE empresa_id=$1 AND atendimento_id=$2`, [empresaId, id, env, rec, intn, satisfacao]);
   return { fez: true, id, env, rec, intn, satisfacao };
