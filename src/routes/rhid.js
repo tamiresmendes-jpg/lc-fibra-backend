@@ -157,18 +157,49 @@ async function exigirCfg(req, res) {
   return cfg;
 }
 
+// Extrai a lista de registros independente do "envelope" que o RHID usar
+function listaDe(json) {
+  if (Array.isArray(json)) return json;
+  return json?.records || json?.data || json?.aaData || json?.persons || [];
+}
+
+// Formata CPF/PIS que vêm como número inteiro
+function fmtDoc(v, tam) {
+  if (v === undefined || v === null || v === '') return '';
+  const s = String(v).replace(/\D/g, '').padStart(tam, '0');
+  return s;
+}
+function fmtCpf(v) {
+  const s = fmtDoc(v, 11);
+  return s.length === 11 ? `${s.slice(0,3)}.${s.slice(3,6)}.${s.slice(6,9)}-${s.slice(9)}` : (v || '');
+}
+
+// Mapa idDepartamento -> nome (para exibir o nome em vez do ID)
+async function mapaDepartamentos(empresaId, cfg) {
+  try {
+    const r = await chamarRhid(empresaId, cfg, '/department', { params: { start: 0, length: 1000 } });
+    const m = {};
+    for (const d of listaDe(r.json)) m[d.id] = d.description || d.name || d.nome || d.descricao;
+    return m;
+  } catch { return {}; }
+}
+
 // ---------- FUNCIONÁRIOS ----------
 router.get('/funcionarios', async (req, res) => {
   try {
     const cfg = await exigirCfg(req, res); if (!cfg) return;
-    const r = await chamarRhid(req.usuario.empresa_id, cfg, '/person', { params: { start: 0, length: 1000 } });
+    const r = await chamarRhid(req.usuario.empresa_id, cfg, '/person', { params: { start: 0, length: 2000 } });
     if (r.status !== 200 || !r.json) return res.status(502).json({ erro: r.json?.message || ('Erro RHID HTTP ' + r.status) });
-    const lista = r.json.data || r.json.aaData || r.json.persons || (Array.isArray(r.json) ? r.json : []);
-    const funcionarios = lista.map(p => ({
-      id: p.id, nome: p.name || p.nome, cpf: p.cpf, matricula: p.registration || p.matricula,
-      departamento: p.department || p.departamento, empresa: p.company || p.empresa,
-      status: p.status,
-    }));
+    const deptos = await mapaDepartamentos(req.usuario.empresa_id, cfg);
+    const funcionarios = listaDe(r.json).map(p => ({
+      id: p.id,
+      nome: p.name || p.nome || '',
+      cpf: fmtCpf(p.cpf),
+      matricula: (p.registration && p.registration !== '0') ? p.registration : '',
+      pis: fmtDoc(p.pis, 11),
+      departamento: deptos[p.idDepartment] || (p.idDepartment != null ? `Depto ${p.idDepartment}` : ''),
+      status: p.status === 1 ? 'Ativo' : 'Inativo',
+    })).sort((a, b) => a.nome.localeCompare(b.nome));
     res.json({ total: funcionarios.length, funcionarios });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -179,8 +210,12 @@ router.get('/equipamentos', async (req, res) => {
     const cfg = await exigirCfg(req, res); if (!cfg) return;
     const r = await chamarRhid(req.usuario.empresa_id, cfg, '/device', { params: { start: 0, length: 500 } });
     if (r.status !== 200 || !r.json) return res.status(502).json({ erro: r.json?.message || ('Erro RHID HTTP ' + r.status) });
-    const lista = r.json.data || r.json.aaData || (Array.isArray(r.json) ? r.json : []);
-    res.json({ total: lista.length, equipamentos: lista });
+    const equipamentos = listaDe(r.json).map(d => ({
+      id: d.id,
+      descricao: d.description || d.descricao || d.name || d.alias || `Equipamento ${d.id}`,
+      numeroSerie: d.serialNumber || d.numeroSerie || null,
+    }));
+    res.json({ total: equipamentos.length, equipamentos });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
