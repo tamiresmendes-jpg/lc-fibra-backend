@@ -327,18 +327,24 @@ router.post('/importar', async (req, res) => {
         // apenas a ação manual (botão de desativar) pode mudar o status deles.
         const dataNorm = normalizarData(u.data_nascimento || u.aniversario);
         const admissaoNorm = normalizarData(u.data_admissao);
-        // A importação NÃO altera o status (ativo) de quem já existe — apenas
-        // completa dados vazios. Inativar é sempre ação manual/explícita.
+        // Status vem da COLUNA DE SITUAÇÃO da planilha (não da matrícula).
+        // Exceções que só podem ser inativadas manualmente: admin e usuários
+        // marcados como protegido_inativacao. Sem sinal na planilha → mantém o atual.
+        const sinalStatus = statusDaPlanilha(u);
+        const estaProtegido = existe.protegido_inativacao === 1 || existe.protegido_inativacao === true
+          || existe.perfil === 'admin';
+        const ativoFinal = estaProtegido ? existe.ativo : (sinalStatus === null ? existe.ativo : sinalStatus);
         await run(
           `UPDATE usuarios SET
              data_nascimento = COALESCE(data_nascimento, ?),
              data_admissao   = COALESCE(data_admissao, ?),
              matricula       = COALESCE(matricula, ?),
-             cidade          = COALESCE(cidade, ?)
+             cidade          = COALESCE(cidade, ?),
+             ativo           = ?
            WHERE id = ?`,
-          [dataNorm || null, admissaoNorm || null, u.matricula || null, u.cidade || null, existe.id]
+          [dataNorm || null, admissaoNorm || null, u.matricula || null, u.cidade || null, ativoFinal, existe.id]
         );
-        resultados.push({ email: u.email, status: 'atualizado', nome: u.nome });
+        resultados.push({ email: u.email, status: 'atualizado', nome: u.nome, ativo: ativoFinal });
         continue;
       }
       try {
