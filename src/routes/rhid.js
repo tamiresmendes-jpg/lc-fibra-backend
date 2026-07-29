@@ -163,6 +163,25 @@ function listaDe(json) {
   return json?.records || json?.data || json?.aaData || json?.persons || [];
 }
 
+// A API quebra (HTTP 500) quando pedimos páginas grandes (>~100). Então buscamos
+// de 100 em 100 usando start (offset) até vir uma página incompleta.
+async function buscarPaginado(empresaId, cfg, endpoint, { pageSize = 100, teto = 10000 } = {}) {
+  const tudo = [];
+  let start = 0;
+  while (tudo.length < teto) {
+    const r = await chamarRhid(empresaId, cfg, endpoint, { params: { start, length: pageSize } });
+    if (r.status !== 200 || !r.json) {
+      if (start === 0) throw new Error(r.json?.message || ('Erro RHID HTTP ' + r.status));
+      break; // já temos parte dos dados; para na primeira falha subsequente
+    }
+    const lote = listaDe(r.json);
+    tudo.push(...lote);
+    if (lote.length < pageSize) break;
+    start += pageSize;
+  }
+  return tudo;
+}
+
 // Formata CPF/PIS que vêm como número inteiro
 function fmtDoc(v, tam) {
   if (v === undefined || v === null || v === '') return '';
@@ -177,9 +196,9 @@ function fmtCpf(v) {
 // Mapa idDepartamento -> nome (para exibir o nome em vez do ID)
 async function mapaDepartamentos(empresaId, cfg) {
   try {
-    const r = await chamarRhid(empresaId, cfg, '/department', { params: { start: 0, length: 1000 } });
+    const lista = await buscarPaginado(empresaId, cfg, '/department');
     const m = {};
-    for (const d of listaDe(r.json)) m[d.id] = d.description || d.name || d.nome || d.descricao;
+    for (const d of lista) m[d.id] = d.description || d.name || d.nome || d.descricao;
     return m;
   } catch { return {}; }
 }
@@ -188,10 +207,9 @@ async function mapaDepartamentos(empresaId, cfg) {
 router.get('/funcionarios', async (req, res) => {
   try {
     const cfg = await exigirCfg(req, res); if (!cfg) return;
-    const r = await chamarRhid(req.usuario.empresa_id, cfg, '/person', { params: { start: 0, length: 2000 } });
-    if (r.status !== 200 || !r.json) return res.status(502).json({ erro: r.json?.message || ('Erro RHID HTTP ' + r.status) });
+    const pessoas = await buscarPaginado(req.usuario.empresa_id, cfg, '/person');
     const deptos = await mapaDepartamentos(req.usuario.empresa_id, cfg);
-    const funcionarios = listaDe(r.json).map(p => ({
+    const funcionarios = pessoas.map(p => ({
       id: p.id,
       nome: p.name || p.nome || '',
       cpf: fmtCpf(p.cpf),
@@ -208,9 +226,8 @@ router.get('/funcionarios', async (req, res) => {
 router.get('/equipamentos', async (req, res) => {
   try {
     const cfg = await exigirCfg(req, res); if (!cfg) return;
-    const r = await chamarRhid(req.usuario.empresa_id, cfg, '/device', { params: { start: 0, length: 500 } });
-    if (r.status !== 200 || !r.json) return res.status(502).json({ erro: r.json?.message || ('Erro RHID HTTP ' + r.status) });
-    const equipamentos = listaDe(r.json).map(d => ({
+    const dispositivos = await buscarPaginado(req.usuario.empresa_id, cfg, '/device');
+    const equipamentos = dispositivos.map(d => ({
       id: d.id,
       descricao: d.description || d.descricao || d.name || d.alias || `Equipamento ${d.id}`,
       numeroSerie: d.serialNumber || d.numeroSerie || null,

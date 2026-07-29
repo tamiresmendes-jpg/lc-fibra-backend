@@ -33,13 +33,24 @@ async function carregarCfg(empresaId) {
   return { base_url: cfg.base_url || BASE_PADRAO, usuario: cfg.usuario || '', token: cfg.token || '' };
 }
 
+// O iFalei espera datas no formato dd/mm/aaaa; o front manda ISO (aaaa-mm-dd)
+function paraDataBR(v) {
+  if (typeof v === 'string') {
+    const m = v.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  }
+  return v;
+}
+
 // Chama um endpoint da API do iFalei (auth via headers usuario/token)
 async function chamarIfalei(cfg, endpoint, params = {}) {
   const base = (cfg.base_url || BASE_PADRAO).replace(/\/+$/, '');
   const caminho = endpoint.startsWith('/') ? endpoint : '/' + endpoint;
   const qs = new URLSearchParams();
   for (const [k, v] of Object.entries(params)) {
-    if (v !== undefined && v !== null && v !== '') qs.append(k, v);
+    if (v === undefined || v === null || v === '') continue;
+    const val = (k === 'data_inicial' || k === 'data_final') ? paraDataBR(v) : v;
+    qs.append(k, val);
   }
   const url = base + caminho + (qs.toString() ? '?' + qs.toString() : '');
   const resp = await fetch(url, {
