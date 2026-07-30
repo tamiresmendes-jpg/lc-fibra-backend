@@ -283,8 +283,9 @@ async function enviarRhidResumoDoDia() {
       `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_rhid = 1       AND (ultimo_rhid_env IS DISTINCT FROM $1)`, [hojeStr]);
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'rhid', cfg.hora_disparo ?? 8);
-      if (ec.modo === 'realtime') continue;
-      if (horaSP() < ec.hora) continue;
+      // Faltas é um resumo diário (não há gatilho ao vivo). No modo "agendado" espera o horário;
+      // no modo "tempo real" envia assim que o sync roda (sem esperar horário). Nunca fica sem enviar.
+      if (ec.modo !== 'realtime' && horaSP() < ec.hora) continue;
       await run('UPDATE integracao_discord SET ultimo_rhid_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
       // faltas do dia anterior
       const ontem = new Date(hojeStr + 'T12:00'); ontem.setDate(ontem.getDate() - 1);
