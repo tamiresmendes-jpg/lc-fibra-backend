@@ -374,11 +374,12 @@ router.get('/status', async (req, res) => {
     aguardando.forEach(a => bump(a.departament_id, 'aguardando'));
     automacao.forEach(a => bump(a.departament_id, 'automacao'));
 
-    // Métricas de espera (fila) e maior espera — usa last_activity (entrada na fila), não created_at
+    // Métricas de espera (fila) e maior espera — considera SOMENTE quem está na fila (aguardando),
+    // usando last_activity (entrada na fila). Atendimentos em andamento NÃO entram aqui — senão um
+    // chat aberto há dias infla o "maior espera" (ex.: 161d) e não muda ao filtrar o departamento.
     const esperas = aguardando.map(a => segDesde(a.last_activity || a.created_at)).filter(x => x != null);
     const esperaMedia = esperas.length ? Math.round(esperas.reduce((s, x) => s + x, 0) / esperas.length) : 0;
-    const todasEsperas = [...esperas, ...andamento.map(a => segDesde(a.last_activity || a.created_at)).filter(x => x != null)];
-    const maiorEspera = todasEsperas.length ? Math.max(...todasEsperas) : 0;
+    const maiorEspera = esperas.length ? Math.max(...esperas) : 0;
 
     const emAnd = depFiltro ? andamento.length : (count?.progress ?? andamento.length);
     const emEsp = depFiltro ? aguardando.length : (count?.waiting ?? aguardando.length);
