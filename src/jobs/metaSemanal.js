@@ -7,6 +7,9 @@ function agoraSP() {
   const s = new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour12: false });
   return new Date(s);
 }
+function horaSP() {
+  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10);
+}
 function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function br(iso) { return iso.split('-').reverse().join('/'); }
 
@@ -58,17 +61,22 @@ function montarEmbed(deptLabel, lista, di, df, metas) {
 
 async function enviarMetaSemanal() {
   try {
-    const h = agoraSP();
-    if (h.getHours() < 8) return; // envia 1x por dia, a partir das 8h
     const { di, df } = semanaAtualAcum();
     const chave = df; // dedup por dia (envia uma vez ao dia)
 
     const empresas = await all(
-      `SELECT empresa_id FROM integracao_discord
+      `SELECT empresa_id, notif_cfg FROM integracao_discord
        WHERE ativo = 1 AND ev_meta = 1 AND meta_auto = 1
        AND (ultimo_meta_env IS DISTINCT FROM $1)`, [chave]);
 
-    for (const { empresa_id } of empresas) {
+    for (const emp of empresas) {
+      const empresa_id = emp.empresa_id;
+      // Respeita a config do evento "meta": agendado espera a hora; tempo real envia no ciclo.
+      let ncfg = {}; try { ncfg = emp.notif_cfg ? JSON.parse(emp.notif_cfg) : {}; } catch { /* */ }
+      const mc = ncfg.meta || {};
+      const modo = mc.modo || 'agendado';
+      const hora = (mc.hora !== undefined && mc.hora !== null && mc.hora !== '') ? +mc.hora : 8;
+      if (modo !== 'realtime' && horaSP() < hora) continue;
       await run('UPDATE integracao_discord SET ultimo_meta_env = $1 WHERE empresa_id = $2', [chave, empresa_id]);
       const cfg = await getConfig(empresa_id);
       const oficial = await satisfacaoOficial(empresa_id, di, df);
@@ -91,7 +99,7 @@ async function enviarMetaSemanal() {
 
 function iniciar() {
   setTimeout(enviarMetaSemanal, 45 * 1000);
-  setInterval(enviarMetaSemanal, 30 * 60 * 1000);
+  setInterval(enviarMetaSemanal, 10 * 60 * 1000);
   console.log('[metaSemanal] iniciado (segunda 8h, por departamento)');
 }
 

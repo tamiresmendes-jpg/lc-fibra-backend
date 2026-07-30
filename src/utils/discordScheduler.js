@@ -323,11 +323,11 @@ function iniciar() {
   setTimeout(enviarDayOffDoDia, 30000);
   setTimeout(enviarFeriadoDoDia, 35000);
   setTimeout(enviarRhidResumoDoDia, 40000);
-  setInterval(enviarAniversariantesDoDia, 30 * 60 * 1000);
-  setInterval(enviarAniversarioEmpresaDoDia, 30 * 60 * 1000);
-  setInterval(enviarDayOffDoDia, 30 * 60 * 1000);
-  setInterval(enviarFeriadoDoDia, 30 * 60 * 1000);
-  setInterval(enviarRhidResumoDoDia, 30 * 60 * 1000);
+  setInterval(enviarAniversariantesDoDia, 10 * 60 * 1000);
+  setInterval(enviarAniversarioEmpresaDoDia, 10 * 60 * 1000);
+  setInterval(enviarDayOffDoDia, 10 * 60 * 1000);
+  setInterval(enviarFeriadoDoDia, 10 * 60 * 1000);
+  setInterval(enviarRhidResumoDoDia, 10 * 60 * 1000);
 }
 
 module.exports = { iniciar, enviarAniversariantesDoDia, enviarAniversarioEmpresaDoDia, enviarDayOffDoDia, enviarFeriadoDoDia, enviarRhidResumoDoDia };
