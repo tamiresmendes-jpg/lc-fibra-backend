@@ -430,6 +430,18 @@ const DEPT_SQL = `CASE
   WHEN atendente_nome ILIKE '%comercial%' THEN 'Comercial'
   WHEN atendente_nome ILIKE '%remo%' OR atendente_nome ILIKE '%cobran%' THEN 'Cobrança/Remoção'
   ELSE 'Outros' END`;
+// Overview OFICIAL de atendentes (TMA/TME/TMR/TMR média/Total/Média) do painel Chatmix.
+async function overviewOficial(empresaId, di, df) {
+  try {
+    const cfg = await get('SELECT painel_token FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
+    if (!cfg?.painel_token) return null;
+    const url = `https://srv6.chatmix.com.br/api-v2/reports/attendants/overview/v2?page=1&with=closed&datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`;
+    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
+    if (r.status !== 200) return null;
+    return await r.json().catch(() => null);
+  } catch { return null; }
+}
+
 // Busca a satisfação OFICIAL do painel Chatmix (endpoint interno de relatório).
 // Retorna mapa { nomeMinusculo: { sat, insat, inval, total, media } } ou null se não configurado/falhar.
 async function satisfacaoOficial(empresaId, di, df) {
@@ -557,6 +569,35 @@ router.get('/por-atendente', async (req, res) => {
         tma_seg: Math.round(r.tma_seg || 0), tma_fmt: fmt(r.tma_seg || 0),
       })),
       total_geral: totalGeral,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// TEMPOS por atendente (TMA/TME/TMR/TMR média/Total/Média-dia) — fonte OFICIAL do painel Chatmix
+router.get('/tempos', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const j = await overviewOficial(emp, di, df);
+    if (!j) return res.status(400).json({ erro: 'Relatório de tempos indisponível (token do painel do Chatmix não configurado).', nao_configurado: true });
+    const dep = (req.query.departamento || '').trim();
+    const ats = listaParam(req.query.atendente);
+    let arr = (j.data || []).map(a => {
+      const nome = ((a.user?.first_name || '') + ' ' + (a.user?.last_name || '')).trim();
+      return {
+        atendente: nome, departamento: deptDeNome(nome),
+        total: a.total || 0, media_dia: a.avg ?? 0,
+        tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00',
+        percentual: a.percentage != null ? Math.round(a.percentage * 1000) / 10 : null,
+      };
+    });
+    if (dep) arr = arr.filter(a => a.departamento === dep);
+    if (ats.length) arr = arr.filter(a => ats.includes(a.atendente));
+    arr.sort((x, y) => y.total - x.total);
+    const g = j.overview || {};
+    res.json({
+      periodo: { di, df },
+      geral: { total: g.total || 0, media_dia: g.avg ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00', tmr: g.tmr || '00:00:00', tmr_avg: g.tmr_avg || '00:00:00' },
+      atendentes: arr,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
