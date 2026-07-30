@@ -65,7 +65,7 @@ async function enviarMetaSemanal() {
 
     const empresas = await all(
       `SELECT empresa_id FROM integracao_discord
-       WHERE ativo = 1 AND ev_meta = 1 AND meta_auto = 1 AND webhook_url IS NOT NULL
+       WHERE ativo = 1 AND ev_meta = 1 AND meta_auto = 1
        AND (ultimo_meta_env IS DISTINCT FROM $1)`, [chave]);
 
     for (const { empresa_id } of empresas) {
