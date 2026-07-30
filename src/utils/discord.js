@@ -12,12 +12,12 @@ const COR = {
 };
 
 // Eventos que podem ser direcionados a um canal
-const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'aniversario_empresa', 'dayoff', 'feriado', 'rhid', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
+const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'aniversario_empresa', 'dayoff', 'feriado', 'rhid', 'meta', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
 // Mapa evento → coluna de habilitação (liga/desliga)
 const EVENTO_COL = {
   ciencia: 'ev_ciencia', pop: 'ev_pop', processo: 'ev_processo',
   aniversario: 'ev_aniversario', aniversario_empresa: 'ev_aniversario_empresa', dayoff: 'ev_dayoff',
-  feriado: 'ev_feriado', rhid: 'ev_rhid',
+  feriado: 'ev_feriado', rhid: 'ev_rhid', meta: 'ev_meta',
   comunicado: 'ev_comunicado', manual: 'ev_comunicado',
   coffee: 'ev_coffee', mural: 'ev_mural', cultura: 'ev_cultura', chatmix: 'ev_chatmix',
 };
@@ -59,6 +59,7 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS notif_cfg TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_feriado INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_rhid INTEGER DEFAULT 1'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_meta INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_feriado_env TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_rhid_env TEXT'); } catch {}
     try {
@@ -158,6 +159,20 @@ async function postWebhook(url, embed, conteudo) {
   }
 }
 
+// Envia uma IMAGEM (arquivo) para o webhook do Discord (multipart)
+async function postWebhookImagem(url, buffer, filename, conteudo) {
+  try {
+    const form = new FormData();
+    form.append('payload_json', JSON.stringify({ username: 'Kronos', content: conteudo || undefined }));
+    form.append('file', new Blob([buffer], { type: 'image/png' }), filename || 'imagem.png');
+    const resp = await fetch(url, { method: 'POST', body: form });
+    return resp.ok;
+  } catch (e) {
+    console.error('[Discord] imagem', e.message);
+    return false;
+  }
+}
+
 /**
  * Notifica um evento no Discord, respeitando a config da empresa e o canal.
  * @param {object} opts { canalId, canalNome }
@@ -196,4 +211,4 @@ async function notificar(empresaId, evento, embed, opts = {}) {
   }
 }
 
-module.exports = { getConfig, getCanais, resolverWebhook, notificar, postWebhook, garantirTabela, registrarEnvio, COR, EVENTO_COL, EVENTOS };
+module.exports = { getConfig, getCanais, resolverWebhook, notificar, postWebhook, postWebhookImagem, garantirTabela, registrarEnvio, COR, EVENTO_COL, EVENTOS };

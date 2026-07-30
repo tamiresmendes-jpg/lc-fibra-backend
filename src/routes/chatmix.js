@@ -2,6 +2,7 @@ const express = require('express');
 const router = express.Router();
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { getConfig, resolverWebhook, postWebhookImagem } = require('../utils/discord');
 
 router.use(autenticar);
 
@@ -624,6 +625,26 @@ router.get('/meta', async (req, res) => {
       destaques: ambas.map(i => i.atendente),
     };
     res.json({ periodo: { di, df }, semana: true, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Envia a TABELA da Meta (imagem PNG capturada na tela) para o Discord
+router.post('/meta/discord', async (req, res) => {
+  try {
+    if (!['admin', 'gestor', 'lider'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { imagem, titulo, descricao, canal_id } = req.body;
+    if (!imagem) return res.status(400).json({ erro: 'Imagem não recebida.' });
+    const m = String(imagem).match(/^data:image\/\w+;base64,(.+)$/);
+    const buffer = Buffer.from(m ? m[1] : imagem, 'base64');
+    if (!buffer.length) return res.status(400).json({ erro: 'Imagem inválida.' });
+    const cfg = await getConfig(req.usuario.empresa_id);
+    if (!cfg || !cfg.ativo) return res.status(400).json({ erro: 'A integração do Discord não está ativa.' });
+    const url = await resolverWebhook(req.usuario.empresa_id, cfg, 'meta', canal_id);
+    if (!url) return res.status(400).json({ erro: 'Cadastre um canal do Discord primeiro.' });
+    const conteudo = `**${titulo || 'Relatório de Satisfação'}**${descricao ? `\n${descricao}` : ''}`;
+    const ok = await postWebhookImagem(url, buffer, 'meta-satisfacao.png', conteudo);
+    if (!ok) return res.status(502).json({ erro: 'Falha ao enviar ao Discord.' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
