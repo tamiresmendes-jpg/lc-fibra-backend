@@ -748,27 +748,28 @@ function situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa) {
 }
 
 // Meta por Atendente (satisfação e taxa de resposta) — no formato do Relatório de Satisfação
-router.get('/meta', async (req, res) => {
-  try {
-    const emp = req.usuario.empresa_id; const { di, df } = periodoMeta(req);
-    const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
-    const metaTaxa = Number(req.query.meta_taxa || 55);
-    const params = [emp, di, df];
-    // IMPORTANTE: nota=5 na API do Chatmix significa "RESPONDEU a pesquisa" (não "satisfeito").
-    // A classificação real (satisfeito/insatisfeito/inválida) vem da resposta do cliente
-    // lida nas mensagens (satisfacao_msg). Só isso reflete a tela oficial do Chatmix.
-    const rows = await all(
-      `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
-        COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE nota IS NOT NULL OR satisfacao_msg IS NOT NULL)::int AS respondidas,
-        COUNT(*) FILTER (WHERE satisfacao_msg = 'satisfeito')::int AS satisfeitas,
-        COUNT(*) FILTER (WHERE satisfacao_msg = 'insatisfeito')::int AS insatisfeitas,
-        COUNT(*) FILTER (WHERE satisfacao_msg = 'invalida')::int AS invalidas,
-        COUNT(*) FILTER (WHERE (nota IS NOT NULL) AND satisfacao_msg IS NULL)::int AS pendentes
-       FROM chatmix_atendimentos
-       WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
-         AND (${DEPT_SQL}) IN ('Financeiro','Suporte')${filtros(req, params)}
-       GROUP BY 1 ORDER BY total DESC`, params);
+// Cálculo do Relatório de Satisfação (Meta) — reutilizado pela rota e pelo envio automático (metaSemanal).
+// deps/ats: filtros opcionais por departamento canônico (ex.: ['Financeiro'] ou ['Suporte']) e atendentes.
+async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { deps = [], ats = [] } = {}) {
+  const params = [emp, di, df];
+  let extra = '';
+  if (deps.length) { params.push(deps); extra += ` AND (${DEPT_SQL}) = ANY($${params.length})`; }
+  if (ats.length) { params.push(ats); extra += ` AND COALESCE(atendente_nome,'Automação/Bot') = ANY($${params.length})`; }
+  // IMPORTANTE: nota=5 na API do Chatmix significa "RESPONDEU a pesquisa" (não "satisfeito").
+  // A classificação real vem da resposta lida nas mensagens (satisfacao_msg); e a fonte OFICIAL,
+  // quando disponível, substitui a dedução por mensagem.
+  const rows = await all(
+    `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
+      COUNT(*)::int AS total,
+      COUNT(*) FILTER (WHERE nota IS NOT NULL OR satisfacao_msg IS NOT NULL)::int AS respondidas,
+      COUNT(*) FILTER (WHERE satisfacao_msg = 'satisfeito')::int AS satisfeitas,
+      COUNT(*) FILTER (WHERE satisfacao_msg = 'insatisfeito')::int AS insatisfeitas,
+      COUNT(*) FILTER (WHERE satisfacao_msg = 'invalida')::int AS invalidas,
+      COUNT(*) FILTER (WHERE (nota IS NOT NULL) AND satisfacao_msg IS NULL)::int AS pendentes
+     FROM chatmix_atendimentos
+     WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
+       AND (${DEPT_SQL}) IN ('Financeiro','Suporte')${extra}
+     GROUP BY 1 ORDER BY total DESC`, params);
     // Meta considera apenas Financeiro e Call Center (=Suporte)
     const rotuloDept = nome => deptDeNome(nome) === 'Suporte' ? 'Call Center' : deptDeNome(nome);
     // Fonte OFICIAL do painel Chatmix (exata). Se disponível, substitui a dedução por mensagem.
@@ -821,7 +822,18 @@ router.get('/meta', async (req, res) => {
       perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
       destaques: ambas.map(i => i.atendente),
     };
-    res.json({ periodo: { di, df }, semana: true, fonte: fonteSatisfacao, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo });
+    return { fonte: fonteSatisfacao, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
+}
+
+router.get('/meta', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodoMeta(req);
+    const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
+    const metaTaxa = Number(req.query.meta_taxa || 55);
+    const deps = listaParam(req.query.departamento);
+    const ats = listaParam(req.query.atendente);
+    const data = await calcularMeta(emp, di, df, metaSatisfacao, metaTaxa, { deps, ats });
+    res.json({ periodo: { di, df }, semana: true, ...data });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -941,4 +953,5 @@ router.get('/medias', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+router.calcularMeta = calcularMeta;
 module.exports = router;

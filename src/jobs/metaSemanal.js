@@ -1,7 +1,8 @@
 // Envio automático semanal do Relatório de Satisfação (Meta) no Discord,
 // cada departamento no seu canal. Usa a fonte OFICIAL do painel Chatmix.
 const { all, get, run } = require('../config/database');
-const { getConfig, resolverWebhook, postWebhook, registrarEnvio, COR } = require('../utils/discord');
+const { getConfig, resolverWebhook, postWebhook, postWebhookImagem, registrarEnvio, COR } = require('../utils/discord');
+const { gerarImagemMetaPng } = require('../utils/gerarImagemMeta');
 
 function agoraSP() {
   const s = new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour12: false });
@@ -40,19 +41,15 @@ async function satisfacaoOficial(empresaId, di, df) {
   }));
 }
 
-function montarEmbed(deptLabel, lista, di, df, metas) {
-  const linhas = lista.map(a => {
-    const validas = a.sat + a.insat;
-    const pct = validas ? Math.round((a.sat / validas) * 1000) / 10 : 0;
-    return `**${a.nome}** — 😊 ${a.sat} · 😞 ${a.insat} · ⚪ ${a.inval} · satisfação ${pct}% (média ${a.media})`;
-  }).join('\n');
-  const tSat = lista.reduce((s, a) => s + a.sat, 0);
-  const tIns = lista.reduce((s, a) => s + a.insat, 0);
-  const tVal = tSat + tIns;
-  const pctGeral = tVal ? Math.round((tSat / tVal) * 1000) / 10 : 0;
+// Fallback em texto (embed) caso a geração da imagem falhe.
+function embedTexto(deptLabel, dados, di, df) {
+  const linhas = (dados.itens || []).map(m =>
+    `${m.bonificacao ? '⭐ ' : ''}**${m.atendente}** — 😊 ${m.satisfeitas} · 😞 ${m.insatisfeitas} · ⚪ ${m.invalidas} · satisfação ${m.perc_satisfacao != null ? m.perc_satisfacao.toFixed(1) : '—'}% · taxa ${m.taxa_resposta.toFixed(1)}%`
+  ).join('\n');
+  const rz = dados.resumo || {};
   return {
     title: `📊 Relatório de Satisfação — ${deptLabel}`,
-    description: `Semana ${br(di)} a ${br(df)}\n\n${linhas || '_Sem dados no período._'}\n\n**Geral:** 😊 ${tSat} · 😞 ${tIns} · satisfação ${pctGeral}%`,
+    description: `Semana ${br(di)} a ${br(df)}\n\n${linhas || '_Sem dados no período._'}\n\n**Geral:** satisfação ${rz.media_satisfacao != null ? rz.media_satisfacao.toFixed(1) : '—'}% · taxa ${rz.media_taxa_resposta != null ? rz.media_taxa_resposta.toFixed(1) : '—'}% · atingiram ambas ${rz.atingiram_ambas}/${rz.atendentes_avaliados}`,
     color: COR.roxo || COR.azul,
     footer: { text: 'Kronos — Meta de Satisfação (semanal)' },
     timestamp: new Date().toISOString(),
@@ -79,19 +76,28 @@ async function enviarMetaSemanal() {
       if (modo !== 'realtime' && horaSP() < hora) continue;
       await run('UPDATE integracao_discord SET ultimo_meta_env = $1 WHERE empresa_id = $2', [chave, empresa_id]);
       const cfg = await getConfig(empresa_id);
-      const oficial = await satisfacaoOficial(empresa_id, di, df);
-      if (!oficial) { console.warn(`[metaSemanal] ${empresa_id}: sem token/dados oficiais`); continue; }
+      // Usa a MESMA lógica do relatório da tela (fonte única) — require lazy p/ evitar ciclo.
+      const { calcularMeta } = require('../routes/chatmix');
 
       const grupos = [
-        { label: 'Financeiro', ev: 'meta_fin', lista: oficial.filter(a => deptDeNome(a.nome) === 'Financeiro') },
-        { label: 'Call Center', ev: 'meta_cc', lista: oficial.filter(a => deptDeNome(a.nome) === 'Suporte') },
+        { label: 'Financeiro', ev: 'meta_fin', deps: ['Financeiro'] },
+        { label: 'Call Center', ev: 'meta_cc', deps: ['Suporte'] },
       ];
       for (const g of grupos) {
-        if (!g.lista.length) continue;
+        const dados = await calcularMeta(empresa_id, di, df, 90, 55, { deps: g.deps });
+        if (!dados.itens.length) continue;
         const url = await resolverWebhook(empresa_id, cfg, g.ev);
         if (!url) continue;
-        const ok = await postWebhook(url, montarEmbed(g.label, g.lista.sort((a, b) => b.sat - a.sat), di, df));
-        registrarEnvio(empresa_id, 'meta', `Meta semanal ${g.label} (${br(di)}-${br(df)})`, ok, ok ? null : 'Falha no envio');
+        let ok = false;
+        try {
+          const png = await gerarImagemMetaPng(g.label, di, df, dados.itens, dados.resumo, dados.metas);
+          const legenda = `📊 **Relatório de Satisfação — ${g.label}**  ·  ${br(di)} a ${br(df)}`;
+          ok = await postWebhookImagem(url, png, `meta-${g.ev}-${df}.png`, legenda);
+        } catch (e) {
+          console.error('[metaSemanal] imagem falhou, enviando texto:', e.message);
+          ok = await postWebhook(url, embedTexto(g.label, dados, di, df));
+        }
+        registrarEnvio(empresa_id, 'meta', `Meta ${g.label} (${br(di)}-${br(df)})`, ok, ok ? null : 'Falha no envio');
       }
     }
   } catch (e) { console.error('[metaSemanal]', e.message); }
