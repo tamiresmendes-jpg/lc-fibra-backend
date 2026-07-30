@@ -200,10 +200,12 @@ async function passo(empresaId, token) {
 // Conta mensagens de UM atendimento (o mais recente ainda não contado, a partir de mensagens_desde).
 // Cobrável = type 'sent' + origin != 'internal' + ack >= 2 (entregue). Recebidas do cliente = grátis.
 async function passoMensagem(empresaId, token, desde) {
+  // Prioriza SUPORTE e FINANCEIRO (atendentes da Meta) — lê as delas primeiro; depois o resto.
   const alvo = await get(
     `SELECT atendimento_id FROM chatmix_atendimentos
      WHERE empresa_id=$1 AND msgs_sync_em IS NULL AND closed_at::date >= $2
-     ORDER BY closed_at DESC LIMIT 1`, [empresaId, desde]);
+     ORDER BY (CASE WHEN atendente_nome ILIKE '%suporte%' OR atendente_nome ILIKE '%financeiro%' THEN 0 ELSE 1 END),
+              closed_at DESC LIMIT 1`, [empresaId, desde]);
   if (!alvo) return { fez: false };
   const id = alvo.atendimento_id;
   const r = await chamar(token, `/attendances/${id}/messages`, { limit: 500 });
