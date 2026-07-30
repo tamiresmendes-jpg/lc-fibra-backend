@@ -38,8 +38,14 @@ async function garantir() {
   pronto = true;
 }
 
+// Extrai o número do percentual, que vem como texto do RHID (ex.: "  100,0%D", "  50,0%N").
+function pctNum(p) {
+  const n = parseFloat(String(p).replace(',', '.').replace(/[^\d.]/g, ''));
+  return isNaN(n) ? 0 : n;
+}
+
 // Split de horas extras por percentual (50% x 100%) usando os campos do RHID.
-// percentuaisExtra = [50,100,...]; horaExtraDeCadaPercentual = minutos de cada um.
+// percentuaisExtra = ["  50,0%D","  100,0%D", ...]; horaExtraDeCadaPercentual = minutos de cada um.
 function splitExtras(dia) {
   let e50 = 0, e100 = 0;
   const perc = Array.isArray(dia.percentuaisExtra) ? dia.percentuaisExtra : [];
@@ -47,7 +53,7 @@ function splitExtras(dia) {
   if (perc.length && horas.length) {
     perc.forEach((p, i) => {
       const min = Math.round(horas[i] || 0);
-      if (Number(p) >= 100) e100 += min; else e50 += min;
+      if (pctNum(p) >= 100) e100 += min; else e50 += min;
     });
   } else {
     // fallback: usa a regra domingo/feriado/folga
