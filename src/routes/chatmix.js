@@ -687,7 +687,12 @@ router.get('/tempos-status', async (req, res) => {
     if (jo) {
       atendentes = (jo.data || []).map(a => {
         const nome = ((a.user?.first_name || '') + ' ' + (a.user?.last_name || '')).trim();
-        return { atendente: nome, departamento: deptDeNome(nome), tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00', total: a.total || 0 };
+        const s = (jsat && jsat[nome.toLowerCase()]) || null;
+        return {
+          atendente: nome, departamento: deptDeNome(nome),
+          tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00', total: a.total || 0,
+          satisfeito: s ? s.sat : null, insatisfeito: s ? s.insat : null, invalida: s ? s.inval : null,
+        };
       }).sort((x, y) => y.total - x.total);
       // TMR/TMR média dos cards: geral = overview do painel; com filtro = média ponderada dos atendentes do setor
       if (dep) {
