@@ -563,16 +563,17 @@ router.get('/meta', async (req, res) => {
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
     const metaTaxa = Number(req.query.meta_taxa || 55);
     const params = [emp, di, df];
-    // Satisfação combina a NOTA OFICIAL da pesquisa (nota 5/1) com a dedução por
-    // mensagem (satisfacao_msg). A nota tem prioridade; a mensagem só entra quando
-    // não há nota. Assim não perdemos as respostas oficiais da pesquisa.
+    // IMPORTANTE: nota=5 na API do Chatmix significa "RESPONDEU a pesquisa" (não "satisfeito").
+    // A classificação real (satisfeito/insatisfeito/inválida) vem da resposta do cliente
+    // lida nas mensagens (satisfacao_msg). Só isso reflete a tela oficial do Chatmix.
     const rows = await all(
       `SELECT COALESCE(atendente_nome, 'Automação/Bot') AS nome,
         COUNT(*)::int AS total,
-        COUNT(*) FILTER (WHERE nota IS NOT NULL OR satisfacao_msg IS NOT NULL)::int AS processadas,
-        COUNT(*) FILTER (WHERE nota = 5 OR (nota IS NULL AND satisfacao_msg = 'satisfeito'))::int AS satisfeitas,
-        COUNT(*) FILTER (WHERE nota = 1 OR (nota IS NULL AND satisfacao_msg = 'insatisfeito'))::int AS insatisfeitas,
-        COUNT(*) FILTER (WHERE nota IS NULL AND satisfacao_msg = 'invalida')::int AS invalidas
+        COUNT(*) FILTER (WHERE nota IS NOT NULL OR satisfacao_msg IS NOT NULL)::int AS respondidas,
+        COUNT(*) FILTER (WHERE satisfacao_msg = 'satisfeito')::int AS satisfeitas,
+        COUNT(*) FILTER (WHERE satisfacao_msg = 'insatisfeito')::int AS insatisfeitas,
+        COUNT(*) FILTER (WHERE satisfacao_msg = 'invalida')::int AS invalidas,
+        COUNT(*) FILTER (WHERE (nota IS NOT NULL) AND satisfacao_msg IS NULL)::int AS pendentes
        FROM chatmix_atendimentos
        WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
          AND (${DEPT_SQL}) IN ('Financeiro','Suporte')${filtros(req, params)}
@@ -586,12 +587,13 @@ router.get('/meta', async (req, res) => {
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
       return {
-        atendente: r.nome, departamento: rotuloDept(r.nome), total: r.total, processadas: r.processadas,
+        atendente: r.nome, departamento: rotuloDept(r.nome), total: r.total,
+        respondidas: r.respondidas, pendentes: r.pendentes,
         validas, invalidas: r.invalidas, satisfeitas: r.satisfeitas, insatisfeitas: r.insatisfeitas,
         perc_satisfacao: percSat, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
         bonificacao: bateSat && bateTaxa,
-        situacao: percSat == null ? 'Sem pesquisas processadas ainda.' : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
+        situacao: percSat == null ? (r.pendentes > 0 ? `${r.pendentes} pesquisa(s) ainda sendo lida(s)…` : 'Sem pesquisas no período.') : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
     });
     // Agrupa por departamento (Financeiro e Call Center)
@@ -607,13 +609,13 @@ router.get('/meta', async (req, res) => {
     }));
     // Resumo do setor
     const totAtend = itens.reduce((s, i) => s + i.total, 0);
-    const totProc = itens.reduce((s, i) => s + i.processadas, 0);
+    const totPend = itens.reduce((s, i) => s + (i.pendentes || 0), 0);
     const totValidas = itens.reduce((s, i) => s + i.validas, 0);
     const totSatisf = itens.reduce((s, i) => s + i.satisfeitas, 0);
     const ambas = itens.filter(i => i.bonificacao);
     const resumo = {
       total_atendimentos: totAtend,
-      conversas_processadas: totProc,
+      pesquisas_pendentes: totPend,
       atendentes_avaliados: itens.length,
       media_satisfacao: totValidas ? Math.round((totSatisf / totValidas) * 10000) / 100 : null,
       media_taxa_resposta: totAtend ? Math.round((totValidas / totAtend) * 10000) / 100 : null,
