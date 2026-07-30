@@ -37,8 +37,7 @@ async function enviarAniversariantesDoDia() {
 
     const empresas = await all(
       `SELECT * FROM integracao_discord
-       WHERE ativo = 1 AND ev_aniversario = 1 AND webhook_url IS NOT NULL
-       AND (ultimo_aniv_env IS DISTINCT FROM $1)`,
+       WHERE ativo = 1 AND ev_aniversario = 1       AND (ultimo_aniv_env IS DISTINCT FROM $1)`,
       [hoje]
     );
 
@@ -88,8 +87,7 @@ async function enviarAniversarioEmpresaDoDia() {
 
     const empresas = await all(
       `SELECT * FROM integracao_discord
-       WHERE ativo = 1 AND ev_aniversario_empresa = 1 AND webhook_url IS NOT NULL
-       AND (ultimo_aniv_emp_env IS DISTINCT FROM $1)`,
+       WHERE ativo = 1 AND ev_aniversario_empresa = 1       AND (ultimo_aniv_emp_env IS DISTINCT FROM $1)`,
       [hoje]
     );
 
@@ -156,8 +154,7 @@ async function enviarDayOffDoDia() {
 
     const empresas = await all(
       `SELECT * FROM integracao_discord
-       WHERE ativo = 1 AND ev_dayoff = 1 AND webhook_url IS NOT NULL
-       AND (ultimo_dayoff_env IS DISTINCT FROM $1)`,
+       WHERE ativo = 1 AND ev_dayoff = 1       AND (ultimo_dayoff_env IS DISTINCT FROM $1)`,
       [hojeStr]
     );
 
@@ -240,8 +237,7 @@ async function enviarFeriadoDoDia() {
     await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_feriado_env TEXT`);
     const hojeStr = hojeSP();
     const empresas = await all(
-      `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_feriado = 1 AND webhook_url IS NOT NULL
-       AND (ultimo_feriado_env IS DISTINCT FROM $1)`, [hojeStr]);
+      `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_feriado = 1       AND (ultimo_feriado_env IS DISTINCT FROM $1)`, [hojeStr]);
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'feriado', cfg.hora_disparo ?? 8);
       if (ec.modo === 'realtime') continue;
@@ -284,8 +280,7 @@ async function enviarRhidResumoDoDia() {
     await run(`ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_rhid_env TEXT`);
     const hojeStr = hojeSP();
     const empresas = await all(
-      `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_rhid = 1 AND webhook_url IS NOT NULL
-       AND (ultimo_rhid_env IS DISTINCT FROM $1)`, [hojeStr]);
+      `SELECT * FROM integracao_discord WHERE ativo = 1 AND ev_rhid = 1       AND (ultimo_rhid_env IS DISTINCT FROM $1)`, [hojeStr]);
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'rhid', cfg.hora_disparo ?? 8);
       if (ec.modo === 'realtime') continue;
