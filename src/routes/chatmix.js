@@ -677,6 +677,7 @@ router.get('/tempos-status', async (req, res) => {
         tma = g.tma || tma; tme = g.tme || tme; total = g.total || 0; media_dia = g.average ?? 0;
       }
     }
+    media_dia = Math.round((Number(media_dia) || 0) * 10) / 10; // evita 1388.8888888…
 
     // Lista por atendente (TMA/TME/TMR de cada um) — relatório por atendente.
     // NÃO filtra pelo sufixo do nome: quem aparece na tabela do Status é controlado pela lista
