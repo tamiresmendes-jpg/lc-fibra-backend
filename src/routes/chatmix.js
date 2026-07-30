@@ -430,6 +430,25 @@ const DEPT_SQL = `CASE
   WHEN atendente_nome ILIKE '%comercial%' THEN 'Comercial'
   WHEN atendente_nome ILIKE '%remo%' OR atendente_nome ILIKE '%cobran%' THEN 'Cobrança/Remoção'
   ELSE 'Outros' END`;
+// Busca a satisfação OFICIAL do painel Chatmix (endpoint interno de relatório).
+// Retorna mapa { nomeMinusculo: { sat, insat, inval, total, media } } ou null se não configurado/falhar.
+async function satisfacaoOficial(empresaId, di, df) {
+  try {
+    const cfg = await get('SELECT painel_token, survey_id FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
+    if (!cfg?.painel_token || !cfg?.survey_id) return null;
+    const url = `https://srv6.chatmix.com.br/api_v2/api/v1/reports/replySatisfactionSurvey/attendants?satisfaction=${cfg.survey_id}&datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`;
+    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
+    if (r.status !== 200) return null;
+    const j = await r.json().catch(() => null);
+    const arr = j?.data?.first || [];
+    const mapa = {};
+    for (const a of arr) {
+      const nome = ((a.user_all?.first_name || '') + ' ' + (a.user_all?.last_name || '')).trim().toLowerCase();
+      mapa[nome] = { sat: a.reply_5 || 0, insat: a.reply_1 || 0, inval: a.reply_0 || 0, total: a.total || 0, media: a.average };
+    }
+    return mapa;
+  } catch { return null; }
+}
 function deptDeNome(nome) {
   const n = (nome || '').toLowerCase();
   if (n.includes('financeiro')) return 'Financeiro';
@@ -581,22 +600,29 @@ router.get('/meta', async (req, res) => {
        GROUP BY 1 ORDER BY total DESC`, params);
     // Meta considera apenas Financeiro e Call Center (=Suporte)
     const rotuloDept = nome => deptDeNome(nome) === 'Suporte' ? 'Call Center' : deptDeNome(nome);
+    // Fonte OFICIAL do painel Chatmix (exata). Se disponível, substitui a dedução por mensagem.
+    const oficial = await satisfacaoOficial(emp, di, df);
     const itens = rows.map(r => {
-      const validas = r.satisfeitas + r.insatisfeitas;           // válidas = satisfeitas + insatisfeitas
-      const percSat = validas ? Math.round((r.satisfeitas / validas) * 10000) / 100 : null; // satisfeitas / válidas
-      const taxaResp = r.total ? Math.round((validas / r.total) * 10000) / 100 : 0;          // válidas / total
+      const o = oficial ? oficial[(r.nome || '').toLowerCase()] : null;
+      const satisfeitas = o ? o.sat : r.satisfeitas;
+      const insatisfeitas = o ? o.insat : r.insatisfeitas;
+      const invalidas = o ? o.inval : r.invalidas;
+      const validas = satisfeitas + insatisfeitas;               // válidas = satisfeitas + insatisfeitas
+      const percSat = validas ? Math.round((satisfeitas / validas) * 10000) / 100 : null; // satisfeitas / válidas
+      const taxaResp = r.total ? Math.round((validas / r.total) * 10000) / 100 : 0;        // válidas / total (atendimentos)
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
       return {
         atendente: r.nome, departamento: rotuloDept(r.nome), total: r.total,
-        respondidas: r.respondidas, pendentes: r.pendentes,
-        validas, invalidas: r.invalidas, satisfeitas: r.satisfeitas, insatisfeitas: r.insatisfeitas,
+        respondidas: o ? (o.sat + o.insat + o.inval) : r.respondidas, pendentes: o ? 0 : r.pendentes,
+        validas, invalidas, satisfeitas, insatisfeitas,
         perc_satisfacao: percSat, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
         bonificacao: bateSat && bateTaxa,
         situacao: percSat == null ? (r.pendentes > 0 ? `${r.pendentes} pesquisa(s) ainda sendo lida(s)…` : 'Sem pesquisas no período.') : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
     });
+    const fonteSatisfacao = oficial ? 'oficial' : 'mensagens';
     // Agrupa por departamento (Financeiro e Call Center)
     const porDept = {};
     for (const i of itens) {
@@ -624,7 +650,7 @@ router.get('/meta', async (req, res) => {
       perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
       destaques: ambas.map(i => i.atendente),
     };
-    res.json({ periodo: { di, df }, semana: true, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo });
+    res.json({ periodo: { di, df }, semana: true, fonte: fonteSatisfacao, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
