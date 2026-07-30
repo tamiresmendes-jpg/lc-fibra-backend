@@ -447,6 +447,18 @@ async function overviewOficial(empresaId, di, df) {
   } catch { return null; }
 }
 
+// Relatório OFICIAL por departamento (total/média/TMA/TME) do painel Chatmix.
+async function departamentosOficial(empresaId, di, df) {
+  try {
+    const cfg = await get('SELECT painel_token FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
+    if (!cfg?.painel_token) return null;
+    const url = `https://srv6.chatmix.com.br/api-v2/reports/attendance/department?datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`;
+    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
+    if (r.status !== 200) return null;
+    return await r.json().catch(() => null);
+  } catch { return null; }
+}
+
 // Busca a satisfação OFICIAL do painel Chatmix (endpoint interno de relatório).
 // Retorna mapa { nomeMinusculo: { sat, insat, inval, total, media } } ou null se não configurado/falhar.
 async function satisfacaoOficial(empresaId, di, df) {
@@ -575,6 +587,21 @@ router.get('/por-atendente', async (req, res) => {
       })),
       total_geral: totalGeral,
     });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// TEMPOS por DEPARTAMENTO (Total/Média-dia/TMA/TME) — fonte OFICIAL do painel Chatmix
+router.get('/tempos-departamento', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const j = await departamentosOficial(emp, di, df);
+    if (!j) return res.status(400).json({ erro: 'Relatório de departamentos indisponível (token do painel não configurado).', nao_configurado: true });
+    const departamentos = (j.data || []).map(d => ({
+      departamento: d.name, total: d.total || 0, media_dia: d.daily_average ?? 0,
+      tma: d.tma || '00:00:00', tme: d.tme || '00:00:00',
+    })).sort((a, b) => b.total - a.total);
+    const g = j.overview || {};
+    res.json({ periodo: { di, df }, geral: { total: g.total || 0, media_dia: g.average ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00' }, departamentos });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
