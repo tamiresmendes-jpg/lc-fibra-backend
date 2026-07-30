@@ -400,7 +400,14 @@ router.get('/status', async (req, res) => {
         iniciados_hoje: ini,
         resolucao_dia: ini ? Math.round((encHoje / ini) * 1000) / 10 : 0,
       },
-      por_atendente: Object.values(porAtend).sort((a, b) => (b.em_andamento - a.em_andamento) || (b.encerrados_hoje - a.encerrados_hoje)),
+      // Ao filtrar um departamento, mostra só o TIME do setor (pelo nome do atendente).
+      // O Chatmix distribui tickets entre times, então sem esse filtro apareceria gente de
+      // outro setor que pegou um ticket do departamento selecionado.
+      por_atendente: Object.values(porAtend)
+        .filter(a => !depFiltro || deptDeNome(a.atendente) === deptDeNome(depFiltro))
+        .map(a => (!a.departamento || a.departamento === '—' || String(a.departamento).startsWith('Depto') || a.departamento === 'Sem departamento')
+          ? { ...a, departamento: deptDeNome(a.atendente) } : a)
+        .sort((a, b) => (b.em_andamento - a.em_andamento) || (b.encerrados_hoje - a.encerrados_hoje)),
       por_departamento: Object.values(porDep).sort((a, b) => (b.em_andamento + b.aguardando + b.automacao) - (a.em_andamento + a.aguardando + a.automacao)),
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
