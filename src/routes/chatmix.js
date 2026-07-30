@@ -652,7 +652,7 @@ router.get('/tempos-status', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const dep = (req.query.departamento || '').trim();
-    const [jd, jo] = await Promise.all([departamentosOficial(emp, di, df), overviewOficial(emp, di, df)]);
+    const [jd, jo, jsat] = await Promise.all([departamentosOficial(emp, di, df), overviewOficial(emp, di, df), satisfacaoOficial(emp, di, df)]);
     if (!jd && !jo) return res.status(400).json({ erro: 'Relatório de tempos indisponível (token do painel não configurado).', nao_configurado: true });
 
     const paraSeg = (t) => { const p = String(t || '0:0:0').split(':').map(n => parseInt(n, 10) || 0); return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0); };
@@ -670,20 +670,21 @@ router.get('/tempos-status', async (req, res) => {
       }
     }
 
-    // Lista por atendente (TMA/TME/TMR de cada um) — relatório por atendente
+    // Lista por atendente (TMA/TME/TMR de cada um) — relatório por atendente.
+    // NÃO filtra pelo sufixo do nome: quem aparece na tabela do Status é controlado pela lista
+    // AO VIVO (departamento real do atendimento). Aqui devolvemos TODOS para o cruzamento por nome.
     let atendentes = [];
     let tmr = '00:00:00', tmr_avg = '00:00:00';
     if (jo) {
       atendentes = (jo.data || []).map(a => {
         const nome = ((a.user?.first_name || '') + ' ' + (a.user?.last_name || '')).trim();
         return { atendente: nome, departamento: deptDeNome(nome), tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00', total: a.total || 0 };
-      });
-      if (dep) atendentes = atendentes.filter(a => a.departamento === deptDeNome(dep));
-      atendentes.sort((x, y) => y.total - x.total);
+      }).sort((x, y) => y.total - x.total);
       // TMR/TMR média dos cards: geral = overview do painel; com filtro = média ponderada dos atendentes do setor
       if (dep) {
-        const tot = atendentes.reduce((s, a) => s + a.total, 0);
-        const wavg = campo => tot ? atendentes.reduce((s, a) => s + paraSeg(a[campo]) * a.total, 0) / tot : 0;
+        const doSetor = atendentes.filter(a => a.departamento === deptDeNome(dep));
+        const tot = doSetor.reduce((s, a) => s + a.total, 0);
+        const wavg = campo => tot ? doSetor.reduce((s, a) => s + paraSeg(a[campo]) * a.total, 0) / tot : 0;
         tmr = segFmt(wavg('tmr')); tmr_avg = segFmt(wavg('tmr_avg'));
       } else {
         const g = jo.overview || {};
@@ -691,7 +692,29 @@ router.get('/tempos-status', async (req, res) => {
       }
     }
 
-    res.json({ periodo: { di, df }, geral: { tma, tme, tmr, tmr_avg, total, media_dia }, atendentes });
+    // Satisfação OFICIAL (satisfeito/insatisfeito/inválida) + % sobre o total de atendimentos do período.
+    // Numerador vem do relatório de satisfação por atendente (agrupado pelo setor do nome);
+    // denominador é o Total do período (relatório por departamento) — mesmo número do card "Total".
+    let satisfacao = null;
+    if (jsat) {
+      let sat = 0, insat = 0, inval = 0;
+      for (const [nome, v] of Object.entries(jsat)) {
+        if (dep && deptDeNome(nome) !== deptDeNome(dep)) continue;
+        sat += v.sat || 0; insat += v.insat || 0; inval += v.inval || 0;
+      }
+      const respostas = sat + insat + inval;
+      const base = total || 0;
+      const pct = n => base ? Math.round((n / base) * 1000) / 10 : 0;
+      satisfacao = {
+        satisfeito: sat, insatisfeito: insat, invalida: inval, respostas,
+        total_atend: base,
+        pct_satisfeito: pct(sat), pct_insatisfeito: pct(insat), pct_respondido: pct(respostas),
+        // satisfação relativa (satisfeitos entre os que responderam válido)
+        pct_satisfacao: (sat + insat) ? Math.round((sat / (sat + insat)) * 1000) / 10 : 0,
+      };
+    }
+
+    res.json({ periodo: { di, df }, geral: { tma, tme, tmr, tmr_avg, total, media_dia }, satisfacao, atendentes });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
