@@ -285,8 +285,9 @@ async function tick() {
     const cfg = await get('SELECT mensagens_desde FROM chatmix_config WHERE empresa_id=$1', [empresa_id]);
     const hojeD = hojeISO();
 
-    // 1) DIA ATUAL EM TEMPO REAL — atendimentos: a cada ~2 ticks, atualiza a janela de hoje.
-    if (contadorTick % 2 === 1) {
+    // 1) DIA ATUAL EM TEMPO REAL — atendimentos: atualiza a janela de hoje 1 a cada 4 ticks
+    // (deixa mais ciclos livres pra leitura de mensagens/insatisfeitos).
+    if (contadorTick % 4 === 1) {
       const rh = await refreshHojePasso(empresa_id, token);
       if (rh.fez && !rh.erro && (rh.novos > 0 || rh.page > 1)) {
         console.log(`[chatmixSync] hoje: pág ${rh.page} +${rh.novos} (total hoje ${rh.total_hoje})`);
