@@ -123,6 +123,7 @@ conectar()
     require('./utils/discordScheduler').iniciar();
     require('./jobs/chatmixSync').iniciar();
     require('./jobs/rhidSync').iniciar();
+    require('./jobs/metaSemanal').iniciar();
   })
   .catch((err) => {
     console.error('Falha ao conectar ao banco:', err.message);
