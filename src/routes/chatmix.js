@@ -95,7 +95,7 @@ router.get('/config', async (req, res) => {
     if (!soAdminGestor(req, res)) return;
     await garantir();
     const cfg = await get('SELECT * FROM integracao_chatmix WHERE empresa_id = $1', [req.usuario.empresa_id]) || {};
-    res.json({ base_url: cfg.base_url || BASE_PADRAO, tem_token: !!cfg.token });
+    res.json({ base_url: cfg.base_url || BASE_PADRAO, tem_token: !!cfg.token, tem_painel_token: !!cfg.painel_token, survey_id: cfg.survey_id || null });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -103,15 +103,20 @@ router.put('/config', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
     await garantir();
-    const { base_url, token } = req.body;
-    const atual = await get('SELECT token FROM integracao_chatmix WHERE empresa_id = $1', [req.usuario.empresa_id]);
+    const { base_url, token, painel_token, survey_id } = req.body;
+    const atual = await get('SELECT token, painel_token, survey_id FROM integracao_chatmix WHERE empresa_id = $1', [req.usuario.empresa_id]);
     const tokenFinal = (token && token.trim()) ? token.trim() : (atual?.token || null);
+    // painel_token/survey_id: só sobrescreve se vier preenchido (deixa em branco pra manter)
+    let pt = (painel_token && painel_token.trim()) ? painel_token.trim() : (atual?.painel_token || null);
+    if (pt) pt = pt.replace(/^Bearer\s+/i, '').trim(); // aceita colar com ou sem "Bearer "
+    const sid = (survey_id !== undefined && survey_id !== null && String(survey_id).trim() !== '') ? parseInt(survey_id, 10) : (atual?.survey_id || null);
     await run(
-      `INSERT INTO integracao_chatmix (empresa_id, base_url, token, auth_tipo, header_nome, atualizado_em)
-       VALUES ($1,$2,$3,'header','X-auth', NOW())
+      `INSERT INTO integracao_chatmix (empresa_id, base_url, token, painel_token, survey_id, auth_tipo, header_nome, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,'header','X-auth', NOW())
        ON CONFLICT (empresa_id) DO UPDATE SET base_url=EXCLUDED.base_url, token=EXCLUDED.token,
+         painel_token=EXCLUDED.painel_token, survey_id=EXCLUDED.survey_id,
          auth_tipo='header', header_nome='X-auth', atualizado_em=NOW()`,
-      [req.usuario.empresa_id, (base_url || '').trim() || BASE_PADRAO, tokenFinal]
+      [req.usuario.empresa_id, (base_url || '').trim() || BASE_PADRAO, tokenFinal, pt, sid]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
