@@ -598,12 +598,22 @@ router.get('/tempos', async (req, res) => {
     if (dep) arr = arr.filter(a => a.departamento === dep);
     if (ats.length) arr = arr.filter(a => ats.includes(a.atendente));
     arr.sort((x, y) => y.total - x.total);
-    const g = j.overview || {};
-    res.json({
-      periodo: { di, df },
-      geral: { total: g.total || 0, media_dia: g.avg ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00', tmr: g.tmr || '00:00:00', tmr_avg: g.tmr_avg || '00:00:00' },
-      atendentes: arr,
-    });
+
+    // GERAL: se houver filtro, recalcula a partir dos atendentes filtrados (média ponderada
+    // pelo total de atendimentos). Sem filtro, usa o overview oficial do painel.
+    const paraSeg = (t) => { const p = String(t || '0:0:0').split(':').map(n => parseInt(n, 10) || 0); return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0); };
+    const segFmt = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; const p = n => String(n).padStart(2, '0'); return `${p(h)}:${p(m)}:${p(x)}`; };
+    let geral;
+    if (dep || ats.length) {
+      const tot = arr.reduce((s, a) => s + a.total, 0);
+      const wavg = campo => tot ? arr.reduce((s, a) => s + paraSeg(a[campo]) * a.total, 0) / tot : 0;
+      const dias = diasEntre(di, df);
+      geral = { total: tot, media_dia: dias ? Math.round((tot / dias) * 10) / 10 : tot, tma: segFmt(wavg('tma')), tme: segFmt(wavg('tme')), tmr: segFmt(wavg('tmr')), tmr_avg: segFmt(wavg('tmr_avg')) };
+    } else {
+      const g = j.overview || {};
+      geral = { total: g.total || 0, media_dia: g.avg ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00', tmr: g.tmr || '00:00:00', tmr_avg: g.tmr_avg || '00:00:00' };
+    }
+    res.json({ periodo: { di, df }, geral, atendentes: arr });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
