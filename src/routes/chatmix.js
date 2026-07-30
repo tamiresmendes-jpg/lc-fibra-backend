@@ -644,6 +644,57 @@ router.get('/tempos', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// TEMPOS para o card do STATUS AO VIVO.
+// Os cards (geral) usam o relatório OFICIAL por DEPARTAMENTO (medida dos atendimentos: Financeiro TMA 00:43:14).
+// TMR / TMR média não existem no relatório por departamento — vêm do relatório por atendente.
+// A lista "atendentes" traz TMA/TME/TMR de cada atendente (para a tabela Por atendente do Status).
+router.get('/tempos-status', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
+    const dep = (req.query.departamento || '').trim();
+    const [jd, jo] = await Promise.all([departamentosOficial(emp, di, df), overviewOficial(emp, di, df)]);
+    if (!jd && !jo) return res.status(400).json({ erro: 'Relatório de tempos indisponível (token do painel não configurado).', nao_configurado: true });
+
+    const paraSeg = (t) => { const p = String(t || '0:0:0').split(':').map(n => parseInt(n, 10) || 0); return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0); };
+    const segFmt = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; const p = n => String(n).padStart(2, '0'); return `${p(h)}:${p(m)}:${p(x)}`; };
+
+    // Cards TMA/TME/Total/Média — relatório por DEPARTAMENTO (medida oficial dos atendimentos)
+    let tma = '00:00:00', tme = '00:00:00', total = 0, media_dia = 0;
+    if (jd) {
+      if (dep) {
+        const row = (jd.data || []).find(d => d.name === dep) || (jd.data || []).find(d => deptDeNome(d.name) === deptDeNome(dep));
+        if (row) { tma = row.tma || tma; tme = row.tme || tme; total = row.total || 0; media_dia = row.daily_average ?? 0; }
+      } else {
+        const g = jd.overview || {};
+        tma = g.tma || tma; tme = g.tme || tme; total = g.total || 0; media_dia = g.average ?? 0;
+      }
+    }
+
+    // Lista por atendente (TMA/TME/TMR de cada um) — relatório por atendente
+    let atendentes = [];
+    let tmr = '00:00:00', tmr_avg = '00:00:00';
+    if (jo) {
+      atendentes = (jo.data || []).map(a => {
+        const nome = ((a.user?.first_name || '') + ' ' + (a.user?.last_name || '')).trim();
+        return { atendente: nome, departamento: deptDeNome(nome), tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00', total: a.total || 0 };
+      });
+      if (dep) atendentes = atendentes.filter(a => a.departamento === deptDeNome(dep));
+      atendentes.sort((x, y) => y.total - x.total);
+      // TMR/TMR média dos cards: geral = overview do painel; com filtro = média ponderada dos atendentes do setor
+      if (dep) {
+        const tot = atendentes.reduce((s, a) => s + a.total, 0);
+        const wavg = campo => tot ? atendentes.reduce((s, a) => s + paraSeg(a[campo]) * a.total, 0) / tot : 0;
+        tmr = segFmt(wavg('tmr')); tmr_avg = segFmt(wavg('tmr_avg'));
+      } else {
+        const g = jo.overview || {};
+        tmr = g.tmr || tmr; tmr_avg = g.tmr_avg || tmr_avg;
+      }
+    }
+
+    res.json({ periodo: { di, df }, geral: { tma, tme, tmr, tmr_avg, total, media_dia }, atendentes });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Gera o texto da coluna "Situação" no estilo do relatório do setor
 function situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa) {
   if (bateSat && bateTaxa) return 'Atingiu ambas as metas.';
