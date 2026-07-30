@@ -293,8 +293,10 @@ async function enviarRhidResumoDoDia() {
       let faltas = [];
       try {
         faltas = await all(
-          `SELECT nome, departamento FROM rhid_ponto_dia
-           WHERE empresa_id = $1 AND data = $2 AND falta_dia = true AND ativo = true ORDER BY nome`,
+          `SELECT nome, departamento FROM rhid_ponto_dia p
+           WHERE empresa_id = $1 AND data = $2 AND falta_dia = true AND ativo = true
+             AND NOT EXISTS (SELECT 1 FROM rhid_ponto_excluir e WHERE e.empresa_id = p.empresa_id AND e.id_person = p.id_person)
+           ORDER BY nome`,
           [cfg.empresa_id, ontemStr]);
       } catch { continue; }
       if (!faltas.length) continue;

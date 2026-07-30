@@ -19,6 +19,17 @@ async function garantir() {
       senha TEXT,
       atualizado_em TIMESTAMP DEFAULT NOW()
     )`);
+    // Pessoas excluídas do controle de ponto: supervisores que não batem ponto (funcionario=true,
+    // não contam falta) e perfis de integração do relógio (funcionario=false, removidos totalmente).
+    await run(`CREATE TABLE IF NOT EXISTS rhid_ponto_excluir (
+      empresa_id TEXT NOT NULL,
+      id_person INTEGER NOT NULL,
+      nome TEXT,
+      funcionario BOOLEAN DEFAULT true,
+      motivo TEXT,
+      criado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, id_person)
+    )`);
     pronto = true;
   } catch (e) { console.error('[RHID]', e.message); }
 }
@@ -318,6 +329,12 @@ router.get('/indicadores', async (req, res) => {
 
     const rows = await all(`SELECT * FROM rhid_ponto_dia WHERE ${cond.join(' AND ')}`, params);
 
+    // Exclusões do ponto: funcionario=false → remove totalmente (perfil de integração/relógio);
+    // funcionario=true → mantém a pessoa, mas NÃO conta falta (supervisor que não bate ponto).
+    const excl = await all('SELECT id_person, funcionario FROM rhid_ponto_excluir WHERE empresa_id=$1', [emp]);
+    const semFalta = new Set(), removerTotal = new Set();
+    for (const e of excl) { (e.funcionario === false ? removerTotal : semFalta).add(e.id_person); }
+
     if (rows.length === 0) {
       const algum = await get('SELECT COUNT(*) c, MAX(atualizado_em) u FROM rhid_ponto_dia WHERE empresa_id=$1', [emp]);
       return res.json({ vazio: true, sincronizando: !algum || Number(algum.c) === 0, atualizado_em: algum?.u || null, periodo: { dataIni, dataFinal }, cards: {}, por_departamento: [], por_pessoa: [], ranking_faltas_dias: [], ranking_faltas_horas: [] });
@@ -328,6 +345,8 @@ router.get('/indicadores', async (req, res) => {
     let ultimaData = null;
     for (const r of rows) {
       const k = r.id_person;
+      if (removerTotal.has(k)) continue; // não é funcionário (perfil de integração)
+      const contaFalta = !semFalta.has(k); // supervisor não conta falta
       const p = pessoas[k] || (pessoas[k] = {
         id_person: k, nome: r.nome, departamento: r.departamento || 'Sem departamento',
         trabalhado: 0, extra50: 0, extra100: 0, sobreaviso: 0, noturno: 0, falta_min: 0, falta_dias: 0, atraso: 0,
@@ -338,9 +357,11 @@ router.get('/indicadores', async (req, res) => {
       p.extra100 += r.extra100_min || 0;
       p.sobreaviso += r.sobreaviso_min || 0;
       p.noturno += r.noturno_min || 0;
-      p.falta_min += r.falta_min || 0;
-      if (r.falta_dia) p.falta_dias += 1;
-      p.atraso += r.atraso_min || 0;
+      if (contaFalta) {
+        p.falta_min += r.falta_min || 0;
+        if (r.falta_dia) p.falta_dias += 1;
+        p.atraso += r.atraso_min || 0;
+      }
       if (r.atestado) p.atestados += 1;
       // saldo do banco = valor do dia mais recente (é saldo acumulado, não somar)
       const dstr = (r.data instanceof Date) ? r.data.toISOString().slice(0,10) : String(r.data).slice(0,10);
