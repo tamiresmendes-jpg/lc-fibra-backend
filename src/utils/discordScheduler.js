@@ -12,6 +12,22 @@ function horaSP() {
   return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
 }
 
+// Nome canônico/limpo do setor (junta variações do RHID, ex.: "SUPORTE TÉCNICO FIBRA" → "Suporte")
+function setorCanonico(nome) {
+  const n = (nome || '').toLowerCase();
+  if (n.includes('suporte')) return 'Suporte';
+  if (n.includes('financ')) return 'Financeiro';
+  if (n.includes('comercial')) return 'Comercial';
+  if (n.includes('noc')) return 'NOC';
+  if (n.includes('recep')) return 'Recepção';
+  if (n.includes('cobran') || n.includes('remo')) return 'Cobrança/Remoção';
+  if (n.includes('agenda')) return 'Agendamento';
+  if (n.includes('cancel')) return 'Cancelamentos';
+  if (n.includes('contrat')) return 'Contratação';
+  // fallback: primeira letra de cada palavra em maiúscula
+  return (nome || 'Outros').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+}
+
 // Emoji por setor para o lembrete de pendências de ponto
 function emojiSetor(nome) {
   const n = (nome || '').toLowerCase();
@@ -322,16 +338,17 @@ async function enviarRhidResumoDoDia() {
       const url = await resolverWebhook(cfg.empresa_id, cfg, 'rhid');
       if (!url) continue;
       const dataFmt = `${String(ontem.getDate()).padStart(2, '0')}/${String(ontem.getMonth() + 1).padStart(2, '0')}/${ontem.getFullYear()}`;
-      const totalColab = setores.reduce((s, x) => s + x.n, 0);
-      const linhas = setores.map(x => `${emojiSetor(x.setor)} ${x.setor}: ${x.n} ${x.n === 1 ? 'colaborador' : 'colaboradores'}`).join('\n');
+      // Só os SETORES com pendência (sem quantidade, sem nomes) — nomes canônicos e sem repetição.
+      const setoresUnicos = [...new Set(setores.map(x => setorCanonico(x.setor)))].sort();
+      const linhas = setoresUnicos.map(s => `${emojiSetor(s)} ${s}`).join('\n');
       const ok = await postWebhook(url, {
         title: `🔔 Lembrete de Pendências de Ponto – ${dataFmt}`,
-        description: `Foram identificadas pendências de registro de ponto referentes ao dia anterior.\n\n**Pendências por setor:**\n\n${linhas}\n\nFavor acessar o sistema para verificar as ocorrências e realizar as tratativas necessárias.`,
+        description: `Foram identificadas pendências de registro de ponto referentes ao dia anterior.\n\n**Setores com pendências:**\n${linhas}\n\nSolicitamos que os colaboradores desses setores acessem o sistema para verificar e, se necessário, regularizar suas marcações de ponto.`,
         color: COR.laranja,
         footer: { text: 'Kronos — Ponto (RHID)' },
         timestamp: new Date().toISOString(),
       });
-      registrarEnvio(cfg.empresa_id, 'rhid', `Pendências de ponto ${dataFmt} (${totalColab})`, ok, ok ? null : 'Falha no envio');
+      registrarEnvio(cfg.empresa_id, 'rhid', `Pendências de ponto ${dataFmt}`, ok, ok ? null : 'Falha no envio');
     }
   } catch (e) { console.error('[DiscordScheduler/rhid]', e.message); }
 }
