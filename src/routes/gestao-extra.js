@@ -185,13 +185,14 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
        GROUP BY 1`, [eid, mesRef]);
     const mapaVendas = Object.fromEntries(vendasMes.map(v => [v.email, v.qtd]));
 
-    // Cancelamentos: vendas do MÊS ANTERIOR do vendedor que foram canceladas no MÊS DE REFERÊNCIA
-    // (desconta do saldo de quem vendeu, mesmo que o cancelamento só tenha sido processado depois).
+    // Cancelamentos: vendas do MÊS ANTERIOR do vendedor com DATA DE CANCELAMENTO preenchida
+    // dentro do MÊS DE REFERÊNCIA (desconta do saldo de quem vendeu). Conta pela data
+    // preenchida, não pelo texto do status (o HubSoft nem sempre rotula como "cancelado").
     const cancelamentos = await all(
       `SELECT LOWER(vendedor_email) AS email, COUNT(*)::int AS qtd
        FROM meta_comercial_venda_sync
        WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
-         AND status_prefixo ILIKE '%cancel%' AND TO_CHAR(data_cancelamento,'YYYY-MM')=$3
+         AND data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM')=$3
        GROUP BY 1`, [eid, mesAnt, mesRef]);
     const mapaCancel = Object.fromEntries(cancelamentos.map(v => [v.email, v.qtd]));
 
