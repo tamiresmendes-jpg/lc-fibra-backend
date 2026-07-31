@@ -166,8 +166,13 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
     const mesRef = mesRefDe(req.query);
     const mesAnt = mesAnteriorDe(mesRef);
 
+    // Quando há usuario_id vinculado, o nome/avatar vêm do cadastro real do Kronos (usuarios) —
+    // se o nome do colaborador for corrigido lá, reflete aqui automaticamente.
     const vendedores = await all(
-      `SELECT * FROM meta_comercial_vendedor WHERE empresa_id=$1 AND ativo=true ORDER BY ordem, nome`, [eid]);
+      `SELECT v.*, u.nome AS usuario_nome, u.avatar AS usuario_avatar, u.email AS usuario_email
+       FROM meta_comercial_vendedor v
+       LEFT JOIN usuarios u ON u.id = v.usuario_id
+       WHERE v.empresa_id=$1 AND v.ativo=true ORDER BY v.ordem, v.nome`, [eid]);
     const supervisor = await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [eid])
       || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0 };
     const syncStatus = await get(`SELECT * FROM meta_comercial_sync_status WHERE empresa_id=$1`, [eid]);
@@ -200,21 +205,31 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
       const bonusMeta = v.conta_meta && bateMeta ? Number(v.bonus_meta || 0) : 0;
       const bonusGap = v.conta_meta && gap > 0 ? gap * Number(v.bonus_gap || 0) : 0;
       return {
-        ...v, qtd_vendas: qtdVendas, cancelamento, saldo, gap,
+        ...v, nome: v.usuario_nome || v.nome, // nome do sistema (Kronos) tem prioridade quando vinculado
+        qtd_vendas: qtdVendas, cancelamento, saldo, gap,
         bate_meta: bateMeta, bonus_meta_valor: bonusMeta, bonus_gap_valor: bonusGap,
         total_bonus: Math.round((bonusMeta + bonusGap) * 100) / 100,
       };
     });
 
-    // Vendedores detectados nas vendas sincronizadas mas SEM cadastro de meta ainda
-    // (facilita o cadastro: ela só clica "+ adicionar" com os dados já preenchidos).
+    // Vendedores detectados nas vendas sincronizadas mas SEM cadastro de meta ainda.
+    // Para cada um, sugere o usuário do Kronos com o mesmo e-mail (vínculo automático por
+    // e-mail) — ela só confirma com 1 clique; se não achar ninguém, cadastra manual mesmo.
     const emailsCadastrados = new Set(vendedores.map(v => (v.hubsoft_email || '').toLowerCase()).filter(Boolean));
     const naoConfigurados = await all(
       `SELECT LOWER(vendedor_email) AS email, MAX(vendedor_nome) AS nome, COUNT(*)::int AS qtd
        FROM meta_comercial_venda_sync
        WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2 AND vendedor_email IS NOT NULL
        GROUP BY 1 ORDER BY qtd DESC`, [eid, mesRef]);
-    const detectadosSemConfig = naoConfigurados.filter(n => !emailsCadastrados.has(n.email));
+    const detectados = naoConfigurados.filter(n => !emailsCadastrados.has(n.email));
+    const usuariosSistema = detectados.length
+      ? await all(`SELECT id, nome, email, avatar FROM usuarios WHERE empresa_id=$1 AND ativo=1`, [eid])
+      : [];
+    const usuarioPorEmail = new Map(usuariosSistema.map(u => [(u.email || '').toLowerCase(), u]));
+    const detectadosSemConfig = detectados.map(d => {
+      const sugestao = usuarioPorEmail.get(d.email) || null;
+      return { ...d, usuario_sugerido: sugestao ? { id: sugestao.id, nome: sugestao.nome, avatar: sugestao.avatar } : null };
+    });
 
     // Total geral do mês (soma TODAS as vendas sincronizadas, inclusive setores sem meta
     // individual como Financeiro/Call Center/Cobrança — conta_meta=false ainda entra na soma geral)
@@ -249,13 +264,19 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
 router.post('/meta-comercial/vendedor', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const { nome, filial, hubsoft_email, hubsoft_id_vendedor, meta, bonus_meta, bonus_gap, conta_meta, ordem } = req.body;
+    let { nome, filial, hubsoft_email, hubsoft_id_vendedor, usuario_id, meta, bonus_meta, bonus_gap, conta_meta, ordem } = req.body;
+    // Vínculo com usuário real do Kronos: confirma que pertence à mesma empresa e usa o nome de lá.
+    if (usuario_id) {
+      const u = await get(`SELECT id, nome FROM usuarios WHERE id=$1 AND empresa_id=$2`, [usuario_id, req.usuario.empresa_id]);
+      if (!u) return res.status(400).json({ erro: 'Usuário inválido' });
+      nome = u.nome;
+    }
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
     await run(
-      `INSERT INTO meta_comercial_vendedor (id,empresa_id,nome,filial,hubsoft_email,hubsoft_id_vendedor,meta,bonus_meta,bonus_gap,conta_meta,ordem)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
-      [id, req.usuario.empresa_id, nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null,
+      `INSERT INTO meta_comercial_vendedor (id,empresa_id,usuario_id,nome,filial,hubsoft_email,hubsoft_id_vendedor,meta,bonus_meta,bonus_gap,conta_meta,ordem)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      [id, req.usuario.empresa_id, usuario_id || null, nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null,
        meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ordem || 0]
     );
     res.status(201).json(await get(`SELECT * FROM meta_comercial_vendedor WHERE id=$1`, [id]));
@@ -267,13 +288,18 @@ router.put('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM meta_comercial_vendedor WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    const { nome, filial, hubsoft_email, hubsoft_id_vendedor, meta, bonus_meta, bonus_gap, conta_meta, ativo, ordem } = req.body;
+    let { nome, filial, hubsoft_email, hubsoft_id_vendedor, usuario_id, meta, bonus_meta, bonus_gap, conta_meta, ativo, ordem } = req.body;
+    if (usuario_id) {
+      const u = await get(`SELECT id, nome FROM usuarios WHERE id=$1 AND empresa_id=$2`, [usuario_id, req.usuario.empresa_id]);
+      if (!u) return res.status(400).json({ erro: 'Usuário inválido' });
+      nome = u.nome;
+    }
     await run(
       `UPDATE meta_comercial_vendedor SET
-         nome=$1, filial=$2, hubsoft_email=$3, hubsoft_id_vendedor=$4, meta=$5, bonus_meta=$6, bonus_gap=$7,
-         conta_meta=$8, ativo=$9, ordem=$10
-       WHERE id=$11 AND empresa_id=$12`,
-      [nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null,
+         nome=$1, filial=$2, hubsoft_email=$3, hubsoft_id_vendedor=$4, usuario_id=$5, meta=$6, bonus_meta=$7, bonus_gap=$8,
+         conta_meta=$9, ativo=$10, ordem=$11
+       WHERE id=$12 AND empresa_id=$13`,
+      [nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null, usuario_id || null,
        meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ativo !== false, ordem || 0,
        req.params.id, req.usuario.empresa_id]
     );
@@ -311,7 +337,7 @@ router.post('/meta-comercial/sync-agora', autenticar, async (req, res) => {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const eid = req.usuario.empresa_id;
     const agora = Date.now();
-    if (_ultimaSyncManual[eid] && agora - _ultimaSyncManual[eid] < 10 * 60 * 1000) {
+    if (_ultimaSyncManual[eid] && agora - _ultimaSyncManual[eid] < 2 * 60 * 1000) {
       return res.status(429).json({ erro: 'Aguarde alguns minutos antes de sincronizar novamente.' });
     }
     _ultimaSyncManual[eid] = agora;

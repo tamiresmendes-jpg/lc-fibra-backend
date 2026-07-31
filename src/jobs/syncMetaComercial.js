@@ -1,13 +1,10 @@
-// Sync diário (fora de horário de pico) das vendas do HubSoft para a Meta do Comercial.
+// Sync de hora em hora das vendas do HubSoft para a Meta do Comercial.
 // Busca só o período recente (mês atual + mês anterior) — nunca varre a base inteira de
 // clientes (16k+), o que sobrecarregaria o ERP. Grava em meta_comercial_venda_sync; a tela
 // de Meta Comercial sempre lê do banco, nunca da API do HubSoft na hora do acesso.
 const { all, run } = require('../config/database');
 const { listarServicosVendidos } = require('../services/hubsoft');
 
-function horaSP() {
-  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
-}
 function hojeSP() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD
 }
@@ -57,18 +54,16 @@ async function sincronizarEmpresa(empresa_id) {
   return gravados;
 }
 
-let ultimaDataRodada = null; // dedup: roda no máx 1x/dia por processo
-
-async function tick(forcar = false) {
+async function tick() {
   try {
-    const hoje = hojeSP();
-    if (!forcar) {
-      if (ultimaDataRodada === hoje) return; // já rodou hoje
-      if (horaSP() < 5) return; // só roda de madrugada (fora do horário de pico)
-    }
-    ultimaDataRodada = hoje;
-    // Empresas que têm ao menos 1 vendedor configurado para Meta Comercial
-    const empresas = await all('SELECT DISTINCT empresa_id FROM meta_comercial_vendedor');
+    // Empresas com o módulo "ativado" (já tem vendedor cadastrado OU já sincronizou alguma vez).
+    // Mantém o sync rodando mesmo com a lista de vendedores zerada, para a lista de
+    // "detectados no HubSoft" continuar atualizada até ela cadastrar o primeiro vendedor.
+    const empresas = await all(`
+      SELECT empresa_id FROM meta_comercial_vendedor
+      UNION
+      SELECT empresa_id FROM meta_comercial_sync_status
+    `);
     for (const { empresa_id } of empresas) {
       try {
         const n = await sincronizarEmpresa(empresa_id);
@@ -87,8 +82,11 @@ async function tick(forcar = false) {
 }
 
 function iniciar() {
-  setInterval(() => tick(false), 30 * 60 * 1000); // checa a cada 30min se já é hora (5h+) de rodar
-  console.log('[syncMetaComercial] iniciado (diário, de madrugada)');
+  setTimeout(tick, 30 * 1000); // primeira carga logo após subir
+  // De hora em hora — vendas "recentes" sem sobrecarregar o ERP (janela filtrada por data,
+  // não varre a base inteira de clientes; ~476 clientes no teste, bem leve).
+  setInterval(tick, 60 * 60 * 1000);
+  console.log('[syncMetaComercial] iniciado (a cada 1h)');
 }
 
 module.exports = { iniciar, tick, sincronizarEmpresa };

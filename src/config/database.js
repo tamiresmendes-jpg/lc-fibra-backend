@@ -1057,6 +1057,7 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS meta_comercial_vendedor (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,
+      usuario_id TEXT,
       hubsoft_email TEXT,
       hubsoft_id_vendedor INTEGER,
       nome TEXT NOT NULL,
@@ -1069,6 +1070,7 @@ async function initSchema() {
       ordem INTEGER DEFAULT 0,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    ALTER TABLE meta_comercial_vendedor ADD COLUMN IF NOT EXISTS usuario_id TEXT;
     CREATE TABLE IF NOT EXISTS meta_comercial_supervisor (
       empresa_id TEXT PRIMARY KEY,
       nome TEXT,
