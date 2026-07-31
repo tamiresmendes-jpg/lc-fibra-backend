@@ -147,6 +147,26 @@ router.get('/ranking-indicadores', autenticar, async (req, res) => {
 // por vendedor (meta_comercial_vendedor) + faixas de premiação do supervisor.
 const PODE_EDITAR_META_COMERCIAL = ['admin', 'gestor', 'lider'];
 
+// A Meta do Comercial expõe salário do supervisor e bônus por vendedor, então a LEITURA
+// também é verificada no servidor (o middleware global só cobre POST/PUT/DELETE).
+const { buscarPermsEfetivas, temPermissaoServer } = require('../utils/permissoes');
+async function exigirVerMetaComercial(req, res, next) {
+  try {
+    const u = req.usuario;
+    if (u.perfil === 'admin') return next();
+    let ownPerms = null;
+    try {
+      const row = await get('SELECT permissoes_modulos FROM usuarios WHERE id = $1', [u.id]);
+      if (row?.permissoes_modulos) ownPerms = JSON.parse(row.permissoes_modulos);
+    } catch { /* usa só os grupos */ }
+    const perms = await buscarPermsEfetivas(u.id, u.empresa_id, ownPerms);
+    if (temPermissaoServer(perms, 'gestao.meta-comercial', 'visualizar')) return next();
+    return res.status(403).json({ erro: 'Você não tem permissão para ver a Meta do Comercial.' });
+  } catch {
+    return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); // fail-closed
+  }
+}
+
 function mesRefDe(query) {
   // "YYYY-MM"; padrão = mês atual (America/Sao_Paulo)
   const s = (query.mes || '').match(/^\d{4}-\d{2}$/) ? query.mes : null;
@@ -279,7 +299,7 @@ async function montarMetaComercial(eid, mesRef, perfil) {
     };
 }
 
-router.get('/meta-comercial', autenticar, async (req, res) => {
+router.get('/meta-comercial', autenticar, exigirVerMetaComercial, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
     const mesRef = mesRefDe(req.query);
@@ -288,7 +308,7 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-router.get('/meta-comercial/pdf', autenticar, async (req, res) => {
+router.get('/meta-comercial/pdf', autenticar, exigirVerMetaComercial, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
     const mesRef = mesRefDe(req.query);

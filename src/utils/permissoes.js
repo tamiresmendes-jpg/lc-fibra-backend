@@ -184,10 +184,16 @@ const MAPA_PERMISSAO = [
   ['/api/redes-sociais',               'empresa.redes-sociais'],
   ['/api/feriados',                    'empresa.feriados'],
   ['/api/ceps',                        'empresa.consulta-cep'],
-  // Gestão extra
-  ['/api/gestao-extra/metas',          'gestao.metas'],
-  ['/api/gestao-extra/okrs',           'gestao.okrs'],
-  ['/api/gestao-extra',                'gestao.indicadores'],
+  // Gestão extra — a rota real é /api/gestao (montada em server.js); o prefixo antigo
+  // '/api/gestao-extra' nunca casava, deixando o módulo sem verificação no servidor.
+  ['/api/gestao/meta-comercial',       'gestao.meta-comercial'],
+  ['/api/gestao/metas',                'gestao.metas'],
+  ['/api/gestao/okrs',                 'gestao.okrs'],
+  ['/api/gestao',                      'gestao.indicadores'],
+  // Integrações com módulo próprio
+  ['/api/ifalei',                      'telefonia.indicadores'],
+  ['/api/chatmix',                     'atendimentos.painel'],
+  ['/api/rhid',                        'ponto.painel'],
   // ERP HubSoft — opt-in (ver MODULOS_OPT_IN abaixo)
   ['/api/erp',                         'erp.consultar'],
 ];
