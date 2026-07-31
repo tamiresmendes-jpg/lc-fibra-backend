@@ -173,7 +173,7 @@ async function montarMetaComercial(eid, mesRef, perfil) {
        LEFT JOIN usuarios u ON u.id = v.usuario_id
        WHERE v.empresa_id=$1 AND v.ativo=true ORDER BY v.ordem, v.nome`, [eid]);
     const supervisor = await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [eid])
-      || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0 };
+      || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0, salario: 0 };
     const syncStatus = await get(`SELECT * FROM meta_comercial_sync_status WHERE empresa_id=$1`, [eid]);
 
     // Vendas do mês de referência, por vendedor (email em minúsculo casa com o sync).
@@ -248,8 +248,15 @@ async function montarMetaComercial(eid, mesRef, perfil) {
     const totalSaldo = itens.reduce((s, i) => s + i.saldo, 0);
     const totalGapMeta = totalSaldo - totalMeta;
     const pctAtingido = totalMeta ? Math.round((totalSaldo / totalMeta) * 1000) / 10 : 0;
-    const bateFaixa1 = pctAtingido >= Number(supervisor.faixa1_pct || 0);
-    const bateFaixa2 = pctAtingido >= Number(supervisor.faixa2_pct || 0);
+    // Faixa dispara quando SUPERA a meta no percentual: faixa de 15% = atingir 115% da meta.
+    // O prêmio é esse mesmo percentual aplicado sobre o SALÁRIO do supervisor.
+    const f1 = Number(supervisor.faixa1_pct || 0);
+    const f2 = Number(supervisor.faixa2_pct || 0);
+    const bateFaixa1 = totalMeta > 0 && pctAtingido >= 100 + f1;
+    const bateFaixa2 = totalMeta > 0 && pctAtingido >= 100 + f2;
+    const salarioSup = Number(supervisor.salario || 0);
+    const pctPremio = bateFaixa2 ? f2 : (bateFaixa1 ? f1 : 0);
+    const valorPremiacao = Math.round(salarioSup * (pctPremio / 100) * 100) / 100;
 
     return {
       mes: mesRef,
@@ -259,7 +266,11 @@ async function montarMetaComercial(eid, mesRef, perfil) {
         ...supervisor,
         total_meta: totalMeta, total_saldo: totalSaldo, gap_meta: totalGapMeta, percentual_atingido: pctAtingido,
         bate_faixa1: bateFaixa1, bate_faixa2: bateFaixa2,
-        valor_premiacao: bateFaixa2 ? Number(supervisor.faixa2_valor || 0) : (bateFaixa1 ? Number(supervisor.faixa1_valor || 0) : 0),
+        // metas de venda necessárias para cada faixa (para exibir na tela)
+        alvo_faixa1: Math.ceil(totalMeta * (1 + f1 / 100)),
+        alvo_faixa2: Math.ceil(totalMeta * (1 + f2 / 100)),
+        pct_premio: pctPremio,
+        valor_premiacao: valorPremiacao,
       },
       total_geral_vendas_mes: totalGeralRow?.n || 0,
       sync: syncStatus || null,
@@ -346,12 +357,12 @@ router.delete('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
 router.put('/meta-comercial/supervisor', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const { nome, faixa1_pct, faixa1_valor, faixa2_pct, faixa2_valor } = req.body;
+    const { nome, faixa1_pct, faixa1_valor, faixa2_pct, faixa2_valor, salario } = req.body;
     await run(
-      `INSERT INTO meta_comercial_supervisor (empresa_id,nome,faixa1_pct,faixa1_valor,faixa2_pct,faixa2_valor)
-       VALUES ($1,$2,$3,$4,$5,$6)
-       ON CONFLICT (empresa_id) DO UPDATE SET nome=$2,faixa1_pct=$3,faixa1_valor=$4,faixa2_pct=$5,faixa2_valor=$6`,
-      [req.usuario.empresa_id, nome || null, faixa1_pct ?? 15, faixa1_valor || 0, faixa2_pct ?? 25, faixa2_valor || 0]
+      `INSERT INTO meta_comercial_supervisor (empresa_id,nome,faixa1_pct,faixa1_valor,faixa2_pct,faixa2_valor,salario)
+       VALUES ($1,$2,$3,$4,$5,$6,$7)
+       ON CONFLICT (empresa_id) DO UPDATE SET nome=$2,faixa1_pct=$3,faixa1_valor=$4,faixa2_pct=$5,faixa2_valor=$6,salario=$7`,
+      [req.usuario.empresa_id, nome || null, faixa1_pct ?? 15, faixa1_valor || 0, faixa2_pct ?? 25, faixa2_valor || 0, salario || 0]
     );
     res.json(await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [req.usuario.empresa_id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }

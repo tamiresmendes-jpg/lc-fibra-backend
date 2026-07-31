@@ -1079,6 +1079,8 @@ async function initSchema() {
       faixa2_pct REAL DEFAULT 25,
       faixa2_valor REAL DEFAULT 0
     );
+    -- Premiação do supervisor = % do salário dele, quando SUPERA a meta na faixa (ex.: 15% acima = 115%)
+    ALTER TABLE meta_comercial_supervisor ADD COLUMN IF NOT EXISTS salario REAL DEFAULT 0;
     CREATE TABLE IF NOT EXISTS meta_comercial_venda_sync (
       empresa_id TEXT NOT NULL,
       data_cadastro DATE,

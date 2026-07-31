@@ -73,8 +73,8 @@ function montarHtmlMetaComercial(dados) {
     <div class="sup">
       <div><b>Supervisor:</b> ${esc(sup.nome || '—')}</div>
       <div>Total de Meta: <b>${sup.total_meta ?? '—'}</b> · Saldo do Mês: <b>${sup.total_saldo ?? '—'}</b> · Gap: <b>${sup.gap_meta ?? '—'}</b></div>
-      <div>% Atingido: <b>${sup.percentual_atingido ?? '—'}%</b> · Faixa ${sup.faixa1_pct}%: <b>${sup.bate_faixa1 ? 'SIM' : 'NÃO'}</b> · Faixa ${sup.faixa2_pct}%: <b>${sup.bate_faixa2 ? 'SIM' : 'NÃO'}</b></div>
-      <div class="premio">Valor Premiação: ${fx(sup.valor_premiacao)}</div>
+      <div>% Atingido: <b>${sup.percentual_atingido ?? '—'}%</b> · Faixa ${sup.faixa1_pct}% (${sup.alvo_faixa1} vendas): <b>${sup.bate_faixa1 ? 'SIM' : 'NÃO'}</b> · Faixa ${sup.faixa2_pct}% (${sup.alvo_faixa2} vendas): <b>${sup.bate_faixa2 ? 'SIM' : 'NÃO'}</b></div>
+      <div class="premio">Valor Premiação: ${fx(sup.valor_premiacao)}${sup.pct_premio > 0 ? ` <span style="font-size:10px;color:#64748b;font-weight:400">(${sup.pct_premio}% de ${fx(sup.salario)})</span>` : ''}</div>
     </div>
   </body></html>`;
 }
