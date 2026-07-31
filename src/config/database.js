@@ -1081,6 +1081,8 @@ async function initSchema() {
     );
     CREATE TABLE IF NOT EXISTS meta_comercial_venda_sync (
       empresa_id TEXT NOT NULL,
+      data_cadastro DATE,
+      data_habilitacao DATE,
       id_cliente_servico BIGINT NOT NULL,
       id_vendedor INTEGER,
       vendedor_nome TEXT,
@@ -1094,6 +1096,8 @@ async function initSchema() {
       sincronizado_em TIMESTAMP DEFAULT NOW(),
       PRIMARY KEY (empresa_id, id_cliente_servico)
     );
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS data_cadastro DATE;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS data_habilitacao DATE;
     CREATE TABLE IF NOT EXISTS meta_comercial_sync_status (
       empresa_id TEXT PRIMARY KEY,
       ultima_sync TIMESTAMP,

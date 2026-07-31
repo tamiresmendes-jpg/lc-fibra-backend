@@ -25,25 +25,30 @@ async function sincronizarEmpresa(empresa_id) {
   let gravados = 0;
   for (const s of servicos) {
     const v = s.vendedor || {};
-    // data_venda vem "DD/MM/AAAA"; data_cancelamento pode vir com hora — normaliza pra YYYY-MM-DD
+    // data_venda vem "DD/MM/AAAA"; as demais podem vir com hora ou em ISO — normaliza pra YYYY-MM-DD
     const paraISO = (br) => {
       if (!br) return null;
-      const m = String(br).match(/(\d{2})\/(\d{2})\/(\d{4})/);
+      const s = String(br);
+      const iso = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+      if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`;
+      const m = s.match(/(\d{2})\/(\d{2})\/(\d{4})/);
       return m ? `${m[3]}-${m[2]}-${m[1]}` : null;
     };
     await run(
       `INSERT INTO meta_comercial_venda_sync
-        (empresa_id, id_cliente_servico, id_vendedor, vendedor_nome, vendedor_email, nome_cliente, nome_servico, data_venda, status_prefixo, data_cancelamento, motivo_cancelamento, sincronizado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NOW())
+        (empresa_id, id_cliente_servico, id_vendedor, vendedor_nome, vendedor_email, nome_cliente, nome_servico, data_venda, status_prefixo, data_cancelamento, motivo_cancelamento, data_cadastro, data_habilitacao, sincronizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW())
        ON CONFLICT (empresa_id, id_cliente_servico) DO UPDATE SET
          id_vendedor=EXCLUDED.id_vendedor, vendedor_nome=EXCLUDED.vendedor_nome, vendedor_email=EXCLUDED.vendedor_email,
          nome_cliente=EXCLUDED.nome_cliente, nome_servico=EXCLUDED.nome_servico, data_venda=EXCLUDED.data_venda,
          status_prefixo=EXCLUDED.status_prefixo, data_cancelamento=EXCLUDED.data_cancelamento,
-         motivo_cancelamento=EXCLUDED.motivo_cancelamento, sincronizado_em=NOW()`,
+         motivo_cancelamento=EXCLUDED.motivo_cancelamento, data_cadastro=EXCLUDED.data_cadastro,
+         data_habilitacao=EXCLUDED.data_habilitacao, sincronizado_em=NOW()`,
       [
         empresa_id, s.id_cliente_servico, v.id_vendedor || null, v.nome || null, (v.email || '').toLowerCase() || null,
         s.cliente_nome, s.nome || null, paraISO(s.data_venda), s.status_prefixo || null,
         paraISO(s.data_cancelamento), s.motivo_cancelamento || null,
+        paraISO(s.data_cadastro), paraISO(s.data_habilitacao),
       ]
     );
     gravados++;
