@@ -240,10 +240,16 @@ async function listarClientes({ busca } = {}) {
 // explicitamente, todo contrato cancelado fica INVISÍVEL (nunca aparece, mesmo
 // buscando todas as páginas). Documentado em docs/source/clientes/consulta.rst.
 // Retorna a lista achatada de serviços (não de clientes), cada um com { cliente, ...servico }.
-async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 30 } = {}) {
+// ATENÇÃO 2: usar data_inicio/data_fim aqui PERDE VENDAS. Esses filtros são pela data de
+// cadastro do CLIENTE, então uma venda feita em julho para um cliente cadastrado há anos não
+// aparece (medido: janela de 24 meses retorna 10.768 dos 28.416 clientes = 38% da base).
+// Por isso varremos a base completa; leva ~30s e garante 100% das vendas.
+async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } = {}) {
   const clientes = await buscarTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/cliente/todos', {
-      pagina, itens_por_pagina: 100, relacoes: 'servicos', data_inicio: dataInicio, data_fim: dataFim, cancelado: 'sim',
+      pagina, itens_por_pagina: 100, relacoes: 'servicos', cancelado: 'sim',
+      ...(dataInicio ? { data_inicio: dataInicio } : {}),
+      ...(dataFim ? { data_fim: dataFim } : {}),
     }),
     { extrair: d => d.clientes || d.data || [], maxPaginas }
   );

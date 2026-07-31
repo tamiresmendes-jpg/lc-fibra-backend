@@ -1,26 +1,15 @@
 // Sync de hora em hora das vendas do HubSoft para a Meta do Comercial.
-// Busca só o período recente (mês atual + mês anterior) — nunca varre a base inteira de
-// clientes (16k+), o que sobrecarregaria o ERP. Grava em meta_comercial_venda_sync; a tela
-// de Meta Comercial sempre lê do banco, nunca da API do HubSoft na hora do acesso.
+// Varre a base completa de clientes (~285 páginas, ~30s) porque os filtros de data da API
+// perdem vendas — ver comentário em listarServicosVendidos. Grava em meta_comercial_venda_sync;
+// a tela de Meta Comercial sempre lê do banco, nunca da API do HubSoft na hora do acesso.
 const { all, run } = require('../config/database');
 const { listarServicosVendidos } = require('../services/hubsoft');
 
-function hojeSP() {
-  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // YYYY-MM-DD
-}
-function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; }
-
 async function sincronizarEmpresa(empresa_id) {
-  const hoje = new Date(hojeSP() + 'T12:00');
-  // ATENÇÃO: data_inicio/data_fim da API do HubSoft filtram pela data de CADASTRO DO CLIENTE,
-  // não pela data de venda do serviço. Uma venda feita em julho para um cliente cadastrado em
-  // 2024 só aparece se a janela alcançar 2024. Por isso buscamos uma janela LARGA (24 meses)
-  // e filtramos pela data_venda do nosso lado, ao montar o relatório.
-  const inicioJanela = new Date(hoje.getFullYear(), hoje.getMonth() - 24, 1);
-  const dataInicio = ymd(inicioJanela);
-  const dataFim = hojeSP();
-
-  const servicos = await listarServicosVendidos({ dataInicio, dataFim, maxPaginas: 400 });
+  // SEM filtro de data: data_inicio/data_fim da API filtram pela data de cadastro do CLIENTE,
+  // e uma venda feita este mês para um cliente antigo ficaria de fora (janela de 24 meses
+  // cobria só 38% da base). A varredura completa leva ~30s e garante 100% das vendas.
+  const servicos = await listarServicosVendidos();
 
   let gravados = 0;
   for (const s of servicos) {
