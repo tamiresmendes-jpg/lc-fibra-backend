@@ -171,7 +171,8 @@ async function montarMetaComercial(eid, mesRef, perfil) {
       `SELECT v.*, u.nome AS usuario_nome, u.avatar AS usuario_avatar, u.email AS usuario_email
        FROM meta_comercial_vendedor v
        LEFT JOIN usuarios u ON u.id = v.usuario_id
-       WHERE v.empresa_id=$1 AND v.ativo=true ORDER BY v.ordem, v.nome`, [eid]);
+       WHERE v.empresa_id=$1 AND v.ativo=true
+       ORDER BY v.meta DESC, v.ordem, v.nome`, [eid]);
     const supervisor = await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [eid])
       || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0, salario: 0 };
     const syncStatus = await get(`SELECT * FROM meta_comercial_sync_status WHERE empresa_id=$1`, [eid]);
