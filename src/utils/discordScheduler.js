@@ -7,7 +7,9 @@ function hojeSP() {
   return s;
 }
 function horaSP() {
-  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10);
+  // % 24 corrige o quirk do Node: à meia-noite o toLocaleString retorna "24" (não "00"),
+  // o que furava o portão dos agendados (24 >= qualquer hora) e disparava tudo às 00h.
+  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
 }
 
 // Config por evento definida pela usuária (JSON notif_cfg): { modo, antecedencia, hora }

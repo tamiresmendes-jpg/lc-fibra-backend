@@ -9,7 +9,8 @@ function agoraSP() {
   return new Date(s);
 }
 function horaSP() {
-  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10);
+  // % 24: à meia-noite o Node retorna "24" em vez de "00", o que furava o portão do agendado.
+  return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
 }
 function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function br(iso) { return iso.split('-').reverse().join('/'); }
