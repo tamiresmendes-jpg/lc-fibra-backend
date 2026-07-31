@@ -124,6 +124,7 @@ conectar()
     require('./jobs/chatmixSync').iniciar();
     require('./jobs/rhidSync').iniciar();
     require('./jobs/metaSemanal').iniciar();
+    require('./jobs/syncMetaComercial').iniciar();
   })
   .catch((err) => {
     console.error('Falha ao conectar ao banco:', err.message);

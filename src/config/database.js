@@ -1051,6 +1051,55 @@ async function initSchema() {
     );
   `);
 
+  // Meta do Comercial: vendedores (config de meta/bônus), supervisor (faixas de premiação)
+  // e cache das vendas sincronizadas do HubSoft (evita bater na API do ERP a cada acesso à tela).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS meta_comercial_vendedor (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      hubsoft_email TEXT,
+      hubsoft_id_vendedor INTEGER,
+      nome TEXT NOT NULL,
+      filial TEXT,
+      meta INTEGER DEFAULT 0,
+      bonus_meta REAL DEFAULT 0,
+      bonus_gap REAL DEFAULT 0,
+      conta_meta BOOLEAN DEFAULT true,
+      ativo BOOLEAN DEFAULT true,
+      ordem INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    CREATE TABLE IF NOT EXISTS meta_comercial_supervisor (
+      empresa_id TEXT PRIMARY KEY,
+      nome TEXT,
+      faixa1_pct REAL DEFAULT 15,
+      faixa1_valor REAL DEFAULT 0,
+      faixa2_pct REAL DEFAULT 25,
+      faixa2_valor REAL DEFAULT 0
+    );
+    CREATE TABLE IF NOT EXISTS meta_comercial_venda_sync (
+      empresa_id TEXT NOT NULL,
+      id_cliente_servico BIGINT NOT NULL,
+      id_vendedor INTEGER,
+      vendedor_nome TEXT,
+      vendedor_email TEXT,
+      nome_cliente TEXT,
+      nome_servico TEXT,
+      data_venda DATE,
+      status_prefixo TEXT,
+      data_cancelamento DATE,
+      motivo_cancelamento TEXT,
+      sincronizado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, id_cliente_servico)
+    );
+    CREATE TABLE IF NOT EXISTS meta_comercial_sync_status (
+      empresa_id TEXT PRIMARY KEY,
+      ultima_sync TIMESTAMP,
+      ultimo_status TEXT,
+      ultimo_erro TEXT
+    );
+  `);
+
   // Auditoria extra: não conformidades, evidências
   await pool.query(`
     CREATE TABLE IF NOT EXISTS auditoria_nao_conformidades (

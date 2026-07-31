@@ -231,8 +231,30 @@ async function listarClientes({ busca } = {}) {
   );
 }
 
+// Serviços (contratos) vendidos, com vendedor — para a Meta do Comercial.
+// O HubSoft não tem endpoint direto de "venda"; o contrato vem aninhado em
+// cliente/todos?relacoes=servicos. Filtrar por data_inicio/data_fim reduz MUITO
+// o volume (testado: 16403 clientes → 476 num intervalo de ~1 mês), então NUNCA
+// varrer todos os clientes sem esse filtro (ficaria pesado para o ERP).
+// Retorna a lista achatada de serviços (não de clientes), cada um com { cliente, ...servico }.
+async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 30 } = {}) {
+  const clientes = await buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/cliente/todos', {
+      pagina, itens_por_pagina: 100, relacoes: 'servicos', data_inicio: dataInicio, data_fim: dataFim,
+    }),
+    { extrair: d => d.clientes || d.data || [], maxPaginas }
+  );
+  const servicos = [];
+  for (const c of clientes) {
+    for (const s of (c.servicos || [])) {
+      servicos.push({ ...s, cliente_nome: c.nome_razaosocial || c.nome_fantasia || null });
+    }
+  }
+  return servicos;
+}
+
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
-  buscarTiposOSPorId, getToken, CanceladoError,
+  listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
 };

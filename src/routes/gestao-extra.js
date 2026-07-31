@@ -142,4 +142,183 @@ router.get('/ranking-indicadores', autenticar, async (req, res) => {
   } catch { res.status(500).json({ erro: 'Erro ao buscar ranking' }); }
 });
 
+// ── META DO COMERCIAL ───────────────────────────────────────────────────────
+// Vendas sincronizadas do HubSoft (meta_comercial_venda_sync) + config de meta/bônus
+// por vendedor (meta_comercial_vendedor) + faixas de premiação do supervisor.
+const PODE_EDITAR_META_COMERCIAL = ['admin', 'gestor', 'lider'];
+
+function mesRefDe(query) {
+  // "YYYY-MM"; padrão = mês atual (America/Sao_Paulo)
+  const s = (query.mes || '').match(/^\d{4}-\d{2}$/) ? query.mes : null;
+  if (s) return s;
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  return hoje.slice(0, 7);
+}
+function mesAnteriorDe(mesRef) {
+  const [a, m] = mesRef.split('-').map(Number);
+  const d = new Date(a, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+router.get('/meta-comercial', autenticar, async (req, res) => {
+  try {
+    const eid = req.usuario.empresa_id;
+    const mesRef = mesRefDe(req.query);
+    const mesAnt = mesAnteriorDe(mesRef);
+
+    const vendedores = await all(
+      `SELECT * FROM meta_comercial_vendedor WHERE empresa_id=$1 AND ativo=true ORDER BY ordem, nome`, [eid]);
+    const supervisor = await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [eid])
+      || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0 };
+    const syncStatus = await get(`SELECT * FROM meta_comercial_sync_status WHERE empresa_id=$1`, [eid]);
+
+    // Vendas do mês de referência, por vendedor (email em minúsculo casa com o sync)
+    const vendasMes = await all(
+      `SELECT LOWER(vendedor_email) AS email, COUNT(*)::int AS qtd
+       FROM meta_comercial_venda_sync
+       WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
+       GROUP BY 1`, [eid, mesRef]);
+    const mapaVendas = Object.fromEntries(vendasMes.map(v => [v.email, v.qtd]));
+
+    // Cancelamentos: vendas do MÊS ANTERIOR do vendedor que foram canceladas no MÊS DE REFERÊNCIA
+    // (desconta do saldo de quem vendeu, mesmo que o cancelamento só tenha sido processado depois).
+    const cancelamentos = await all(
+      `SELECT LOWER(vendedor_email) AS email, COUNT(*)::int AS qtd
+       FROM meta_comercial_venda_sync
+       WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
+         AND status_prefixo ILIKE '%cancel%' AND TO_CHAR(data_cancelamento,'YYYY-MM')=$3
+       GROUP BY 1`, [eid, mesAnt, mesRef]);
+    const mapaCancel = Object.fromEntries(cancelamentos.map(v => [v.email, v.qtd]));
+
+    const itens = vendedores.map(v => {
+      const email = (v.hubsoft_email || '').toLowerCase();
+      const qtdVendas = mapaVendas[email] || 0;
+      const cancelamento = mapaCancel[email] || 0;
+      const saldo = qtdVendas - cancelamento;
+      const gap = saldo - (v.meta || 0);
+      const bateMeta = v.conta_meta ? saldo >= (v.meta || 0) : null;
+      const bonusMeta = v.conta_meta && bateMeta ? Number(v.bonus_meta || 0) : 0;
+      const bonusGap = v.conta_meta && gap > 0 ? gap * Number(v.bonus_gap || 0) : 0;
+      return {
+        ...v, qtd_vendas: qtdVendas, cancelamento, saldo, gap,
+        bate_meta: bateMeta, bonus_meta_valor: bonusMeta, bonus_gap_valor: bonusGap,
+        total_bonus: Math.round((bonusMeta + bonusGap) * 100) / 100,
+      };
+    });
+
+    // Vendedores detectados nas vendas sincronizadas mas SEM cadastro de meta ainda
+    // (facilita o cadastro: ela só clica "+ adicionar" com os dados já preenchidos).
+    const emailsCadastrados = new Set(vendedores.map(v => (v.hubsoft_email || '').toLowerCase()).filter(Boolean));
+    const naoConfigurados = await all(
+      `SELECT LOWER(vendedor_email) AS email, MAX(vendedor_nome) AS nome, COUNT(*)::int AS qtd
+       FROM meta_comercial_venda_sync
+       WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2 AND vendedor_email IS NOT NULL
+       GROUP BY 1 ORDER BY qtd DESC`, [eid, mesRef]);
+    const detectadosSemConfig = naoConfigurados.filter(n => !emailsCadastrados.has(n.email));
+
+    // Total geral do mês (soma TODAS as vendas sincronizadas, inclusive setores sem meta
+    // individual como Financeiro/Call Center/Cobrança — conta_meta=false ainda entra na soma geral)
+    const totalGeralRow = await get(
+      `SELECT COUNT(*)::int AS n FROM meta_comercial_venda_sync WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2`,
+      [eid, mesRef]);
+
+    const totalMeta = itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0);
+    const totalSaldo = itens.reduce((s, i) => s + i.saldo, 0);
+    const totalGapMeta = totalSaldo - totalMeta;
+    const pctAtingido = totalMeta ? Math.round((totalSaldo / totalMeta) * 1000) / 10 : 0;
+    const bateFaixa1 = pctAtingido >= Number(supervisor.faixa1_pct || 0);
+    const bateFaixa2 = pctAtingido >= Number(supervisor.faixa2_pct || 0);
+
+    res.json({
+      mes: mesRef,
+      itens,
+      detectados_sem_config: detectadosSemConfig,
+      supervisor: {
+        ...supervisor,
+        total_meta: totalMeta, total_saldo: totalSaldo, gap_meta: totalGapMeta, percentual_atingido: pctAtingido,
+        bate_faixa1: bateFaixa1, bate_faixa2: bateFaixa2,
+        valor_premiacao: bateFaixa2 ? Number(supervisor.faixa2_valor || 0) : (bateFaixa1 ? Number(supervisor.faixa1_valor || 0) : 0),
+      },
+      total_geral_vendas_mes: totalGeralRow?.n || 0,
+      sync: syncStatus || null,
+      pode_editar: PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil),
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.post('/meta-comercial/vendedor', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { nome, filial, hubsoft_email, hubsoft_id_vendedor, meta, bonus_meta, bonus_gap, conta_meta, ordem } = req.body;
+    if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
+    const id = uuidv4();
+    await run(
+      `INSERT INTO meta_comercial_vendedor (id,empresa_id,nome,filial,hubsoft_email,hubsoft_id_vendedor,meta,bonus_meta,bonus_gap,conta_meta,ordem)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
+      [id, req.usuario.empresa_id, nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null,
+       meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ordem || 0]
+    );
+    res.status(201).json(await get(`SELECT * FROM meta_comercial_vendedor WHERE id=$1`, [id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const exist = await get(`SELECT id FROM meta_comercial_vendedor WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
+    if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
+    const { nome, filial, hubsoft_email, hubsoft_id_vendedor, meta, bonus_meta, bonus_gap, conta_meta, ativo, ordem } = req.body;
+    await run(
+      `UPDATE meta_comercial_vendedor SET
+         nome=$1, filial=$2, hubsoft_email=$3, hubsoft_id_vendedor=$4, meta=$5, bonus_meta=$6, bonus_gap=$7,
+         conta_meta=$8, ativo=$9, ordem=$10
+       WHERE id=$11 AND empresa_id=$12`,
+      [nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null,
+       meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ativo !== false, ordem || 0,
+       req.params.id, req.usuario.empresa_id]
+    );
+    res.json(await get(`SELECT * FROM meta_comercial_vendedor WHERE id=$1`, [req.params.id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.delete('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    await run(`DELETE FROM meta_comercial_vendedor WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/meta-comercial/supervisor', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { nome, faixa1_pct, faixa1_valor, faixa2_pct, faixa2_valor } = req.body;
+    await run(
+      `INSERT INTO meta_comercial_supervisor (empresa_id,nome,faixa1_pct,faixa1_valor,faixa2_pct,faixa2_valor)
+       VALUES ($1,$2,$3,$4,$5,$6)
+       ON CONFLICT (empresa_id) DO UPDATE SET nome=$2,faixa1_pct=$3,faixa1_valor=$4,faixa2_pct=$5,faixa2_valor=$6`,
+      [req.usuario.empresa_id, nome || null, faixa1_pct ?? 15, faixa1_valor || 0, faixa2_pct ?? 25, faixa2_valor || 0]
+    );
+    res.json(await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [req.usuario.empresa_id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Sincronização manual (a usuária dispara conscientemente; tem cooldown de 10 min
+// para evitar clique repetido sobrecarregando o ERP).
+let _ultimaSyncManual = {};
+router.post('/meta-comercial/sync-agora', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const eid = req.usuario.empresa_id;
+    const agora = Date.now();
+    if (_ultimaSyncManual[eid] && agora - _ultimaSyncManual[eid] < 10 * 60 * 1000) {
+      return res.status(429).json({ erro: 'Aguarde alguns minutos antes de sincronizar novamente.' });
+    }
+    _ultimaSyncManual[eid] = agora;
+    const { sincronizarEmpresa } = require('../jobs/syncMetaComercial');
+    const n = await sincronizarEmpresa(eid);
+    res.json({ ok: true, servicos_sincronizados: n });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 module.exports = router;
