@@ -160,10 +160,9 @@ function mesAnteriorDe(mesRef) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-router.get('/meta-comercial', autenticar, async (req, res) => {
-  try {
-    const eid = req.usuario.empresa_id;
-    const mesRef = mesRefDe(req.query);
+// Calcula o relatório completo da Meta Comercial (vendedores + supervisor). Reutilizado
+// pela tela (JSON) e pelo PDF, para nunca divergir entre os dois.
+async function montarMetaComercial(eid, mesRef, perfil) {
     const mesAnt = mesAnteriorDe(mesRef);
 
     // Quando há usuario_id vinculado, o nome/avatar vêm do cadastro real do Kronos (usuarios) —
@@ -245,7 +244,7 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
     const bateFaixa1 = pctAtingido >= Number(supervisor.faixa1_pct || 0);
     const bateFaixa2 = pctAtingido >= Number(supervisor.faixa2_pct || 0);
 
-    res.json({
+    return {
       mes: mesRef,
       itens,
       detectados_sem_config: detectadosSemConfig,
@@ -257,8 +256,29 @@ router.get('/meta-comercial', autenticar, async (req, res) => {
       },
       total_geral_vendas_mes: totalGeralRow?.n || 0,
       sync: syncStatus || null,
-      pode_editar: PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil),
-    });
+      pode_editar: PODE_EDITAR_META_COMERCIAL.includes(perfil),
+    };
+}
+
+router.get('/meta-comercial', autenticar, async (req, res) => {
+  try {
+    const eid = req.usuario.empresa_id;
+    const mesRef = mesRefDe(req.query);
+    const dados = await montarMetaComercial(eid, mesRef, req.usuario.perfil);
+    res.json(dados);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.get('/meta-comercial/pdf', autenticar, async (req, res) => {
+  try {
+    const eid = req.usuario.empresa_id;
+    const mesRef = mesRefDe(req.query);
+    const dados = await montarMetaComercial(eid, mesRef, req.usuario.perfil);
+    const { gerarPDFMetaComercial } = require('../utils/gerarPDFMetaComercial');
+    const pdfBuffer = await gerarPDFMetaComercial(dados);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Meta-Comercial-${mesRef}.pdf"`);
+    res.send(pdfBuffer);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
