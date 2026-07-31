@@ -12,6 +12,21 @@ function horaSP() {
   return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
 }
 
+// Emoji por setor para o lembrete de pendências de ponto
+function emojiSetor(nome) {
+  const n = (nome || '').toLowerCase();
+  if (n.includes('suporte')) return '🛠️';
+  if (n.includes('financ')) return '💰';
+  if (n.includes('comercial')) return '📞';
+  if (n.includes('noc')) return '🌐';
+  if (n.includes('recep')) return '🎧';
+  if (n.includes('cobran') || n.includes('remo')) return '💳';
+  if (n.includes('agenda')) return '📅';
+  if (n.includes('cancel')) return '❌';
+  if (n.includes('contrat')) return '📝';
+  return '📌';
+}
+
 // Config por evento definida pela usuária (JSON notif_cfg): { modo, antecedencia, hora }
 function evCfg(cfg, ev, horaDefault) {
   let m = {}; try { m = cfg.notif_cfg ? JSON.parse(cfg.notif_cfg) : {}; } catch {}
@@ -292,28 +307,31 @@ async function enviarRhidResumoDoDia() {
       // faltas do dia anterior
       const ontem = new Date(hojeStr + 'T12:00'); ontem.setDate(ontem.getDate() - 1);
       const ontemStr = ymdD(ontem);
-      let faltas = [];
+      // Pendências agrupadas por SETOR (apenas quantidade, SEM nomes — respeita a LGPD).
+      let setores = [];
       try {
-        faltas = await all(
-          `SELECT nome, departamento FROM rhid_ponto_dia p
+        setores = await all(
+          `SELECT COALESCE(NULLIF(TRIM(departamento), ''), 'Sem setor') AS setor, COUNT(*)::int AS n
+           FROM rhid_ponto_dia p
            WHERE empresa_id = $1 AND data = $2 AND falta_dia = true AND ativo = true
              AND NOT EXISTS (SELECT 1 FROM rhid_ponto_excluir e WHERE e.empresa_id = p.empresa_id AND e.id_person = p.id_person)
-           ORDER BY nome`,
+           GROUP BY 1 ORDER BY n DESC, setor`,
           [cfg.empresa_id, ontemStr]);
       } catch { continue; }
-      if (!faltas.length) continue;
+      if (!setores.length) continue;
       const url = await resolverWebhook(cfg.empresa_id, cfg, 'rhid');
       if (!url) continue;
-      const dataFmt = `${String(ontem.getDate()).padStart(2,'0')}/${String(ontem.getMonth()+1).padStart(2,'0')}`;
-      const linhas = faltas.map(f => `• **${f.nome}**${f.departamento ? ` (${f.departamento})` : ''}`).join('\n');
+      const dataFmt = `${String(ontem.getDate()).padStart(2, '0')}/${String(ontem.getMonth() + 1).padStart(2, '0')}/${ontem.getFullYear()}`;
+      const totalColab = setores.reduce((s, x) => s + x.n, 0);
+      const linhas = setores.map(x => `${emojiSetor(x.setor)} ${x.setor}: ${x.n} ${x.n === 1 ? 'colaborador' : 'colaboradores'}`).join('\n');
       const ok = await postWebhook(url, {
-        title: `🕐 Ponto — Faltas de ${dataFmt}`,
-        description: `${faltas.length} colaborador(es) com falta:\n\n${linhas}`,
+        title: `🔔 Lembrete de Pendências de Ponto – ${dataFmt}`,
+        description: `Foram identificadas pendências de registro de ponto referentes ao dia anterior.\n\n**Pendências por setor:**\n\n${linhas}\n\nFavor acessar o sistema para verificar as ocorrências e realizar as tratativas necessárias.`,
         color: COR.laranja,
         footer: { text: 'Kronos — Ponto (RHID)' },
         timestamp: new Date().toISOString(),
       });
-      registrarEnvio(cfg.empresa_id, 'rhid', `Faltas de ${dataFmt} (${faltas.length})`, ok, ok ? null : 'Falha no envio');
+      registrarEnvio(cfg.empresa_id, 'rhid', `Pendências de ponto ${dataFmt} (${totalColab})`, ok, ok ? null : 'Falha no envio');
     }
   } catch (e) { console.error('[DiscordScheduler/rhid]', e.message); }
 }
