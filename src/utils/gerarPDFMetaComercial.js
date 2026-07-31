@@ -8,6 +8,11 @@ const mesBR = (mesRef) => {
   const [a, m] = mesRef.split('-').map(Number);
   return new Date(a, m - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 };
+// Data/hora de emissão no fuso de Brasília
+const emissao = () => new Date().toLocaleString('pt-BR', {
+  timeZone: 'America/Sao_Paulo',
+  day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
+});
 
 function montarHtmlMetaComercial(dados) {
   const linhas = (dados.itens || []).map(i => `
@@ -45,12 +50,22 @@ function montarHtmlMetaComercial(dados) {
     th{background:#fde047;color:#0b2b6b;font-weight:800;padding:5px 6px;text-align:left;white-space:nowrap}
     td{padding:4px 6px;border-bottom:1px solid #f1f5f9}
     tfoot td{background:#fde047;font-weight:800;color:#0b2b6b}
-    .sup{margin-top:18px;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font-size:11.5px;max-width:320px}
+    .info{font-size:10px;color:#334155;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:6px 10px;margin-bottom:12px}
+    .info b{color:#0b2b6b}
+    .sup{margin-top:18px;border:1px solid #e2e8f0;border-radius:8px;padding:12px;font-size:11.5px;max-width:420px}
     .sup b{color:#0b2b6b}
-    .premio{font-size:14px;color:#16a34a;font-weight:800;margin-top:6px}
+    .sup .linha{margin-top:3px}
+    .premio{font-size:14px;color:#16a34a;font-weight:800;margin-top:8px;border-top:1px solid #e2e8f0;padding-top:6px}
   </style></head><body>
     <h1>📊 Meta do Comercial</h1>
-    <div class="sub">Período: ${mesBR(dados.mes)} · Total geral de vendas no mês (todos os setores): ${dados.total_geral_vendas_mes ?? '—'}</div>
+    <div class="sub">Período: ${mesBR(dados.mes)}</div>
+    <div class="info">
+      <b>Sistema:</b> Kronos — LC Virtual Net &nbsp;·&nbsp;
+      <b>Departamento:</b> Comercial &nbsp;·&nbsp;
+      <b>Emissão:</b> ${emissao()} &nbsp;·&nbsp;
+      <b>Vendedores:</b> ${itens.length} &nbsp;·&nbsp;
+      <b>Total de vendas no mês (todos os setores):</b> ${dados.total_geral_vendas_mes ?? '—'}
+    </div>
     <table>
       <thead><tr>
         <th>Vendedor</th><th>Filial</th><th>Meta</th><th>Vendas</th><th>Cancel.</th><th>Saldo</th>
@@ -71,9 +86,17 @@ function montarHtmlMetaComercial(dados) {
       </tr></tfoot>
     </table>
     <div class="sup">
-      <div><b>Supervisor:</b> ${esc(sup.nome || '—')}</div>
-      <div>Total de Meta: <b>${sup.total_meta ?? '—'}</b> · Saldo do Mês: <b>${sup.total_saldo ?? '—'}</b> · Gap: <b>${sup.gap_meta ?? '—'}</b></div>
-      <div>% Atingido: <b>${sup.percentual_atingido ?? '—'}%</b> · Faixa ${sup.faixa1_pct}% (${sup.alvo_faixa1} vendas): <b>${sup.bate_faixa1 ? 'SIM' : 'NÃO'}</b> · Faixa ${sup.faixa2_pct}% (${sup.alvo_faixa2} vendas): <b>${sup.bate_faixa2 ? 'SIM' : 'NÃO'}</b></div>
+      <div style="font-size:13px"><b>Supervisão — ${esc(sup.nome || '—')}</b></div>
+      <div class="linha">Meta total do setor: <b>${sup.total_meta ?? '—'}</b> &nbsp;·&nbsp; Saldo do mês: <b>${sup.total_saldo ?? '—'}</b> &nbsp;·&nbsp; Gap: <b style="color:${(sup.gap_meta ?? 0) >= 0 ? '#16a34a' : '#dc2626'}">${sup.gap_meta ?? '—'}</b></div>
+      <div class="linha">Atingimento: <b>${sup.percentual_atingido ?? '—'}%</b> da meta &nbsp;·&nbsp; Salário base: <b>${fx(sup.salario)}</b></div>
+      <div class="linha">
+        Faixa ${sup.faixa1_pct}% acima <span style="color:#64748b">(precisa ${sup.alvo_faixa1} vendas)</span>:
+        <b style="color:${sup.bate_faixa1 ? '#16a34a' : '#dc2626'}">${sup.bate_faixa1 ? 'SIM' : 'NÃO'}</b>
+      </div>
+      <div class="linha">
+        Faixa ${sup.faixa2_pct}% acima <span style="color:#64748b">(precisa ${sup.alvo_faixa2} vendas)</span>:
+        <b style="color:${sup.bate_faixa2 ? '#16a34a' : '#dc2626'}">${sup.bate_faixa2 ? 'SIM' : 'NÃO'}</b>
+      </div>
       <div class="premio">Valor Premiação: ${fx(sup.valor_premiacao)}${sup.pct_premio > 0 ? ` <span style="font-size:10px;color:#64748b;font-weight:400">(${sup.pct_premio}% de ${fx(sup.salario)})</span>` : ''}</div>
     </div>
   </body></html>`;
