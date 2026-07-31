@@ -176,11 +176,15 @@ async function montarMetaComercial(eid, mesRef, perfil) {
       || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0 };
     const syncStatus = await get(`SELECT * FROM meta_comercial_sync_status WHERE empresa_id=$1`, [eid]);
 
-    // Vendas do mês de referência, por vendedor (email em minúsculo casa com o sync)
+    // Vendas do mês de referência, por vendedor (email em minúsculo casa com o sync).
+    // Venda cancelada DENTRO DO PRÓPRIO MÊS não conta (nasceu e morreu no mesmo mês) — é a
+    // mesma regra do relatório oficial do HubSoft, conferido registro a registro em jul/2026.
+    // Se cancelar num mês seguinte, aí sim entra como cancelamento naquele mês.
     const vendasMes = await all(
       `SELECT LOWER(vendedor_email) AS email, COUNT(*)::int AS qtd
        FROM meta_comercial_venda_sync
        WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
+         AND NOT (data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM')=$2)
        GROUP BY 1`, [eid, mesRef]);
     const mapaVendas = Object.fromEntries(vendasMes.map(v => [v.email, v.qtd]));
 
@@ -220,6 +224,7 @@ async function montarMetaComercial(eid, mesRef, perfil) {
       `SELECT LOWER(vendedor_email) AS email, MAX(vendedor_nome) AS nome, COUNT(*)::int AS qtd
        FROM meta_comercial_venda_sync
        WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2 AND vendedor_email IS NOT NULL
+         AND NOT (data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM')=$2)
        GROUP BY 1 ORDER BY qtd DESC`, [eid, mesRef]);
     const detectados = naoConfigurados.filter(n => !emailsCadastrados.has(n.email));
     const usuariosSistema = detectados.length
@@ -234,7 +239,9 @@ async function montarMetaComercial(eid, mesRef, perfil) {
     // Total geral do mês (soma TODAS as vendas sincronizadas, inclusive setores sem meta
     // individual como Financeiro/Call Center/Cobrança — conta_meta=false ainda entra na soma geral)
     const totalGeralRow = await get(
-      `SELECT COUNT(*)::int AS n FROM meta_comercial_venda_sync WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2`,
+      `SELECT COUNT(*)::int AS n FROM meta_comercial_venda_sync
+       WHERE empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
+         AND NOT (data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM')=$2)`,
       [eid, mesRef]);
 
     const totalMeta = itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0);
