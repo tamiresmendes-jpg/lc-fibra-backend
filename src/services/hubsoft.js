@@ -236,11 +236,14 @@ async function listarClientes({ busca } = {}) {
 // cliente/todos?relacoes=servicos. Filtrar por data_inicio/data_fim reduz MUITO
 // o volume (testado: 16403 clientes → 476 num intervalo de ~1 mês), então NUNCA
 // varrer todos os clientes sem esse filtro (ficaria pesado para o ERP).
+// IMPORTANTE: o parâmetro `cancelado` tem padrão "nao" na API — sem passar "sim"
+// explicitamente, todo contrato cancelado fica INVISÍVEL (nunca aparece, mesmo
+// buscando todas as páginas). Documentado em docs/source/clientes/consulta.rst.
 // Retorna a lista achatada de serviços (não de clientes), cada um com { cliente, ...servico }.
 async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 30 } = {}) {
   const clientes = await buscarTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/cliente/todos', {
-      pagina, itens_por_pagina: 100, relacoes: 'servicos', data_inicio: dataInicio, data_fim: dataFim,
+      pagina, itens_por_pagina: 100, relacoes: 'servicos', data_inicio: dataInicio, data_fim: dataFim, cancelado: 'sim',
     }),
     { extrair: d => d.clientes || d.data || [], maxPaginas }
   );
