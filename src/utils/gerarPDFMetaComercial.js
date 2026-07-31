@@ -29,6 +29,10 @@ function montarHtmlMetaComercial(dados) {
   const totalVendas = itens.reduce((s, i) => s + i.qtd_vendas, 0);
   const totalCancel = itens.reduce((s, i) => s + i.cancelamento, 0);
   const totalSaldo = itens.reduce((s, i) => s + i.saldo, 0);
+  const totalMeta = itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0);
+  const totalGap = itens.reduce((s, i) => s + (i.conta_meta ? i.gap : 0), 0);
+  const totalBonusMeta = itens.reduce((s, i) => s + (i.bonus_meta_valor || 0), 0);
+  const totalBonusGap = itens.reduce((s, i) => s + (i.bonus_gap_valor || 0), 0);
   const totalBonus = itens.reduce((s, i) => s + i.total_bonus, 0);
   const sup = dados.supervisor || {};
 
@@ -54,11 +58,15 @@ function montarHtmlMetaComercial(dados) {
       </tr></thead>
       <tbody>${linhas || '<tr><td colspan="11" style="text-align:center;padding:14px;color:#94a3b8">Sem vendedores cadastrados.</td></tr>'}</tbody>
       <tfoot><tr>
-        <td colspan="3">Total</td>
+        <td colspan="2">Total</td>
+        <td style="text-align:center">${totalMeta}</td>
         <td style="text-align:center">${totalVendas}</td>
         <td style="text-align:center">${totalCancel}</td>
         <td style="text-align:center">${totalSaldo}</td>
-        <td colspan="4"></td>
+        <td></td>
+        <td style="text-align:center">${totalGap}</td>
+        <td style="text-align:right">${fx(totalBonusMeta)}</td>
+        <td style="text-align:right">${fx(totalBonusGap)}</td>
         <td style="text-align:right;background:#dcfce7;color:#166534">${fx(totalBonus)}</td>
       </tr></tfoot>
     </table>
