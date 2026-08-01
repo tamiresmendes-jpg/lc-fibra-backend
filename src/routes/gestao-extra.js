@@ -235,7 +235,10 @@ async function montarMetaComercial(eid, mesRef, perfil) {
         bate_meta: bateMeta, bonus_meta_valor: bonusMeta, bonus_gap_valor: bonusGap,
         total_bonus: Math.round((bonusMeta + bonusGap) * 100) / 100,
       };
-    });
+    })
+      // Só entra na apuração quem teve venda NO MÊS consultado. Quem não vendeu no mês
+      // simplesmente não aparece (e volta a aparecer no mês em que tiver venda).
+      .filter(i => i.qtd_vendas > 0);
 
     // Vendedores detectados nas vendas sincronizadas mas SEM cadastro de meta ainda.
     // Para cada um, sugere o usuário do Kronos com o mesmo e-mail (vínculo automático por
@@ -266,7 +269,9 @@ async function montarMetaComercial(eid, mesRef, perfil) {
       [eid, mesRef]);
 
     const totalMeta = itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0);
-    const totalSaldo = itens.reduce((s, i) => s + i.saldo, 0);
+    // A meta do supervisor é medida pelas VENDAS do mês (não pelo saldo): o cancelamento
+    // desconta do vendedor que vendeu, mas não da apuração do supervisor.
+    const totalSaldo = itens.reduce((s, i) => s + i.qtd_vendas, 0);
     const totalGapMeta = totalSaldo - totalMeta;
     const pctAtingido = totalMeta ? Math.round((totalSaldo / totalMeta) * 1000) / 10 : 0;
     // Faixa dispara quando SUPERA a meta no percentual: faixa de 15% = atingir 115% da meta.

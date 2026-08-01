@@ -87,7 +87,7 @@ function montarHtmlMetaComercial(dados) {
     </table>
     <div class="sup">
       <div style="font-size:13px"><b>Supervisão — ${esc(sup.nome || '—')}</b></div>
-      <div class="linha">Meta total do setor: <b>${sup.total_meta ?? '—'}</b> &nbsp;·&nbsp; Saldo do mês: <b>${sup.total_saldo ?? '—'}</b> &nbsp;·&nbsp; Gap: <b style="color:${(sup.gap_meta ?? 0) >= 0 ? '#16a34a' : '#dc2626'}">${sup.gap_meta ?? '—'}</b></div>
+      <div class="linha">Meta total do setor: <b>${sup.total_meta ?? '—'}</b> &nbsp;·&nbsp; Vendas do mês: <b>${sup.total_saldo ?? '—'}</b> &nbsp;·&nbsp; Gap: <b style="color:${(sup.gap_meta ?? 0) >= 0 ? '#16a34a' : '#dc2626'}">${sup.gap_meta ?? '—'}</b></div>
       <div class="linha">Atingimento: <b>${sup.percentual_atingido ?? '—'}%</b> da meta &nbsp;·&nbsp; Salário base: <b>${fx(sup.salario)}</b></div>
       <div class="linha">
         Faixa ${sup.faixa1_pct}% acima <span style="color:#64748b">(precisa ${sup.alvo_faixa1} vendas)</span>:

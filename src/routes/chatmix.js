@@ -3,6 +3,7 @@ const router = express.Router();
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { getConfig, resolverWebhook, postWebhookImagem } = require('../utils/discord');
+const { cifrar, decifrar } = require('../utils/segredos');
 
 router.use(autenticar);
 
@@ -23,6 +24,10 @@ async function garantir() {
       param_nome TEXT,
       atualizado_em TIMESTAMP DEFAULT NOW()
     )`);
+    // Credenciais do PAINEL (usuário dedicado de integração): permitem renovar sozinho o
+    // painel_token, que expira de tempos em tempos. A senha é guardada criptografada.
+    await run(`ALTER TABLE integracao_chatmix ADD COLUMN IF NOT EXISTS painel_email TEXT`);
+    await run(`ALTER TABLE integracao_chatmix ADD COLUMN IF NOT EXISTS painel_senha TEXT`);
     pronto = true;
   } catch (e) { console.error('[Chatmix]', e.message); }
 }
@@ -95,28 +100,49 @@ router.get('/config', async (req, res) => {
     if (!soAdminGestor(req, res)) return;
     await garantir();
     const cfg = await get('SELECT * FROM integracao_chatmix WHERE empresa_id = $1', [req.usuario.empresa_id]) || {};
-    res.json({ base_url: cfg.base_url || BASE_PADRAO, tem_token: !!cfg.token, tem_painel_token: !!cfg.painel_token, survey_id: cfg.survey_id || null });
+    res.json({
+      base_url: cfg.base_url || BASE_PADRAO, tem_token: !!cfg.token,
+      tem_painel_token: !!cfg.painel_token, survey_id: cfg.survey_id || null,
+      painel_email: cfg.painel_email || '', tem_painel_senha: !!cfg.painel_senha,
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Testa o login automático no painel (usuário de integração) e já renova o token.
+router.post('/painel/testar-login', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    await garantir();
+    const token = await loginPainel(req.usuario.empresa_id);
+    if (!token) return res.json({ ok: false, erro: 'Não foi possível entrar no painel. Confira o e-mail e a senha do usuário de integração.' });
+    res.json({ ok: true, mensagem: 'Login OK — token do painel renovado automaticamente.' });
+  } catch (e) { res.status(500).json({ ok: false, erro: e.message }); }
 });
 
 router.put('/config', async (req, res) => {
   try {
     if (!soAdminGestor(req, res)) return;
     await garantir();
-    const { base_url, token, painel_token, survey_id } = req.body;
-    const atual = await get('SELECT token, painel_token, survey_id FROM integracao_chatmix WHERE empresa_id = $1', [req.usuario.empresa_id]);
+    const { base_url, token, painel_token, survey_id, painel_email, painel_senha } = req.body;
+    const atual = await get('SELECT token, painel_token, survey_id, painel_email, painel_senha FROM integracao_chatmix WHERE empresa_id = $1', [req.usuario.empresa_id]);
     const tokenFinal = (token && token.trim()) ? token.trim() : (atual?.token || null);
     // painel_token/survey_id: só sobrescreve se vier preenchido (deixa em branco pra manter)
     let pt = (painel_token && painel_token.trim()) ? painel_token.trim() : (atual?.painel_token || null);
     if (pt) pt = pt.replace(/^Bearer\s+/i, '').trim(); // aceita colar com ou sem "Bearer "
     const sid = (survey_id !== undefined && survey_id !== null && String(survey_id).trim() !== '') ? parseInt(survey_id, 10) : (atual?.survey_id || null);
+    // Credenciais do usuário de integração (renovam o token sozinhas). Senha vai criptografada.
+    const pEmail = (painel_email !== undefined && painel_email !== null && String(painel_email).trim() !== '')
+      ? String(painel_email).trim() : (atual?.painel_email || null);
+    const pSenha = (painel_senha && String(painel_senha).trim())
+      ? cifrar(String(painel_senha).trim()) : (atual?.painel_senha || null);
     await run(
-      `INSERT INTO integracao_chatmix (empresa_id, base_url, token, painel_token, survey_id, auth_tipo, header_nome, atualizado_em)
-       VALUES ($1,$2,$3,$4,$5,'header','X-auth', NOW())
+      `INSERT INTO integracao_chatmix (empresa_id, base_url, token, painel_token, survey_id, painel_email, painel_senha, auth_tipo, header_nome, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'header','X-auth', NOW())
        ON CONFLICT (empresa_id) DO UPDATE SET base_url=EXCLUDED.base_url, token=EXCLUDED.token,
          painel_token=EXCLUDED.painel_token, survey_id=EXCLUDED.survey_id,
+         painel_email=EXCLUDED.painel_email, painel_senha=EXCLUDED.painel_senha,
          auth_tipo='header', header_nome='X-auth', atualizado_em=NOW()`,
-      [req.usuario.empresa_id, (base_url || '').trim() || BASE_PADRAO, tokenFinal, pt, sid]
+      [req.usuario.empresa_id, (base_url || '').trim() || BASE_PADRAO, tokenFinal, pt, sid, pEmail, pSenha]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -451,13 +477,55 @@ function statusPainel(empresaId) {
   return _painelStatus.get(empresaId) || null; // null = ainda não consultado nesta execução
 }
 
-// Chamada autenticada ao painel do Chatmix, registrando o motivo da falha (token expirado etc.).
-async function chamarPainel(empresaId, url) {
+// Faz login no painel do Chatmix com o usuário de integração e guarda o token novo.
+// Retorna o token ou null. Evita logins simultâneos (uma promessa compartilhada por empresa).
+const _loginEmAndamento = new Map();
+async function loginPainel(empresaId) {
+  if (_loginEmAndamento.has(empresaId)) return _loginEmAndamento.get(empresaId);
+  const p = (async () => {
+    const cfg = await get('SELECT painel_email, painel_senha FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
+    const email = cfg?.painel_email;
+    const senha = decifrar(cfg?.painel_senha);
+    if (!email || !senha) return null;
+    try {
+      const r = await fetch('https://srv6.chatmix.com.br/api_v2/api/v1/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Accept: 'application/json', 'User-Agent': 'Mozilla/5.0' },
+        body: JSON.stringify({ email, password: senha }),
+      });
+      if (r.status !== 200) { console.warn('[Chatmix] login do painel falhou:', r.status); return null; }
+      const j = await r.json().catch(() => null);
+      // O formato exato pode variar entre versões — procura o token nos campos usuais.
+      const token = j?.token || j?.access_token || j?.data?.token || j?.data?.access_token
+        || j?.data?.user?.token || (typeof j?.data === 'string' ? j.data : null);
+      if (!token) { console.warn('[Chatmix] login OK mas token não encontrado na resposta'); return null; }
+      const limpo = String(token).replace(/^Bearer\s+/i, '');
+      await run('UPDATE integracao_chatmix SET painel_token=$1 WHERE empresa_id=$2', [limpo, empresaId]);
+      console.log('[Chatmix] token do painel renovado automaticamente');
+      return limpo;
+    } catch (e) { console.warn('[Chatmix] erro no login do painel:', e.message); return null; }
+  })().finally(() => _loginEmAndamento.delete(empresaId));
+  _loginEmAndamento.set(empresaId, p);
+  return p;
+}
+
+// Chamada autenticada ao painel do Chatmix. Se o token expirou (401/403) e existem credenciais
+// do usuário de integração, faz login e repete a chamada uma vez — sem intervenção manual.
+async function chamarPainel(empresaId, url, jaTentouLogin = false) {
   const cfg = await get('SELECT painel_token FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
-  if (!cfg?.painel_token) { marcarPainel(empresaId, false, 'nao_configurado'); return null; }
+  let token = cfg?.painel_token;
+  if (!token) {
+    token = await loginPainel(empresaId);
+    if (!token) { marcarPainel(empresaId, false, 'nao_configurado'); return null; }
+    jaTentouLogin = true;
+  }
   try {
-    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
-    if (r.status === 401 || r.status === 403) { marcarPainel(empresaId, false, 'token_invalido'); return null; }
+    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + token, 'User-Agent': 'Mozilla/5.0' } });
+    if (r.status === 401 || r.status === 403) {
+      if (!jaTentouLogin && await loginPainel(empresaId)) return chamarPainel(empresaId, url, true);
+      marcarPainel(empresaId, false, 'token_invalido');
+      return null;
+    }
     if (r.status !== 200) { marcarPainel(empresaId, false, 'erro_' + r.status); return null; }
     const j = await r.json().catch(() => null);
     marcarPainel(empresaId, true, null);
