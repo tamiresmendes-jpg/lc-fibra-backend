@@ -236,9 +236,10 @@ async function montarMetaComercial(eid, mesRef, perfil) {
         total_bonus: Math.round((bonusMeta + bonusGap) * 100) / 100,
       };
     })
-      // Só entra na apuração quem teve venda NO MÊS consultado. Quem não vendeu no mês
-      // simplesmente não aparece (e volta a aparecer no mês em que tiver venda).
-      .filter(i => i.qtd_vendas > 0);
+      // Quem TEM meta aparece sempre (mesmo sem venda no mês, senão a meta do setor encolheria
+      // e o supervisor seria beneficiado). Quem não tem meta (Call Center, Financeiro, etc.)
+      // só aparece no mês em que teve venda.
+      .filter(i => (i.conta_meta && (i.meta || 0) > 0) || i.qtd_vendas > 0);
 
     // Vendedores detectados nas vendas sincronizadas mas SEM cadastro de meta ainda.
     // Para cada um, sugere o usuário do Kronos com o mesmo e-mail (vínculo automático por
