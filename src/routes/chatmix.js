@@ -443,48 +443,55 @@ const DEPT_SQL = `CASE
   WHEN atendente_nome ILIKE '%comercial%' THEN 'Comercial'
   WHEN atendente_nome ILIKE '%remo%' OR atendente_nome ILIKE '%cobran%' THEN 'Cobrança/Remoção'
   ELSE 'Outros' END`;
+// Estado do token do painel por empresa, para a tela avisar quando ele expira
+// (o token do painel do Chatmix vence e aí os relatórios oficiais param de vir).
+const _painelStatus = new Map();
+function marcarPainel(empresaId, ok, motivo) { _painelStatus.set(empresaId, { ok, motivo }); }
+function statusPainel(empresaId) {
+  return _painelStatus.get(empresaId) || null; // null = ainda não consultado nesta execução
+}
+
+// Chamada autenticada ao painel do Chatmix, registrando o motivo da falha (token expirado etc.).
+async function chamarPainel(empresaId, url) {
+  const cfg = await get('SELECT painel_token FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
+  if (!cfg?.painel_token) { marcarPainel(empresaId, false, 'nao_configurado'); return null; }
+  try {
+    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
+    if (r.status === 401 || r.status === 403) { marcarPainel(empresaId, false, 'token_invalido'); return null; }
+    if (r.status !== 200) { marcarPainel(empresaId, false, 'erro_' + r.status); return null; }
+    const j = await r.json().catch(() => null);
+    marcarPainel(empresaId, true, null);
+    return j;
+  } catch { marcarPainel(empresaId, false, 'falha_conexao'); return null; }
+}
+
 // Overview OFICIAL de atendentes (TMA/TME/TMR/TMR média/Total/Média) do painel Chatmix.
 async function overviewOficial(empresaId, di, df) {
-  try {
-    const cfg = await get('SELECT painel_token FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
-    if (!cfg?.painel_token) return null;
-    const url = `https://srv6.chatmix.com.br/api-v2/reports/attendants/overview/v2?page=1&with=closed&datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`;
-    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
-    if (r.status !== 200) return null;
-    return await r.json().catch(() => null);
-  } catch { return null; }
+  return chamarPainel(empresaId,
+    `https://srv6.chatmix.com.br/api-v2/reports/attendants/overview/v2?page=1&with=closed&datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`);
 }
 
 // Relatório OFICIAL por departamento (total/média/TMA/TME) do painel Chatmix.
 async function departamentosOficial(empresaId, di, df) {
-  try {
-    const cfg = await get('SELECT painel_token FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
-    if (!cfg?.painel_token) return null;
-    const url = `https://srv6.chatmix.com.br/api-v2/reports/attendance/department?datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`;
-    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
-    if (r.status !== 200) return null;
-    return await r.json().catch(() => null);
-  } catch { return null; }
+  return chamarPainel(empresaId,
+    `https://srv6.chatmix.com.br/api-v2/reports/attendance/department?datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`);
 }
 
 // Busca a satisfação OFICIAL do painel Chatmix (endpoint interno de relatório).
 // Retorna mapa { nomeMinusculo: { sat, insat, inval, total, media } } ou null se não configurado/falhar.
 async function satisfacaoOficial(empresaId, di, df) {
-  try {
-    const cfg = await get('SELECT painel_token, survey_id FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
-    if (!cfg?.painel_token || !cfg?.survey_id) return null;
-    const url = `https://srv6.chatmix.com.br/api_v2/api/v1/reports/replySatisfactionSurvey/attendants?satisfaction=${cfg.survey_id}&datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`;
-    const r = await fetch(url, { headers: { Accept: 'application/json', Authorization: 'Bearer ' + cfg.painel_token, 'User-Agent': 'Mozilla/5.0' } });
-    if (r.status !== 200) return null;
-    const j = await r.json().catch(() => null);
-    const arr = j?.data?.first || [];
-    const mapa = {};
-    for (const a of arr) {
-      const nome = ((a.user_all?.first_name || '') + ' ' + (a.user_all?.last_name || '')).trim().toLowerCase();
-      mapa[nome] = { sat: a.reply_5 || 0, insat: a.reply_1 || 0, inval: a.reply_0 || 0, total: a.total || 0, media: a.average };
-    }
-    return mapa;
-  } catch { return null; }
+  const cfg = await get('SELECT survey_id FROM integracao_chatmix WHERE empresa_id=$1', [empresaId]);
+  if (!cfg?.survey_id) { marcarPainel(empresaId, false, 'sem_survey_id'); return null; }
+  const j = await chamarPainel(empresaId,
+    `https://srv6.chatmix.com.br/api_v2/api/v1/reports/replySatisfactionSurvey/attendants?satisfaction=${cfg.survey_id}&datestart=${di}%2000:00:00&dateend=${df}%2023:59:59`);
+  if (!j) return null;
+  const arr = j?.data?.first || [];
+  const mapa = {};
+  for (const a of arr) {
+    const nome = ((a.user_all?.first_name || '') + ' ' + (a.user_all?.last_name || '')).trim().toLowerCase();
+    mapa[nome] = { sat: a.reply_5 || 0, insat: a.reply_1 || 0, inval: a.reply_0 || 0, total: a.total || 0, media: a.average };
+  }
+  return mapa;
 }
 function deptDeNome(nome) {
   const n = (nome || '').toLowerCase();
@@ -728,7 +735,7 @@ router.get('/tempos-status', async (req, res) => {
       };
     }
 
-    res.json({ periodo: { di, df }, geral: { tma, tme, tmr, tmr_avg, total, media_dia }, satisfacao, atendentes });
+    res.json({ periodo: { di, df }, geral: { tma, tme, tmr, tmr_avg, total, media_dia }, satisfacao, atendentes, painel: statusPainel(emp) });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -822,7 +829,7 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
       destaques: ambas.map(i => i.atendente),
     };
-    return { fonte: fonteSatisfacao, metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
+    return { fonte: fonteSatisfacao, painel: statusPainel(emp), metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
 }
 
 router.get('/meta', async (req, res) => {
