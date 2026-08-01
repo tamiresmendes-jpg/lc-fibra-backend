@@ -610,7 +610,7 @@ router.get('/tempos-departamento', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const j = await departamentosOficial(emp, di, df);
-    if (!j) return res.status(400).json({ erro: 'Relatório de departamentos indisponível (token do painel não configurado).', nao_configurado: true });
+    if (!j) return res.json({ periodo: { di, df }, geral: null, departamentos: [], painel: statusPainel(emp) });
     const departamentos = (j.data || []).map(d => ({
       departamento: d.name, total: d.total || 0, media_dia: d.daily_average ?? 0,
       tma: d.tma || '00:00:00', tme: d.tme || '00:00:00',
@@ -625,7 +625,7 @@ router.get('/tempos', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const j = await overviewOficial(emp, di, df);
-    if (!j) return res.status(400).json({ erro: 'Relatório de tempos indisponível (token do painel do Chatmix não configurado).', nao_configurado: true });
+    if (!j) return res.json({ periodo: { di, df }, geral: null, atendentes: [], painel: statusPainel(emp) });
     const dep = (req.query.departamento || '').trim();
     const ats = listaParam(req.query.atendente);
     let arr = (j.data || []).map(a => {
@@ -668,7 +668,11 @@ router.get('/tempos-status', async (req, res) => {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const dep = (req.query.departamento || '').trim();
     const [jd, jo, jsat] = await Promise.all([departamentosOficial(emp, di, df), overviewOficial(emp, di, df), satisfacaoOficial(emp, di, df)]);
-    if (!jd && !jo) return res.status(400).json({ erro: 'Relatório de tempos indisponível (token do painel não configurado).', nao_configurado: true });
+    // Sem resposta do painel (token expirado/não configurado): devolve 200 com os campos
+    // vazios + o motivo, para a tela mostrar "—" nos cards E o aviso do que aconteceu.
+    if (!jd && !jo) {
+      return res.json({ periodo: { di, df }, geral: null, satisfacao: null, atendentes: [], painel: statusPainel(emp) });
+    }
 
     const paraSeg = (t) => { const p = String(t || '0:0:0').split(':').map(n => parseInt(n, 10) || 0); return (p[0] || 0) * 3600 + (p[1] || 0) * 60 + (p[2] || 0); };
     const segFmt = (s) => { s = Math.round(s || 0); const h = Math.floor(s / 3600), m = Math.floor((s % 3600) / 60), x = s % 60; const p = n => String(n).padStart(2, '0'); return `${p(h)}:${p(m)}:${p(x)}`; };
