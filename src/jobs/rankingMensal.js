@@ -71,6 +71,18 @@ async function criarRanking(empresa_id, titulo, descricao, linhas, previa = fals
   return id;
 }
 
+// Nem todo vendedor do HubSoft está vinculado a um usuário do Kronos. Sem o vínculo
+// o mural não tem foto para mostrar, então casamos também pelo nome (sem acento/caixa).
+const semAcento = (s) => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '')
+  .toLowerCase().replace(/\s+/g, ' ').trim();
+
+async function indiceDeUsuarios(empresa_id) {
+  const us = await all('SELECT id, nome FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
+  const idx = new Map();
+  for (const u of us) idx.set(semAcento(u.nome), u.id);
+  return idx;
+}
+
 // Ordena por valor (maior primeiro) e aplica posição com EMPATE (mesma nota = mesma posição)
 function posicionar(itens, chaveValor) {
   const ordenado = [...itens].sort((a, b) => b[chaveValor] - a[chaveValor]);
@@ -89,6 +101,7 @@ async function gerarRankingsDoMes(empresa_id, mesRef, previa = false) {
   // ── Comercial / PAP / Escritório: por VENDAS do mês ────────────────────────
   if (typeof gestao.montarMetaComercial === 'function') {
     const dados = await gestao.montarMetaComercial(empresa_id, mesRef, 'admin').catch(() => null);
+    const idxUsuarios = await indiceDeUsuarios(empresa_id).catch(() => new Map());
     const porSetor = {};
     for (const i of (dados?.itens || [])) {
       const setor = setorDaFilial(i.filial);
@@ -96,7 +109,7 @@ async function gerarRankingsDoMes(empresa_id, mesRef, previa = false) {
       // Só entra no ranking quem BATEU a meta do mês (quem não bateu fica de fora)
       if (!(i.meta > 0) || i.qtd_vendas < i.meta) continue;
       (porSetor[setor] = porSetor[setor] || []).push({
-        nome: i.nome, usuario_id: i.usuario_id || null, valor: i.qtd_vendas,
+        nome: i.nome, usuario_id: i.usuario_id || idxUsuarios.get(semAcento(i.nome)) || null, valor: i.qtd_vendas,
         pontuacao: `${i.qtd_vendas} vendas`, detalhe: i.filial || null,
       });
     }
