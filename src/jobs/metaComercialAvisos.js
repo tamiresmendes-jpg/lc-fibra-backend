@@ -80,7 +80,7 @@ async function avisarCancelamentos(empresa_id) {
       await run('UPDATE meta_comercial_venda_sync SET cancel_avisado_em = NOW() WHERE empresa_id=$1 AND id_cliente_servico=$2',
         [empresa_id, c.id_cliente_servico]);
       const dataBR = (v) => v ? new Date(v).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
-      await notificarDiscord(empresa_id, 'meta_batida', {
+      await notificarDiscord(empresa_id, 'meta_cancelamento', {
         title: '❌ Cancelamento de venda',
         description: `Este cancelamento desconta do saldo do mês do vendedor.`,
         fields: [
