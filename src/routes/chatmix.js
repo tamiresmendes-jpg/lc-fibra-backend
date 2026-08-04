@@ -222,25 +222,46 @@ router.get('/indicadores', async (req, res) => {
     const minCoberto = estado?.min ? String(estado.min).slice(0, 10) : null;
     const sincronizando = !minCoberto || di < minCoberto; // pediu período mais antigo do que já foi baixado
 
-    const media = cardRow?.media != null ? Math.round(cardRow.media * 100) / 100 : null;
+    // Satisfação OFICIAL do painel. NÃO usar AVG(nota) do banco: no Chatmix "nota 5" só quer
+    // dizer que o cliente RESPONDEU a pesquisa (todas as notas locais são 5), o que dava
+    // sempre média 5 e escondia os insatisfeitos.
+    const jsat = await satisfacaoOficial(emp, di, df);
+    let media = null, respostas = 0, satisfeitas = 0, insatisfeitas = 0, invalidas = 0, pctSat = null;
+    if (jsat) {
+      let somaMedia = 0, peso = 0;
+      for (const v of Object.values(jsat)) {
+        satisfeitas += v.sat || 0; insatisfeitas += v.insat || 0; invalidas += v.inval || 0;
+        if (v.media != null) { somaMedia += Number(v.media) * (v.total || 1); peso += (v.total || 1); }
+      }
+      respostas = satisfeitas + insatisfeitas + invalidas;
+      media = peso ? Math.round((somaMedia / peso) * 100) / 100 : null;
+      const validas = satisfeitas + insatisfeitas;
+      pctSat = validas ? Math.round((satisfeitas / validas) * 1000) / 10 : null;
+    }
+
     res.json({
       periodo: { data_inicial: di, data_final: df },
       canais: canaisAll.map(c => c.n),
       departamentos: depsAll.map(d => d.n),
       sincronizando, min_coberto: minCoberto,
+      painel: statusPainel(emp),
       cards: {
         total: cardRow?.total || 0,
         tma_seg: Math.round(cardRow?.tma || 0), tma_fmt: fmtDuracao(cardRow?.tma || 0),
-        satisfacao_media: media, satisfacao_respostas: cardRow?.resp || 0,
+        satisfacao_media: media, satisfacao_respostas: respostas,
+        satisfacao_pct: pctSat,
         ao_vivo_aguardando: count?.waiting ?? null,
         ao_vivo_automacao: count?.automation ?? null,
         ao_vivo_atendimento: count?.progress ?? null,
       },
       satisfacao: {
-        media, respostas: cardRow?.resp || 0,
+        media, respostas, pct_satisfacao: pctSat,
+        satisfeitas, insatisfeitas, invalidas,
+        fonte: jsat ? 'oficial' : 'indisponivel',
         distribuicao: [
-          { nota: 5, qtd: cardRow?.satisfeitas || 0 },
-          { nota: 1, qtd: cardRow?.insatisfeitas || 0 },
+          { nota: 'Satisfeito', qtd: satisfeitas },
+          { nota: 'Insatisfeito', qtd: insatisfeitas },
+          { nota: 'Inválida', qtd: invalidas },
         ].filter(d => d.qtd > 0),
         comentarios: [],
       },
