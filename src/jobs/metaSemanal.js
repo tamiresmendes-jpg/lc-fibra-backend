@@ -12,6 +12,11 @@ function horaSP() {
   // % 24: à meia-noite o Node retorna "24" em vez de "00", o que furava o portão do agendado.
   return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
 }
+// Minutos desde a meia-noite (Brasília) — permite agendar em horários com minutos (ex.: 09:30)
+function minutosSP() {
+  const m = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', minute: '2-digit' }), 10) || 0;
+  return horaSP() * 60 + m;
+}
 function ymd(d) { return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}-${String(d.getDate()).padStart(2,'0')}`; }
 function br(iso) { return iso.split('-').reverse().join('/'); }
 
@@ -74,7 +79,8 @@ async function enviarMetaSemanal() {
       const mc = ncfg.meta || {};
       const modo = mc.modo || 'agendado';
       const hora = (mc.hora !== undefined && mc.hora !== null && mc.hora !== '') ? +mc.hora : 8;
-      if (modo !== 'realtime' && horaSP() < hora) continue;
+      const minuto = Number.isFinite(+mc.minuto) ? Math.min(59, Math.max(0, +mc.minuto)) : 0;
+      if (modo !== 'realtime' && minutosSP() < (hora * 60 + minuto)) continue;
       await run('UPDATE integracao_discord SET ultimo_meta_env = $1 WHERE empresa_id = $2', [chave, empresa_id]);
       const cfg = await getConfig(empresa_id);
       // Usa a MESMA lógica do relatório da tela (fonte única) — require lazy p/ evitar ciclo.

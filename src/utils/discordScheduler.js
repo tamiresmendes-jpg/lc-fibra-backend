@@ -11,6 +11,11 @@ function horaSP() {
   // o que furava o portão dos agendados (24 >= qualquer hora) e disparava tudo às 00h.
   return parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hour12: false }), 10) % 24;
 }
+// Minutos desde a meia-noite em Brasília — permite agendar com minutos (ex.: 08:30)
+function minutosSP() {
+  const m = parseInt(new Date().toLocaleString('en-US', { timeZone: 'America/Sao_Paulo', minute: '2-digit' }), 10) || 0;
+  return horaSP() * 60 + m;
+}
 
 // Nome canônico/limpo do setor (junta variações do RHID, ex.: "SUPORTE TÉCNICO FIBRA" → "Suporte")
 function setorCanonico(nome) {
@@ -43,13 +48,15 @@ function emojiSetor(nome) {
   return '📌';
 }
 
-// Config por evento definida pela usuária (JSON notif_cfg): { modo, antecedencia, hora }
+// Config por evento definida pela usuária (JSON notif_cfg): { modo, antecedencia, hora, minuto }
+// `minuto` é opcional (padrão 0), permitindo agendar em horários quebrados (ex.: 08:30).
 function evCfg(cfg, ev, horaDefault) {
   let m = {}; try { m = cfg.notif_cfg ? JSON.parse(cfg.notif_cfg) : {}; } catch {}
   const c = m[ev] || {};
   const ant = Number.isFinite(+c.antecedencia) ? Math.max(0, +c.antecedencia) : 0;
   const hora = (c.hora !== undefined && c.hora !== null && c.hora !== '') ? +c.hora : horaDefault;
-  return { modo: c.modo || 'agendado', antecedencia: ant, hora };
+  const minuto = Number.isFinite(+c.minuto) ? Math.min(59, Math.max(0, +c.minuto)) : 0;
+  return { modo: c.modo || 'agendado', antecedencia: ant, hora, minuto, emMinutos: (hora * 60) + minuto };
 }
 // Data-alvo = hoje + antecedência (o aviso de "N dias antes" dispara hoje para eventos de daqui a N dias)
 function dataAlvo(hojeStr, antecedencia) {
@@ -77,7 +84,7 @@ async function enviarAniversariantesDoDia() {
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'aniversario', cfg.hora_aniversario ?? cfg.hora_disparo ?? 8);
       if (ec.modo === 'realtime') continue; // marcada como tempo real → não usa agendamento
-      if (horaSP() < ec.hora) continue; // respeita a hora configurada
+      if (minutosSP() < ec.emMinutos) continue; // respeita hora:minuto configurados
       await run('UPDATE integracao_discord SET ultimo_aniv_env = $1 WHERE empresa_id = $2', [hoje, cfg.empresa_id]);
 
       const alvo = dataAlvo(hoje, ec.antecedencia);
@@ -127,7 +134,7 @@ async function enviarAniversarioEmpresaDoDia() {
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'aniversario_empresa', cfg.hora_aniversario_empresa ?? cfg.hora_disparo ?? 8);
       if (ec.modo === 'realtime') continue;
-      if (horaSP() < ec.hora) continue;
+      if (minutosSP() < ec.emMinutos) continue;
       await run('UPDATE integracao_discord SET ultimo_aniv_emp_env = $1 WHERE empresa_id = $2', [hoje, cfg.empresa_id]);
 
       const alvo = dataAlvo(hoje, ec.antecedencia);
@@ -194,7 +201,7 @@ async function enviarDayOffDoDia() {
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'dayoff', cfg.hora_dayoff ?? cfg.hora_disparo ?? 8);
       if (ec.modo === 'realtime') continue;
-      if (horaSP() < ec.hora) continue;
+      if (minutosSP() < ec.emMinutos) continue;
       await run('UPDATE integracao_discord SET ultimo_dayoff_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
       const alvoDayoff = dataAlvo(hojeStr, ec.antecedencia).ymd;
 
@@ -233,9 +240,13 @@ async function enviarDayOffDoDia() {
       for (const c of colabs) {
         const doff = calcDayOffBk(c.data_nascimento, ano, fer, feriasMap[c.id]);
         if (ymdD(doff) !== alvoDayoff) continue;
-        // Se o aniversário cai no mesmo dia do day off, o disparo de aniversário já cobre → não duplica
-        const nasc = new Date(String(c.data_nascimento).slice(0, 10) + 'T12:00');
-        if (mmdd(nasc) === mmdd(new Date(alvoDayoff + 'T12:00'))) continue;
+        // Só evita duplicar quando os DOIS avisos sairiam no MESMO DIA (antecedência 0 e o
+        // day off caindo no aniversário). Com antecedência (ex.: avisar 1 dia antes), o aviso
+        // de day off sai num dia e o de aniversário no outro — são mensagens distintas.
+        if (ec.antecedencia === 0) {
+          const nasc = new Date(String(c.data_nascimento).slice(0, 10) + 'T12:00');
+          if (mmdd(nasc) === mmdd(new Date(alvoDayoff + 'T12:00'))) continue;
+        }
         doDia.push(c.nome);
       }
       if (!doDia.length) continue;
@@ -274,7 +285,7 @@ async function enviarFeriadoDoDia() {
     for (const cfg of empresas) {
       const ec = evCfg(cfg, 'feriado', cfg.hora_disparo ?? 8);
       if (ec.modo === 'realtime') continue;
-      if (horaSP() < ec.hora) continue;
+      if (minutosSP() < ec.emMinutos) continue;
       await run('UPDATE integracao_discord SET ultimo_feriado_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
       const alvo = dataAlvo(hojeStr, ec.antecedencia);
       const alvoMMDD = `${String(alvo.mes).padStart(2,'0')}-${String(alvo.dia).padStart(2,'0')}`;
@@ -318,7 +329,7 @@ async function enviarRhidResumoDoDia() {
       const ec = evCfg(cfg, 'rhid', cfg.hora_disparo ?? 8);
       // Faltas é um resumo diário (não há gatilho ao vivo). No modo "agendado" espera o horário;
       // no modo "tempo real" envia assim que o sync roda (sem esperar horário). Nunca fica sem enviar.
-      if (ec.modo !== 'realtime' && horaSP() < ec.hora) continue;
+      if (ec.modo !== 'realtime' && minutosSP() < ec.emMinutos) continue;
       await run('UPDATE integracao_discord SET ultimo_rhid_env = $1 WHERE empresa_id = $2', [hojeStr, cfg.empresa_id]);
       // faltas do dia anterior
       const ontem = new Date(hojeStr + 'T12:00'); ontem.setDate(ontem.getDate() - 1);
