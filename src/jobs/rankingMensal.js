@@ -1,9 +1,8 @@
 // Rankings automáticos por setor, gerados no 1º dia útil do mês com os dados do mês anterior,
 // salvos em Cultura → Reconhecimento (aparecem no mural) e avisados no Discord.
 //
-// Critérios definidos pela usuária:
-//   Comercial / PAP / Escritório → vendas do mês (Meta do Comercial)
-//   Call Center / Financeiro     → satisfação + taxa de resposta (Chatmix)
+// Critério definido pela gestão: só Comercial, PAP e Escritório, por vendas do mês
+// (Meta do Comercial). Call Center e Financeiro ficam de fora.
 const { all, get, run } = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { notificar: notificarDiscord, COR } = require('../utils/discord');
@@ -36,7 +35,7 @@ function setorDaFilial(filial) {
   // "esc" cobre escritorio/escritório e erros de digitação já vistos no cadastro (ex.: "Escitorio")
   if (f.includes('esc')) return 'Escritório';
   if (f.includes('comercial')) return 'Comercial';
-  if (f.includes('call')) return 'Call Center';
+  // Call Center e Financeiro não têm ranking automático — caem no null abaixo
   return null; // sem setor reconhecido: fica fora dos rankings automáticos
 }
 
@@ -107,36 +106,7 @@ async function gerarRankingsDoMes(empresa_id, mesRef, previa = false) {
     }
   }
 
-  // ── Call Center / Financeiro: SATISFAÇÃO + TAXA DE RESPOSTA ────────────────
-  try {
-    const chatmix = require('../routes/chatmix');
-    if (typeof chatmix.calcularMeta === 'function') {
-      const [a, m] = mesRef.split('-').map(Number);
-      const ultimoDia = new Date(a, m, 0).getDate();
-      const di = `${mesRef}-01`, df = `${mesRef}-${String(ultimoDia).padStart(2, '0')}`;
-      const meta = await chatmix.calcularMeta(empresa_id, di, df, 90, 55).catch(() => null);
-      const porDept = {};
-      for (const i of (meta?.itens || [])) {
-        if (i.perc_satisfacao == null) continue;
-        const dept = i.departamento === 'Call Center' ? 'Call Center' : i.departamento;
-        if (!['Call Center', 'Financeiro'].includes(dept)) continue;
-        // Nota combinada: satisfação e taxa de resposta com o mesmo peso
-        const valor = Math.round(((i.perc_satisfacao + i.taxa_resposta) / 2) * 10) / 10;
-        (porDept[dept] = porDept[dept] || []).push({
-          nome: i.atendente, usuario_id: null, valor,
-          pontuacao: `${i.perc_satisfacao.toFixed(1)}% satisf. · ${i.taxa_resposta.toFixed(1)}% resp.`,
-          detalhe: `${i.satisfeitas} satisfeitos de ${i.total} atendimentos`,
-        });
-      }
-      for (const [dept, lista] of Object.entries(porDept)) {
-        const linhas = posicionar(lista, 'valor').slice(0, 10);
-        const id = await criarRanking(empresa_id, `Ranking ${dept} — ${rotulo}`,
-          `Por satisfação + taxa de resposta (${rotulo})`, linhas, previa);
-        if (id) criados.push(`${dept} (satisfação)`);
-      }
-    }
-  } catch (e) { console.error('[rankingMensal] chatmix:', e.message); }
-
+  // Call Center e Financeiro NÃO entram nos rankings automáticos (decisão da gestão).
   return criados;
 }
 
