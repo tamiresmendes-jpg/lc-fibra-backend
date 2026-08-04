@@ -49,8 +49,9 @@ async function avisarMetasBatidas(empresa_id) {
 
 // Avisa cada CANCELAMENTO novo de venda de vendedor cadastrado, uma única vez por contrato.
 // Só PAP e Comercial interno entram — Escritório (filiais) não é avisado aqui.
-// Entra a venda do mês anterior cancelada no mês atual (julho cancelada em agosto,
-// e assim por diante) e também a venda do próprio mês cancelada no mês.
+// Entra SÓ a venda do mês anterior cancelada no mês atual (venda de julho cancelada
+// em agosto, e assim por diante) — é ela que desconta do saldo. Cancelamento no
+// mesmo mês da venda não avisa, porque essa venda nem chegou a contar.
 async function avisarCancelamentos(empresa_id) {
   const mes = mesAtualSP();
   const [a, m] = mes.split('-').map(Number);
@@ -73,7 +74,7 @@ async function avisarCancelamentos(empresa_id) {
          AND TO_CHAR(s.data_cancelamento,'YYYY-MM') = $3
          AND s.cancel_avisado_em IS NULL
          AND (LOWER(v.filial) LIKE '%pap%' OR LOWER(v.filial) LIKE '%comercial%')
-         AND TO_CHAR(s.data_venda,'YYYY-MM') IN ($2, $3)
+         AND TO_CHAR(s.data_venda,'YYYY-MM') = $2
        ORDER BY s.data_cancelamento`,
       [empresa_id, mesAnterior, mes]);
     if (!novos.length) return;
