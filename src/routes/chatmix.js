@@ -677,14 +677,56 @@ router.get('/por-atendente', async (req, res) => {
 router.get('/tempos-departamento', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
-    const j = await departamentosOficial(emp, di, df);
+    const [j, jsat] = await Promise.all([departamentosOficial(emp, di, df), satisfacaoOficial(emp, di, df)]);
     if (!j) return res.json({ periodo: { di, df }, geral: null, departamentos: [], painel: statusPainel(emp) });
+
+    // Satisfação por departamento: o painel só entrega por ATENDENTE, então agregamos pelo
+    // setor deduzido do nome dele (ver deptDeNome). Fiel em setores "fechados" (Suporte,
+    // Financeiro, Comercial); aproximado onde a pessoa atende tickets de outro setor.
+    const satPorDept = {};
+    if (jsat) {
+      for (const [nome, v] of Object.entries(jsat)) {
+        const d = deptDeNome(nome);
+        const o = satPorDept[d] || (satPorDept[d] = { sat: 0, insat: 0, inval: 0, somaMedia: 0, nAtend: 0 });
+        o.sat += v.sat || 0; o.insat += v.insat || 0; o.inval += v.inval || 0;
+        if (v.media != null) { o.somaMedia += Number(v.media) * (v.total || 1); o.nAtend += (v.total || 1); }
+      }
+    }
+    const satDe = (nomeDept) => {
+      const o = satPorDept[deptDeNome(nomeDept)];
+      if (!o) return { satisfeito: null, insatisfeito: null, invalida: null, media_nota: null, pct_satisfacao: null };
+      const validas = o.sat + o.insat;
+      return {
+        satisfeito: o.sat, insatisfeito: o.insat, invalida: o.inval,
+        media_nota: o.nAtend ? Math.round((o.somaMedia / o.nAtend) * 100) / 100 : null,
+        pct_satisfacao: validas ? Math.round((o.sat / validas) * 1000) / 10 : null,
+      };
+    };
+
     const departamentos = (j.data || []).map(d => ({
       departamento: d.name, total: d.total || 0, media_dia: d.daily_average ?? 0,
       tma: d.tma || '00:00:00', tme: d.tme || '00:00:00',
+      ...satDe(d.name),
     })).sort((a, b) => b.total - a.total);
+
+    // Geral: soma de todos os atendentes (não só dos departamentos listados)
+    let gSat = 0, gIns = 0, gInv = 0, gSoma = 0, gN = 0;
+    if (jsat) for (const v of Object.values(jsat)) {
+      gSat += v.sat || 0; gIns += v.insat || 0; gInv += v.inval || 0;
+      if (v.media != null) { gSoma += Number(v.media) * (v.total || 1); gN += (v.total || 1); }
+    }
+    const gValidas = gSat + gIns;
     const g = j.overview || {};
-    res.json({ periodo: { di, df }, geral: { total: g.total || 0, media_dia: g.average ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00' }, departamentos });
+    res.json({
+      periodo: { di, df },
+      geral: {
+        total: g.total || 0, media_dia: g.average ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00',
+        satisfeito: jsat ? gSat : null, insatisfeito: jsat ? gIns : null, invalida: jsat ? gInv : null,
+        media_nota: gN ? Math.round((gSoma / gN) * 100) / 100 : null,
+        pct_satisfacao: gValidas ? Math.round((gSat / gValidas) * 1000) / 10 : null,
+      },
+      departamentos, painel: statusPainel(emp),
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -692,17 +734,23 @@ router.get('/tempos-departamento', async (req, res) => {
 router.get('/tempos', async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
-    const j = await overviewOficial(emp, di, df);
+    const [j, jsat] = await Promise.all([overviewOficial(emp, di, df), satisfacaoOficial(emp, di, df)]);
     if (!j) return res.json({ periodo: { di, df }, geral: null, atendentes: [], painel: statusPainel(emp) });
     const dep = (req.query.departamento || '').trim();
     const ats = listaParam(req.query.atendente);
     let arr = (j.data || []).map(a => {
       const nome = ((a.user?.first_name || '') + ' ' + (a.user?.last_name || '')).trim();
+      // Satisfação OFICIAL do atendente: nota média (número) e % de satisfação (satisfeitos ÷ válidas)
+      const s = jsat ? jsat[nome.toLowerCase()] : null;
+      const validas = s ? (s.sat + s.insat) : 0;
       return {
         atendente: nome, departamento: deptDeNome(nome),
         total: a.total || 0, media_dia: a.avg ?? 0,
         tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00',
         percentual: a.percentage != null ? Math.round(a.percentage * 1000) / 10 : null,
+        satisfeito: s ? s.sat : null, insatisfeito: s ? s.insat : null, invalida: s ? s.inval : null,
+        media_nota: s && s.media != null ? Math.round(Number(s.media) * 100) / 100 : null,
+        pct_satisfacao: validas ? Math.round((s.sat / validas) * 1000) / 10 : null,
       };
     });
     if (dep) arr = arr.filter(a => a.departamento === dep);
@@ -723,7 +771,20 @@ router.get('/tempos', async (req, res) => {
       const g = j.overview || {};
       geral = { total: g.total || 0, media_dia: g.avg ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00', tmr: g.tmr || '00:00:00', tmr_avg: g.tmr_avg || '00:00:00' };
     }
-    res.json({ periodo: { di, df }, geral, atendentes: arr });
+    // Satisfação do conjunto exibido (respeita os filtros de departamento/atendente)
+    const gSat = arr.reduce((s, a) => s + (a.satisfeito || 0), 0);
+    const gIns = arr.reduce((s, a) => s + (a.insatisfeito || 0), 0);
+    const gInv = arr.reduce((s, a) => s + (a.invalida || 0), 0);
+    const gValidas = gSat + gIns;
+    const pesoNota = arr.reduce((s, a) => s + (a.media_nota != null ? a.media_nota * a.total : 0), 0);
+    const pesoTot = arr.reduce((s, a) => s + (a.media_nota != null ? a.total : 0), 0);
+    geral.satisfeito = jsat ? gSat : null;
+    geral.insatisfeito = jsat ? gIns : null;
+    geral.invalida = jsat ? gInv : null;
+    geral.media_nota = pesoTot ? Math.round((pesoNota / pesoTot) * 100) / 100 : null;
+    geral.pct_satisfacao = gValidas ? Math.round((gSat / gValidas) * 1000) / 10 : null;
+
+    res.json({ periodo: { di, df }, geral, atendentes: arr, painel: statusPainel(emp) });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
