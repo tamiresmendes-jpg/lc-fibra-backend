@@ -12,12 +12,13 @@ const COR = {
 };
 
 // Eventos que podem ser direcionados a um canal
-const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'aniversario_empresa', 'dayoff', 'feriado', 'rhid', 'meta', 'meta_fin', 'meta_cc', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
+const EVENTOS = ['ciencia', 'pop', 'processo', 'aniversario', 'aniversario_empresa', 'dayoff', 'feriado', 'rhid', 'meta', 'meta_fin', 'meta_cc', 'meta_batida', 'ranking_mes', 'comunicado', 'coffee', 'mural', 'cultura', 'chatmix'];
 // Mapa evento → coluna de habilitação (liga/desliga)
 const EVENTO_COL = {
   ciencia: 'ev_ciencia', pop: 'ev_pop', processo: 'ev_processo',
   aniversario: 'ev_aniversario', aniversario_empresa: 'ev_aniversario_empresa', dayoff: 'ev_dayoff',
   feriado: 'ev_feriado', rhid: 'ev_rhid', meta: 'ev_meta', meta_fin: 'ev_meta', meta_cc: 'ev_meta',
+  meta_batida: 'ev_meta_batida', ranking_mes: 'ev_ranking_mes',
   comunicado: 'ev_comunicado', manual: 'ev_comunicado',
   coffee: 'ev_coffee', mural: 'ev_mural', cultura: 'ev_cultura', chatmix: 'ev_chatmix',
 };
@@ -48,6 +49,8 @@ async function garantirTabela() {
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS canal_embed TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_chatmix INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_aniversario_empresa INTEGER DEFAULT 1'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_meta_batida INTEGER DEFAULT 1'); } catch {}
+    try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_ranking_mes INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ev_dayoff INTEGER DEFAULT 1'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_aniv_emp_env TEXT'); } catch {}
     try { await run('ALTER TABLE integracao_discord ADD COLUMN IF NOT EXISTS ultimo_dayoff_env TEXT'); } catch {}

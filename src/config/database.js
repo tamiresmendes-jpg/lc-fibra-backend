@@ -1104,6 +1104,19 @@ async function initSchema() {
     );
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS data_cadastro DATE;
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS data_habilitacao DATE;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS cidade TEXT;
+    -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
+    CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      mes TEXT NOT NULL,
+      arquivo TEXT NOT NULL,
+      gerado_por TEXT,
+      gerado_por_nome TEXT,
+      total_vendas INTEGER,
+      total_bonus REAL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS meta_comercial_sync_status (
       empresa_id TEXT PRIMARY KEY,
       ultima_sync TIMESTAMP,

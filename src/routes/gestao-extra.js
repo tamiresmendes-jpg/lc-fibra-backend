@@ -321,9 +321,37 @@ router.get('/meta-comercial/pdf', autenticar, exigirVerMetaComercial, async (req
     const dados = await montarMetaComercial(eid, mesRef, req.usuario.perfil);
     const { gerarPDFMetaComercial } = require('../utils/gerarPDFMetaComercial');
     const pdfBuffer = await gerarPDFMetaComercial(dados);
+
+    // Guarda uma cópia no servidor para acompanhamento posterior (histórico de PDFs)
+    try {
+      const fs = require('fs'); const path = require('path');
+      const dir = path.join(__dirname, '../../uploads/meta-comercial');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const nome = `meta-${mesRef}-${Date.now()}.pdf`;
+      fs.writeFileSync(path.join(dir, nome), pdfBuffer);
+      const totVendas = (dados.itens || []).reduce((s, i) => s + (i.qtd_vendas || 0), 0);
+      const totBonus = (dados.itens || []).reduce((s, i) => s + (i.total_bonus || 0), 0);
+      await run(
+        `INSERT INTO meta_comercial_pdf (id, empresa_id, mes, arquivo, gerado_por, gerado_por_nome, total_vendas, total_bonus)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [uuidv4(), eid, mesRef, `/uploads/meta-comercial/${nome}`, req.usuario.id, req.usuario.nome || null, totVendas, totBonus]
+      );
+    } catch (e) { console.error('[meta-comercial/pdf] histórico:', e.message); }
+
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Meta-Comercial-${mesRef}.pdf"`);
     res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Histórico dos PDFs já gerados (acompanhamento)
+router.get('/meta-comercial/pdfs', autenticar, exigirVerMetaComercial, async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT id, mes, arquivo, gerado_por_nome, total_vendas, total_bonus, created_at
+       FROM meta_comercial_pdf WHERE empresa_id=$1 ORDER BY created_at DESC LIMIT 100`,
+      [req.usuario.empresa_id]);
+    res.json(rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -413,4 +441,6 @@ router.post('/meta-comercial/sync-agora', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Exposto para os jobs (aviso de meta batida, rankings automáticos)
+router.montarMetaComercial = montarMetaComercial;
 module.exports = router;

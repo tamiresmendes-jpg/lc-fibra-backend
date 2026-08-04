@@ -256,7 +256,10 @@ async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } 
   const servicos = [];
   for (const c of clientes) {
     for (const s of (c.servicos || [])) {
-      servicos.push({ ...s, cliente_nome: c.nome_razaosocial || c.nome_fantasia || null });
+      // Cidade: prioriza o endereço de instalação (onde o serviço está), com fallback no cadastral
+      const cidade = s.endereco_instalacao?.cidade || s.endereco_cadastral?.cidade
+        || c.endereco_instalacao?.cidade || c.endereco_cadastral?.cidade || null;
+      servicos.push({ ...s, cliente_nome: c.nome_razaosocial || c.nome_fantasia || null, cidade });
     }
   }
   return servicos;
