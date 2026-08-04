@@ -47,10 +47,10 @@ async function avisarMetasBatidas(empresa_id) {
   }
 }
 
-// Avisa cada CANCELAMENTO novo de venda de vendedor cadastrado. Cada contrato é
-// avisado uma única vez. O que entra depende do setor:
-//   PAP e Comercial → venda do mês anterior OU do próprio mês (a gestão acompanha os dois)
-//   Escritório      → só venda do mês anterior (é a que desconta do saldo)
+// Avisa cada CANCELAMENTO novo de venda de vendedor cadastrado, uma única vez por contrato.
+// Só PAP e Comercial interno entram — Escritório (filiais) não é avisado aqui.
+// Entra a venda do mês anterior cancelada no mês atual (julho cancelada em agosto,
+// e assim por diante) e também a venda do próprio mês cancelada no mês.
 async function avisarCancelamentos(empresa_id) {
   const mes = mesAtualSP();
   const [a, m] = mes.split('-').map(Number);
@@ -59,8 +59,7 @@ async function avisarCancelamentos(empresa_id) {
   try {
     await run('ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS cancel_avisado_em TIMESTAMP');
 
-    // Canceladas no mês atual, de vendedor cadastrado, ainda não avisadas.
-    // A venda do próprio mês só entra para PAP e Comercial (Escritório fica de fora).
+    // Canceladas no mês atual, de vendedor de PAP/Comercial, ainda não avisadas
     const novos = await all(
       `SELECT s.id_cliente_servico, s.nome_cliente, s.cidade, s.vendedor_nome, s.data_venda,
               s.data_cadastro, s.data_cancelamento, s.motivo_cancelamento,
@@ -73,11 +72,8 @@ async function avisarCancelamentos(empresa_id) {
          AND s.data_cancelamento IS NOT NULL
          AND TO_CHAR(s.data_cancelamento,'YYYY-MM') = $3
          AND s.cancel_avisado_em IS NULL
-         AND (
-           TO_CHAR(s.data_venda,'YYYY-MM') = $2
-           OR (TO_CHAR(s.data_venda,'YYYY-MM') = $3
-               AND (LOWER(v.filial) LIKE '%pap%' OR LOWER(v.filial) LIKE '%comercial%'))
-         )
+         AND (LOWER(v.filial) LIKE '%pap%' OR LOWER(v.filial) LIKE '%comercial%')
+         AND TO_CHAR(s.data_venda,'YYYY-MM') IN ($2, $3)
        ORDER BY s.data_cancelamento`,
       [empresa_id, mesAnterior, mes]);
     if (!novos.length) return;
