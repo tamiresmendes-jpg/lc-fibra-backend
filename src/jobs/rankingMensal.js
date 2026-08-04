@@ -33,8 +33,10 @@ function mesExtenso(mesRef) {
 function setorDaFilial(filial) {
   const f = (filial || '').toLowerCase();
   if (f.includes('pap')) return 'PAP';
-  if (f.includes('escrit')) return 'Escritório';
+  // "esc" cobre escritorio/escritório e erros de digitação já vistos no cadastro (ex.: "Escitorio")
+  if (f.includes('esc')) return 'Escritório';
   if (f.includes('comercial')) return 'Comercial';
+  if (f.includes('call')) return 'Call Center';
   return null; // sem setor reconhecido: fica fora dos rankings automáticos
 }
 
