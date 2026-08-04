@@ -382,7 +382,7 @@ router.put('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const exist = await get(`SELECT id FROM meta_comercial_vendedor WHERE id=$1 AND empresa_id=$2`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
-    let { nome, filial, hubsoft_email, hubsoft_id_vendedor, usuario_id, meta, bonus_meta, bonus_gap, conta_meta, ativo, ordem } = req.body;
+    let { nome, filial, hubsoft_email, hubsoft_id_vendedor, usuario_id, meta, bonus_meta, bonus_gap, conta_meta, ativo, ordem, discord_id } = req.body;
     if (usuario_id) {
       const u = await get(`SELECT id, nome FROM usuarios WHERE id=$1 AND empresa_id=$2`, [usuario_id, req.usuario.empresa_id]);
       if (!u) return res.status(400).json({ erro: 'Usuário inválido' });
@@ -391,10 +391,11 @@ router.put('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
     await run(
       `UPDATE meta_comercial_vendedor SET
          nome=$1, filial=$2, hubsoft_email=$3, hubsoft_id_vendedor=$4, usuario_id=$5, meta=$6, bonus_meta=$7, bonus_gap=$8,
-         conta_meta=$9, ativo=$10, ordem=$11
-       WHERE id=$12 AND empresa_id=$13`,
+         conta_meta=$9, ativo=$10, ordem=$11, discord_id=$12
+       WHERE id=$13 AND empresa_id=$14`,
       [nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null, usuario_id || null,
        meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ativo !== false, ordem || 0,
+       (discord_id || '').replace(/\D/g, '') || null,
        req.params.id, req.usuario.empresa_id]
     );
     res.json(await get(`SELECT * FROM meta_comercial_vendedor WHERE id=$1`, [req.params.id]));

@@ -1075,6 +1075,8 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
     ALTER TABLE meta_comercial_vendedor ADD COLUMN IF NOT EXISTS usuario_id TEXT;
+    -- ID do usuário no Discord, para marcar (@) o vendedor no aviso de cancelamento
+    ALTER TABLE meta_comercial_vendedor ADD COLUMN IF NOT EXISTS discord_id TEXT;
     CREATE TABLE IF NOT EXISTS meta_comercial_supervisor (
       empresa_id TEXT PRIMARY KEY,
       nome TEXT,

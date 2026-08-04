@@ -58,13 +58,13 @@ async function avisarCancelamentos(empresa_id) {
   const mesAnterior = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
   try {
     await run('ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS cancel_avisado_em TIMESTAMP');
+    await run('ALTER TABLE meta_comercial_vendedor ADD COLUMN IF NOT EXISTS discord_id TEXT');
 
     // Canceladas no mês atual, de vendedor de PAP/Comercial, ainda não avisadas
     const novos = await all(
       `SELECT s.id_cliente_servico, s.nome_cliente, s.cidade, s.vendedor_nome, s.data_venda,
               s.data_cadastro, s.data_cancelamento, s.motivo_cancelamento,
-              v.nome AS vendedor_cadastrado, v.filial,
-              TO_CHAR(s.data_venda,'YYYY-MM') AS mes_venda
+              v.nome AS vendedor_cadastrado, v.filial, v.discord_id
        FROM meta_comercial_venda_sync s
        JOIN meta_comercial_vendedor v
          ON v.empresa_id = s.empresa_id AND LOWER(v.hubsoft_email) = LOWER(s.vendedor_email) AND v.ativo = true
@@ -83,17 +83,17 @@ async function avisarCancelamentos(empresa_id) {
       await run('UPDATE meta_comercial_venda_sync SET cancel_avisado_em = NOW() WHERE empresa_id=$1 AND id_cliente_servico=$2',
         [empresa_id, c.id_cliente_servico]);
       const dataBR = (v) => v ? new Date(v).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
-      // Venda do próprio mês nem chegou a contar, então não há saldo a descontar
-      const mesmoMes = c.mes_venda === mes;
+      // Marca o vendedor de verdade quando o ID do Discord dele está cadastrado;
+      // sem o ID o Discord não notifica, então cai no nome em negrito.
+      const nomeVend = c.vendedor_cadastrado || c.vendedor_nome || '—';
+      const vendedor = c.discord_id
+        ? `<@${c.discord_id}>${c.filial ? ` (${c.filial})` : ''}`
+        : `**${nomeVend}**${c.filial ? ` (${c.filial})` : ''}`;
       await notificarDiscord(empresa_id, 'meta_cancelamento', {
         title: '❌ Cancelamento de venda',
-        description: mesmoMes
-          ? 'Venda e cancelamento no mesmo mês — não conta como venda nem desconta do saldo.'
-          : 'Este cancelamento desconta do saldo do mês do vendedor.',
         fields: [
           { name: '👤 Cliente', value: c.nome_cliente || '—', inline: true },
-          { name: '📍 Cidade', value: c.cidade || '—', inline: true },
-          { name: '🧑‍💼 Vendedor', value: `${c.vendedor_cadastrado || c.vendedor_nome || '—'}${c.filial ? ` (${c.filial})` : ''}`, inline: false },
+          { name: '🧑‍💼 Vendedor', value: vendedor, inline: false },
           { name: '📅 Cadastro', value: dataBR(c.data_cadastro || c.data_venda), inline: true },
           { name: '🚫 Cancelamento', value: dataBR(c.data_cancelamento), inline: true },
           { name: '📝 Motivo', value: c.motivo_cancelamento || '—', inline: false },
