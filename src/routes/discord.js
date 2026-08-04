@@ -22,7 +22,7 @@ const EXEMPLOS = {
   meta:      { title: '📊 Relatório de Satisfação', description: '**[EXEMPLO]** Relatório de satisfação enviado ao Discord.' },
   meta_fin:  { title: '📊 Meta — Financeiro', description: '**[EXEMPLO]** Financeiro: 92,4% de satisfação · 58,1% de taxa de resposta.' },
   meta_cc:   { title: '📊 Meta — Call Center', description: '**[EXEMPLO]** Call Center: 89,7% de satisfação · 61,3% de taxa de resposta.' },
-  meta_batida: { title: '🎯 Meta batida!', description: '**[EXEMPLO]** 🎉 **Maria Silva** (Comercial) bateu a meta do mês: **35 de 35 vendas**. Parabéns!' },
+  meta_batida: { title: '🎯 Meta batida!', description: '**[EXEMPLO]** **Maria Silva** (Comercial) bateu a meta do mês!\n\nParabéns! 👏' },
   meta_cancelamento: { title: '❌ Cancelamento de venda', description: '**[EXEMPLO]** 👤 João da Silva · 📍 Belém\n🧑‍💼 Maria Silva (Comercial)\n📅 Cadastro 12/07 · 🚫 Cancelamento 03/08\n📝 Motivo: mudança de endereço' },
   ranking_mes: { title: '🏆 Ranking Comercial — julho de 2026', description: '**[EXEMPLO]** 🥇 **Maria Silva** — 42 vendas\n🥈 **João Souza** — 38 vendas\n🥉 **Ana Costa** — 31 vendas' },
 };

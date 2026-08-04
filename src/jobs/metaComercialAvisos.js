@@ -31,11 +31,10 @@ async function avisarMetasBatidas(empresa_id) {
       // Marca ANTES de enviar: se o envio falhar, não repete a cada hora
       await run('UPDATE meta_comercial_vendedor SET meta_batida_avisada=$1 WHERE id=$2 AND empresa_id=$3',
         [mes, v.id, empresa_id]);
-      const extra = v.gap > 0 ? ` — e ainda passou **${v.gap}** da meta! 🚀` : '';
+      // Só o reconhecimento: números de meta/vendas/saldo ficam restritos ao painel
       await notificarDiscord(empresa_id, 'meta_batida', {
         title: '🎯 Meta batida!',
-        description: `**${v.nome}**${v.filial ? ` (${v.filial})` : ''} bateu a meta do mês!\n\n`
-          + `Meta: **${v.meta}** · Vendas: **${v.qtd_vendas}** · Saldo: **${v.saldo}**${extra}\n\nParabéns! 👏`,
+        description: `**${v.nome}**${v.filial ? ` (${v.filial})` : ''} bateu a meta do mês!\n\nParabéns! 👏`,
         color: COR.verde || COR.laranja,
         linkPath: '/metas',
         footer: { text: 'Kronos — Meta do Comercial' },
