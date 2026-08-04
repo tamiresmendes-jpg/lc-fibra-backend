@@ -125,6 +125,7 @@ conectar()
     require('./jobs/rhidSync').iniciar();
     require('./jobs/metaSemanal').iniciar();
     require('./jobs/syncMetaComercial').iniciar();
+    require('./jobs/rankingMensal').iniciar();
   })
   .catch((err) => {
     console.error('Falha ao conectar ao banco:', err.message);
