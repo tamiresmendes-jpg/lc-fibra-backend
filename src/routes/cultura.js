@@ -213,6 +213,7 @@ router.post('/reconhecimentos', async (req, res) => {
         title: `⭐ Reconhecimento — ${tipo || 'elogio'}`,
         description: `${req.usuario.nome || 'Alguém'} reconheceu ${para?.nome || 'um colega'}${descricao ? `:\n\n"${descricao}"` : '!'}`,
         color: DISCORD_COR.laranja,
+        imagem: foto || undefined, // a foto do reconhecimento vai junto no Discord
         linkPath: '/cultura/reconhecimento',
         footer: { text: 'Kronos — Cultura (Reconhecimento)' },
         timestamp: new Date().toISOString(),
@@ -234,9 +235,21 @@ router.delete('/reconhecimentos/:id', async (req, res) => {
 });
 
 // ─── RANKINGS ─────────────────────────────────────────────────────────────────
+// Rankings do mês (mesma lógica do mural): sem ?mes vem o mês atual; ?mes=todos traz tudo.
 router.get('/rankings', async (req, res) => {
   try {
-    const rankings = await all('SELECT * FROM cultura_rankings WHERE empresa_id=$1 AND ativo=1 ORDER BY created_at DESC', [empId(req)]);
+    const mes = String(req.query.mes || '').trim();
+    const params = [empId(req)];
+    let filtro = '';
+    if (mes !== 'todos') {
+      const alvo = /^\d{4}-\d{2}$/.test(mes)
+        ? mes
+        : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
+      params.push(alvo);
+      filtro = ` AND TO_CHAR(created_at::timestamp, 'YYYY-MM') = $${params.length}`;
+    }
+    const rankings = await all(
+      `SELECT * FROM cultura_rankings WHERE empresa_id=$1 AND ativo=1${filtro} ORDER BY created_at DESC`, params);
     const result = [];
     for (const r of rankings) {
       const posicoes = await all(`
@@ -253,40 +266,59 @@ router.get('/rankings', async (req, res) => {
 
 router.post('/rankings', async (req, res) => {
   try {
-    const { titulo, descricao, periodo, departamento_id, posicoes, tipo_ranking, tipo_ranking_outro } = req.body;
+    const { titulo, descricao, periodo, departamento_id, posicoes, tipo_ranking, tipo_ranking_outro, imagem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(
-      'INSERT INTO cultura_rankings (id,empresa_id,titulo,descricao,periodo,departamento_id,tipo_ranking,tipo_ranking_outro) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [id, empId(req), titulo, descricao||null, periodo||null, departamento_id||null, tipo_ranking||null, tipo_ranking_outro||null]
+      'INSERT INTO cultura_rankings (id,empresa_id,titulo,descricao,periodo,departamento_id,tipo_ranking,tipo_ranking_outro,imagem) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [id, empId(req), titulo, descricao||null, periodo||null, departamento_id||null, tipo_ranking||null, tipo_ranking_outro||null, imagem||null]
     );
-    if (posicoes?.length) {
-      for (const p of posicoes) {
-        await run(
-          'INSERT INTO cultura_ranking_posicoes (id,ranking_id,posicao,usuario_id,nome_externo,pontuacao,descricao) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-          [uuidv4(), id, p.posicao, p.usuario_id||null, p.nome_externo||null, p.pontuacao||null, p.descricao||null]
-        );
-      }
+    // Guarda só as posições preenchidas; a mesma posição pode repetir (empate)
+    const validas = (posicoes || []).filter(p => p.usuario_id || (p.nome_externo || '').trim());
+    for (const p of validas) {
+      await run(
+        'INSERT INTO cultura_ranking_posicoes (id,ranking_id,posicao,usuario_id,nome_externo,pontuacao,descricao) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [uuidv4(), id, p.posicao, p.usuario_id||null, p.nome_externo||null, p.pontuacao||null, p.descricao||null]
+      );
     }
     res.status(201).json({ id });
+
+    // Avisa no Discord com o pódio e a imagem (se houver)
+    try {
+      const nomes = [];
+      for (const p of validas.slice(0, 10)) {
+        let nome = p.nome_externo;
+        if (p.usuario_id) nome = (await get('SELECT nome FROM usuarios WHERE id=$1', [p.usuario_id]).catch(() => null))?.nome || nome;
+        const medalha = p.posicao === 1 ? '🥇' : p.posicao === 2 ? '🥈' : p.posicao === 3 ? '🥉' : `${p.posicao}º`;
+        nomes.push(`${medalha} **${nome || '—'}**${p.pontuacao ? ` — ${p.pontuacao}` : ''}`);
+      }
+      notificarDiscord(empId(req), 'cultura', {
+        title: `🏆 ${titulo}`,
+        description: `${descricao ? descricao + '\n\n' : ''}${nomes.join('\n')}`,
+        color: DISCORD_COR.laranja,
+        imagem: imagem || undefined,
+        linkPath: '/cultura/reconhecimento',
+        footer: { text: 'Kronos — Cultura (Ranking)' },
+        timestamp: new Date().toISOString(),
+      }).catch(() => {});
+    } catch { /* notificação não bloqueia o cadastro */ }
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 router.put('/rankings/:id', async (req, res) => {
   try {
-    const { titulo, descricao, periodo, departamento_id, posicoes, tipo_ranking, tipo_ranking_outro } = req.body;
+    const { titulo, descricao, periodo, departamento_id, posicoes, tipo_ranking, tipo_ranking_outro, imagem } = req.body;
     await run(
-      'UPDATE cultura_rankings SET titulo=$1,descricao=$2,periodo=$3,departamento_id=$4,tipo_ranking=$5,tipo_ranking_outro=$6 WHERE id=$7 AND empresa_id=$8',
-      [titulo, descricao||null, periodo||null, departamento_id||null, tipo_ranking||null, tipo_ranking_outro||null, req.params.id, empId(req)]
+      'UPDATE cultura_rankings SET titulo=$1,descricao=$2,periodo=$3,departamento_id=$4,tipo_ranking=$5,tipo_ranking_outro=$6,imagem=$7 WHERE id=$8 AND empresa_id=$9',
+      [titulo, descricao||null, periodo||null, departamento_id||null, tipo_ranking||null, tipo_ranking_outro||null, imagem||null, req.params.id, empId(req)]
     );
     await run('DELETE FROM cultura_ranking_posicoes WHERE ranking_id=$1', [req.params.id]);
-    if (posicoes?.length) {
-      for (const p of posicoes) {
-        await run(
-          'INSERT INTO cultura_ranking_posicoes (id,ranking_id,posicao,usuario_id,nome_externo,pontuacao,descricao) VALUES ($1,$2,$3,$4,$5,$6,$7)',
-          [uuidv4(), req.params.id, p.posicao, p.usuario_id||null, p.nome_externo||null, p.pontuacao||null, p.descricao||null]
-        );
-      }
+    // Só as posições preenchidas; a mesma posição pode repetir (empate)
+    for (const p of (posicoes || []).filter(x => x.usuario_id || (x.nome_externo || '').trim())) {
+      await run(
+        'INSERT INTO cultura_ranking_posicoes (id,ranking_id,posicao,usuario_id,nome_externo,pontuacao,descricao) VALUES ($1,$2,$3,$4,$5,$6,$7)',
+        [uuidv4(), req.params.id, p.posicao, p.usuario_id||null, p.nome_externo||null, p.pontuacao||null, p.descricao||null]
+      );
     }
     res.json({ ok: true });
   } catch(e) { res.status(500).json({ erro: e.message }); }

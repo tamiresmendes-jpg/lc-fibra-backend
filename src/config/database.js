@@ -572,6 +572,8 @@ async function initSchema() {
       ativo INTEGER DEFAULT 1,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    -- Imagem opcional do ranking (vai junto na notificação do Discord)
+    ALTER TABLE cultura_rankings ADD COLUMN IF NOT EXISTS imagem TEXT;
 
     CREATE TABLE IF NOT EXISTS cultura_ranking_posicoes (
       id TEXT PRIMARY KEY,
