@@ -65,7 +65,11 @@ async function avisarCancelamentos(empresa_id) {
     const novos = await all(
       `SELECT s.id_cliente_servico, s.nome_cliente, s.cidade, s.vendedor_nome, s.data_venda,
               s.data_cadastro, s.data_cancelamento, s.motivo_cancelamento,
-              v.nome AS vendedor_cadastrado, v.filial, v.discord_id
+              v.nome AS vendedor_cadastrado, v.filial, v.discord_id,
+              -- Formatadas no banco: o servidor roda em UTC e converter DATE para o
+              -- fuso de SP jogava meia-noite para as 21h do dia anterior (data errada)
+              TO_CHAR(COALESCE(s.data_cadastro, s.data_venda),'DD/MM/YYYY') AS cadastro_br,
+              TO_CHAR(s.data_cancelamento,'DD/MM/YYYY') AS cancelamento_br
        FROM meta_comercial_venda_sync s
        JOIN meta_comercial_vendedor v
          ON v.empresa_id = s.empresa_id AND LOWER(v.hubsoft_email) = LOWER(s.vendedor_email) AND v.ativo = true
@@ -83,7 +87,6 @@ async function avisarCancelamentos(empresa_id) {
       // Marca antes de enviar para não repetir a cada sync
       await run('UPDATE meta_comercial_venda_sync SET cancel_avisado_em = NOW() WHERE empresa_id=$1 AND id_cliente_servico=$2',
         [empresa_id, c.id_cliente_servico]);
-      const dataBR = (v) => v ? new Date(v).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
       // Marca o vendedor de verdade quando o ID do Discord dele está cadastrado;
       // sem o ID o Discord não notifica, então cai no nome em negrito.
       const nomeVend = c.vendedor_cadastrado || c.vendedor_nome || '—';
@@ -95,8 +98,8 @@ async function avisarCancelamentos(empresa_id) {
         fields: [
           { name: '👤 Cliente', value: c.nome_cliente || '—', inline: true },
           { name: '🧑‍💼 Vendedor', value: vendedor, inline: false },
-          { name: '📅 Cadastro', value: dataBR(c.data_cadastro || c.data_venda), inline: true },
-          { name: '🚫 Cancelamento', value: dataBR(c.data_cancelamento), inline: true },
+          { name: '📅 Cadastro', value: c.cadastro_br || '—', inline: true },
+          { name: '🚫 Cancelamento', value: c.cancelamento_br || '—', inline: true },
           { name: '📝 Motivo', value: c.motivo_cancelamento || '—', inline: false },
         ],
         color: COR.vermelho || COR.laranja,
