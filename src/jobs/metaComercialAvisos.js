@@ -47,8 +47,10 @@ async function avisarMetasBatidas(empresa_id) {
   }
 }
 
-// Avisa cada CANCELAMENTO novo de venda feita no mês anterior por um vendedor cadastrado
-// (é o cancelamento que desconta do saldo dele). Cada contrato é avisado uma única vez.
+// Avisa cada CANCELAMENTO novo de venda de vendedor cadastrado. Cada contrato é
+// avisado uma única vez. O que entra depende do setor:
+//   PAP e Comercial → venda do mês anterior OU do próprio mês (a gestão acompanha os dois)
+//   Escritório      → só venda do mês anterior (é a que desconta do saldo)
 async function avisarCancelamentos(empresa_id) {
   const mes = mesAtualSP();
   const [a, m] = mes.split('-').map(Number);
@@ -57,19 +59,25 @@ async function avisarCancelamentos(empresa_id) {
   try {
     await run('ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS cancel_avisado_em TIMESTAMP');
 
-    // Vendas do mês anterior, canceladas no mês atual, de vendedor cadastrado, ainda não avisadas
+    // Canceladas no mês atual, de vendedor cadastrado, ainda não avisadas.
+    // A venda do próprio mês só entra para PAP e Comercial (Escritório fica de fora).
     const novos = await all(
       `SELECT s.id_cliente_servico, s.nome_cliente, s.cidade, s.vendedor_nome, s.data_venda,
               s.data_cadastro, s.data_cancelamento, s.motivo_cancelamento,
-              v.nome AS vendedor_cadastrado, v.filial
+              v.nome AS vendedor_cadastrado, v.filial,
+              TO_CHAR(s.data_venda,'YYYY-MM') AS mes_venda
        FROM meta_comercial_venda_sync s
        JOIN meta_comercial_vendedor v
          ON v.empresa_id = s.empresa_id AND LOWER(v.hubsoft_email) = LOWER(s.vendedor_email) AND v.ativo = true
        WHERE s.empresa_id = $1
-         AND TO_CHAR(s.data_venda,'YYYY-MM') = $2
          AND s.data_cancelamento IS NOT NULL
          AND TO_CHAR(s.data_cancelamento,'YYYY-MM') = $3
          AND s.cancel_avisado_em IS NULL
+         AND (
+           TO_CHAR(s.data_venda,'YYYY-MM') = $2
+           OR (TO_CHAR(s.data_venda,'YYYY-MM') = $3
+               AND (LOWER(v.filial) LIKE '%pap%' OR LOWER(v.filial) LIKE '%comercial%'))
+         )
        ORDER BY s.data_cancelamento`,
       [empresa_id, mesAnterior, mes]);
     if (!novos.length) return;
@@ -79,9 +87,13 @@ async function avisarCancelamentos(empresa_id) {
       await run('UPDATE meta_comercial_venda_sync SET cancel_avisado_em = NOW() WHERE empresa_id=$1 AND id_cliente_servico=$2',
         [empresa_id, c.id_cliente_servico]);
       const dataBR = (v) => v ? new Date(v).toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' }) : '—';
+      // Venda do próprio mês nem chegou a contar, então não há saldo a descontar
+      const mesmoMes = c.mes_venda === mes;
       await notificarDiscord(empresa_id, 'meta_cancelamento', {
         title: '❌ Cancelamento de venda',
-        description: `Este cancelamento desconta do saldo do mês do vendedor.`,
+        description: mesmoMes
+          ? 'Venda e cancelamento no mesmo mês — não conta como venda nem desconta do saldo.'
+          : 'Este cancelamento desconta do saldo do mês do vendedor.',
         fields: [
           { name: '👤 Cliente', value: c.nome_cliente || '—', inline: true },
           { name: '📍 Cidade', value: c.cidade || '—', inline: true },
