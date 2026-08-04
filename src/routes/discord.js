@@ -19,6 +19,12 @@ const EXEMPLOS = {
   chatmix:   { title: '⚠️ Alerta de Atendimento', description: '**[EXEMPLO]** Cliente aguardando na fila há mais de 5 min.' },
   feriado:   { title: '🚩 Feriado', description: '**[EXEMPLO]** Amanhã (07/09) é feriado: **Independência do Brasil**.' },
   rhid:      { title: '🕐 Ponto — Faltas do dia', description: '**[EXEMPLO]** Faltas de ontem:\n• **Carlos Lima** (Suporte)\n• **Ana Costa** (Financeiro)' },
+  meta:      { title: '📊 Relatório de Satisfação', description: '**[EXEMPLO]** Relatório de satisfação enviado ao Discord.' },
+  meta_fin:  { title: '📊 Meta — Financeiro', description: '**[EXEMPLO]** Financeiro: 92,4% de satisfação · 58,1% de taxa de resposta.' },
+  meta_cc:   { title: '📊 Meta — Call Center', description: '**[EXEMPLO]** Call Center: 89,7% de satisfação · 61,3% de taxa de resposta.' },
+  meta_batida: { title: '🎯 Meta batida!', description: '**[EXEMPLO]** 🎉 **Maria Silva** (Comercial) bateu a meta do mês: **35 de 35 vendas**. Parabéns!' },
+  meta_cancelamento: { title: '❌ Cancelamento de venda', description: '**[EXEMPLO]** 👤 João da Silva · 📍 Belém\n🧑‍💼 Maria Silva (Comercial)\n📅 Cadastro 12/07 · 🚫 Cancelamento 03/08\n📝 Motivo: mudança de endereço' },
+  ranking_mes: { title: '🏆 Ranking Comercial — julho de 2026', description: '**[EXEMPLO]** 🥇 **Maria Silva** — 42 vendas\n🥈 **João Souza** — 38 vendas\n🥉 **Ana Costa** — 31 vendas' },
 };
 
 const router = express.Router();
@@ -199,6 +205,23 @@ router.post('/testar-evento', async (req, res) => {
     registrarEnvio(req.usuario.empresa_id, evento, `Teste do evento ${evento}`, ok, ok ? null : 'Falha no envio');
     if (!ok) return res.status(502).json({ erro: 'Não foi possível enviar. Verifique o canal/webhook.' });
     res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// POST — prévia do Ranking do mês com os DADOS REAIS do mês anterior.
+// Envia no canal configurado sem salvar nada no mural (o ranking oficial só é
+// gerado no 1º dia útil). Serve para conferir conteúdo e canal antes da virada.
+router.post('/previa-ranking', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const rk = require('../jobs/rankingMensal');
+    const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    const d = new Date(hoje + 'T12:00');
+    const ant = new Date(d.getFullYear(), d.getMonth() - 1, 1);
+    const mesRef = req.body.mes || `${ant.getFullYear()}-${String(ant.getMonth() + 1).padStart(2, '0')}`;
+    const criados = await rk.gerarRankingsDoMes(req.usuario.empresa_id, mesRef, true);
+    if (!criados.length) return res.status(400).json({ erro: `Sem dados para gerar ranking de ${mesRef}.` });
+    res.json({ ok: true, mes: mesRef, rankings: criados });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

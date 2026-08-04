@@ -41,15 +41,16 @@ function setorDaFilial(filial) {
 }
 
 // Cria o ranking + posições e avisa no Discord
-async function criarRanking(empresa_id, titulo, descricao, linhas) {
+// previa = só avisa no Discord com os dados reais, sem salvar no mural (usado no botão de teste)
+async function criarRanking(empresa_id, titulo, descricao, linhas, previa = false) {
   if (!linhas.length) return null;
   const id = uuidv4();
-  await run(
+  if (!previa) await run(
     `INSERT INTO cultura_rankings (id,empresa_id,titulo,descricao,periodo,tipo_ranking,ativo)
      VALUES ($1,$2,$3,$4,$5,'automatico',1)`,
     [id, empresa_id, titulo, descricao, descricao]
   );
-  for (const l of linhas) {
+  for (const l of (previa ? [] : linhas)) {
     await run(
       `INSERT INTO cultura_ranking_posicoes (id,ranking_id,posicao,usuario_id,nome_externo,pontuacao,descricao)
        VALUES ($1,$2,$3,$4,$5,$6,$7)`,
@@ -62,10 +63,10 @@ async function criarRanking(empresa_id, titulo, descricao, linhas) {
   }).join('\n');
   await notificarDiscord(empresa_id, 'ranking_mes', {
     title: `🏆 ${titulo}`,
-    description: `${descricao}\n\n${texto}`,
+    description: `${descricao}\n\n${texto}${previa ? '\n\n_Prévia de teste — não foi salva no mural._' : ''}`,
     color: COR.laranja,
     linkPath: '/cultura/reconhecimento',
-    footer: { text: 'Kronos — Ranking do mês (automático)' },
+    footer: { text: previa ? 'Kronos — Ranking do mês (prévia)' : 'Kronos — Ranking do mês (automático)' },
     timestamp: new Date().toISOString(),
   }).catch(() => {});
   return id;
@@ -81,7 +82,7 @@ function posicionar(itens, chaveValor) {
   });
 }
 
-async function gerarRankingsDoMes(empresa_id, mesRef) {
+async function gerarRankingsDoMes(empresa_id, mesRef, previa = false) {
   const rotulo = mesExtenso(mesRef);
   const gestao = require('../routes/gestao-extra');
   const criados = [];
@@ -101,7 +102,7 @@ async function gerarRankingsDoMes(empresa_id, mesRef) {
     for (const [setor, lista] of Object.entries(porSetor)) {
       const linhas = posicionar(lista, 'valor').slice(0, 10);
       const id = await criarRanking(empresa_id, `Ranking ${setor} — ${rotulo}`,
-        `Por vendas do mês (${rotulo})`, linhas);
+        `Por vendas do mês (${rotulo})`, linhas, previa);
       if (id) criados.push(`${setor} (vendas)`);
     }
   }
@@ -130,7 +131,7 @@ async function gerarRankingsDoMes(empresa_id, mesRef) {
       for (const [dept, lista] of Object.entries(porDept)) {
         const linhas = posicionar(lista, 'valor').slice(0, 10);
         const id = await criarRanking(empresa_id, `Ranking ${dept} — ${rotulo}`,
-          `Por satisfação + taxa de resposta (${rotulo})`, linhas);
+          `Por satisfação + taxa de resposta (${rotulo})`, linhas, previa);
         if (id) criados.push(`${dept} (satisfação)`);
       }
     }
