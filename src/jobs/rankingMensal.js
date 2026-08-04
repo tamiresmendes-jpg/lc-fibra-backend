@@ -1,8 +1,9 @@
 // Rankings automáticos por setor, gerados no 1º dia útil do mês com os dados do mês anterior,
 // salvos em Cultura → Reconhecimento (aparecem no mural) e avisados no Discord.
 //
-// Critério definido pela gestão: só Comercial, PAP e Escritório, e só entra quem
-// BATEU a meta do mês (ordenado por vendas). Call Center e Financeiro ficam de fora.
+// Critério definido pela gestão: só Comercial, PAP e Escritório, e só entra quem BATEU
+// a meta pelo SALDO (vendas menos cancelamentos) — o mesmo número que é pago.
+// Call Center e Financeiro ficam de fora.
 const { all, get, run } = require('../config/database');
 const { v4: uuidv4 } = require('uuid');
 const { notificar: notificarDiscord, COR } = require('../utils/discord');
@@ -105,12 +106,14 @@ async function gerarRankingsDoMes(empresa_id, mesRef, previa = false) {
     const porSetor = {};
     for (const i of (dados?.itens || [])) {
       const setor = setorDaFilial(i.filial);
-      if (!setor || !i.qtd_vendas) continue;
-      // Só entra no ranking quem BATEU a meta do mês (quem não bateu fica de fora)
-      if (!(i.meta > 0) || i.qtd_vendas < i.meta) continue;
+      if (!setor) continue;
+      // Só entra quem BATEU a meta — pelo SALDO (vendas menos cancelamentos), que é
+      // o mesmo número que a gestão usa para pagar. bate_meta já vem calculado assim.
+      if (!i.bate_meta) continue;
+      const saldo = i.saldo ?? 0;
       (porSetor[setor] = porSetor[setor] || []).push({
-        nome: i.nome, usuario_id: i.usuario_id || idxUsuarios.get(semAcento(i.nome)) || null, valor: i.qtd_vendas,
-        pontuacao: `${i.qtd_vendas} vendas`, detalhe: i.filial || null,
+        nome: i.nome, usuario_id: i.usuario_id || idxUsuarios.get(semAcento(i.nome)) || null, valor: saldo,
+        pontuacao: `${saldo} vendas`, detalhe: i.filial || null,
       });
     }
     for (const [setor, lista] of Object.entries(porSetor)) {
