@@ -504,6 +504,8 @@ async function initSchema() {
       publico INTEGER DEFAULT 1,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    -- Foto opcional anexada ao próprio reconhecimento (momento, entrega do prêmio, etc.)
+    ALTER TABLE cultura_reconhecimentos ADD COLUMN IF NOT EXISTS foto TEXT;
 
     CREATE TABLE IF NOT EXISTS cultura_pdis (
       id TEXT PRIMARY KEY,

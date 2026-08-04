@@ -1,4 +1,7 @@
 const express = require('express');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const router = express.Router();
 const { v4: uuidv4 } = require('uuid');
 const { run, get, all } = require('../config/database');
@@ -6,6 +9,19 @@ const { autenticar } = require('../middleware/auth');
 const { notificar: notificarDiscord, COR: DISCORD_COR } = require('../utils/discord');
 
 router.use(autenticar);
+
+// Upload da foto do reconhecimento (mesmo padrão dos anexos de POP)
+const UPLOADS_DIR = path.join(__dirname, '../../uploads');
+try { if (!fs.existsSync(UPLOADS_DIR)) fs.mkdirSync(UPLOADS_DIR, { recursive: true }); } catch { /* já existe */ }
+const uploadFoto = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, UPLOADS_DIR),
+    filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+  fileFilter: (req, file, cb) => (file.mimetype || '').startsWith('image/')
+    ? cb(null, true) : cb(new Error('Envie uma imagem (JPG, PNG...)')),
+});
 
 const stripHtml = (h) => (h || '').replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
 const primeiraImagem = (h) => { const m = (h || '').match(/<img[^>]+src="([^"]+)"/i); return m ? m[1] : null; };
@@ -137,27 +153,58 @@ router.get('/institucional/:id/aceites', async (req, res) => {
 });
 
 // ─── RECONHECIMENTOS ──────────────────────────────────────────────────────────
+// Mural por mês: sem ?mes vem o mês atual; os anteriores continuam guardados e são
+// acessados pelo seletor de mês da tela (?mes=YYYY-MM). ?mes=todos traz o histórico inteiro.
 router.get('/reconhecimentos', async (req, res) => {
   try {
+    const mes = String(req.query.mes || '').trim();
+    const params = [empId(req)];
+    let filtro = '';
+    if (mes !== 'todos') {
+      const alvo = /^\d{4}-\d{2}$/.test(mes)
+        ? mes
+        : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
+      params.push(alvo);
+      filtro = ` AND TO_CHAR(r.created_at::timestamp, 'YYYY-MM') = $${params.length}`;
+    }
     const rows = await all(`
       SELECT r.*, u1.nome as de_nome, u1.avatar as de_avatar,
              u2.nome as para_nome, u2.avatar as para_avatar
       FROM cultura_reconhecimentos r
       JOIN usuarios u1 ON r.de_usuario_id = u1.id
       JOIN usuarios u2 ON r.para_usuario_id = u2.id
-      WHERE r.empresa_id = $1 ORDER BY r.created_at DESC
-    `, [empId(req)]);
+      WHERE r.empresa_id = $1${filtro} ORDER BY r.created_at DESC
+    `, params);
     res.json(rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Meses que já têm reconhecimento — alimenta o seletor de mês
+router.get('/reconhecimentos/meses', async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT TO_CHAR(created_at::timestamp, 'YYYY-MM') AS mes, COUNT(*)::int AS qtd
+       FROM cultura_reconhecimentos WHERE empresa_id = $1
+       GROUP BY 1 ORDER BY 1 DESC`, [empId(req)]);
+    res.json(rows);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Upload da foto do reconhecimento — devolve o caminho para salvar junto do registro
+router.post('/reconhecimentos/foto', uploadFoto.single('foto'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ erro: 'Nenhuma imagem enviada' });
+    res.json({ url: `/uploads/${req.file.filename}` });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 router.post('/reconhecimentos', async (req, res) => {
   try {
-    const { tipo, para_usuario_id, valor, descricao, publico } = req.body;
+    const { tipo, para_usuario_id, valor, descricao, publico, foto } = req.body;
     const id = uuidv4();
     await run(
-      'INSERT INTO cultura_reconhecimentos (id,empresa_id,tipo,de_usuario_id,para_usuario_id,valor,descricao,publico) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)',
-      [id, empId(req), tipo||'elogio', req.usuario.id, para_usuario_id, valor||null, descricao, publico!==false?1:0]
+      'INSERT INTO cultura_reconhecimentos (id,empresa_id,tipo,de_usuario_id,para_usuario_id,valor,descricao,publico,foto) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)',
+      [id, empId(req), tipo||'elogio', req.usuario.id, para_usuario_id, valor||null, descricao, publico!==false?1:0, foto||null]
     );
     res.json({ id });
     if (publico !== false) {
