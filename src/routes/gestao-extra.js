@@ -344,6 +344,112 @@ router.get('/meta-comercial/pdf', autenticar, exigirVerMetaComercial, async (req
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ─── Acompanhamento e Análise da Meta (dados do HubSoft) ─────────────────────
+// Cidade vem da FILIAL do vendedor: a API de integração do HubSoft não devolve
+// endereço do cliente em nenhum endpoint (conferido em ago/2026).
+const CIDADE_POR_FILIAL = {
+  sln: 'Salinópolis', cdp: 'Concórdia do Pará', smg: 'São Miguel do Guamá',
+  nep: 'Nova Esperança do Piriá', acr: 'Acará', adp: 'Aurora do Pará',
+  gdn: 'Garrafão do Norte', ipx: 'Ipixuna do Pará', mdr: 'Mãe do Rio',
+  centro: 'Centro', matriz: 'Matriz',
+};
+function cidadeDaFilial(filial) {
+  const f = (filial || '').trim();
+  if (!f) return 'Sem filial';
+  const sigla = f.split('-').pop().trim().toLowerCase();
+  if (CIDADE_POR_FILIAL[sigla]) return CIDADE_POR_FILIAL[sigla];
+  // "Mãe do rio - PAP", "Concórdia - PAP", "Ipixuna - PAP" → a cidade vem antes do traço
+  const antes = f.split('-')[0].trim();
+  return antes || f;
+}
+
+router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async (req, res) => {
+  try {
+    const eid = req.usuario.empresa_id;
+    const mes = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
+    const setor = (req.query.setor || 'todos').toLowerCase(); // todos | comercial | pap | escritorio
+
+    const base = await montarMetaComercial(eid, mes, req.usuario.perfil);
+    let itens = base.itens || [];
+    if (setor !== 'todos') {
+      itens = itens.filter(i => {
+        const f = (i.filial || '').toLowerCase();
+        if (setor === 'escritorio') return f.includes('esc');
+        if (setor === 'pap') return f.includes('pap');
+        if (setor === 'comercial') return f.includes('comercial');
+        return true;
+      });
+    }
+    const emails = itens.map(i => (i.hubsoft_email || '').toLowerCase()).filter(Boolean);
+
+    // Vendas do mês (excluindo as canceladas dentro do próprio mês — mesma regra do painel)
+    const filtroVendas = `empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
+       AND NOT (data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM')=$2)
+       AND LOWER(vendedor_email) = ANY($3)`;
+    const p = [eid, mes, emails.length ? emails : ['']];
+
+    const [porDia, porServico, porTipo, porTecnologia, receita] = await Promise.all([
+      all(`SELECT TO_CHAR(data_venda,'DD') AS dia, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 1`, p),
+      all(`SELECT COALESCE(NULLIF(nome_servico,''),'Sem plano') AS servico, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC LIMIT 12`, p),
+      all(`SELECT CASE WHEN LOWER(COALESCE(tipo_pessoa,''))='pj' THEN 'Pessoa Jurídica'
+                       WHEN LOWER(COALESCE(tipo_pessoa,''))='pf' THEN 'Pessoa Física'
+                       ELSE 'Não informado' END AS tipo, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
+      all(`SELECT COALESCE(NULLIF(tecnologia,''),'Não informada') AS tecnologia, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
+      get(`SELECT COALESCE(SUM(valor),0)::float AS total, COALESCE(AVG(valor),0)::float AS ticket
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas}`, p),
+    ]);
+
+    // Por filial (meta x vendas x %) e por cidade — a partir dos itens já calculados
+    const porFilial = [];
+    const cidades = {};
+    for (const i of itens) {
+      const metaI = i.conta_meta ? (i.meta || 0) : 0;
+      porFilial.push({
+        filial: i.filial || 'Sem filial',
+        vendedor: i.nome,
+        meta: metaI,
+        vendas: i.qtd_vendas || 0,
+        saldo: i.saldo || 0,
+        pct: metaI > 0 ? Math.round(((i.saldo || 0) / metaI) * 100) : null,
+      });
+      const cid = cidadeDaFilial(i.filial);
+      cidades[cid] = (cidades[cid] || 0) + (i.qtd_vendas || 0);
+    }
+    porFilial.sort((a, b) => b.vendas - a.vendas);
+
+    const totalMeta = itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0);
+    const totalVendas = itens.reduce((s, i) => s + (i.qtd_vendas || 0), 0);
+    const totalCancel = itens.reduce((s, i) => s + (i.cancelamento || 0), 0);
+    const totalSaldo = itens.reduce((s, i) => s + (i.saldo || 0), 0);
+
+    res.json({
+      mes, setor,
+      resumo: {
+        meta: totalMeta,
+        vendas: totalVendas,
+        cancelamentos: totalCancel,
+        saldo: totalSaldo,
+        pct: totalMeta > 0 ? Math.round((totalSaldo / totalMeta) * 100) : null,
+        bateram: itens.filter(i => i.bate_meta).length,
+        vendedores: itens.length,
+        receita: Math.round((receita?.total || 0) * 100) / 100,
+        ticket_medio: Math.round((receita?.ticket || 0) * 100) / 100,
+      },
+      por_filial: porFilial,
+      por_cidade: Object.entries(cidades).map(([cidade, qtd]) => ({ cidade, qtd }))
+        .filter(c => c.qtd > 0).sort((a, b) => b.qtd - a.qtd),
+      por_dia: porDia.map(d => ({ dia: parseInt(d.dia, 10), qtd: d.qtd })),
+      por_servico: porServico,
+      por_tipo: porTipo,
+      por_tecnologia: porTecnologia,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Histórico dos PDFs já gerados (acompanhamento)
 router.get('/meta-comercial/pdfs', autenticar, exigirVerMetaComercial, async (req, res) => {
   try {

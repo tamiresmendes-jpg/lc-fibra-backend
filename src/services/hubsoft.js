@@ -256,10 +256,17 @@ async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } 
   const servicos = [];
   for (const c of clientes) {
     for (const s of (c.servicos || [])) {
-      // Cidade: prioriza o endereço de instalação (onde o serviço está), com fallback no cadastral
+      // Cidade: a API de integração NÃO devolve endereço em nenhuma relação nem no
+      // detalhe do cliente (conferido em ago/2026), então fica nulo aqui — quem
+      // precisa de cidade usa a filial do vendedor.
       const cidade = s.endereco_instalacao?.cidade || s.endereco_cadastral?.cidade
         || c.endereco_instalacao?.cidade || c.endereco_cadastral?.cidade || null;
-      servicos.push({ ...s, cliente_nome: c.nome_razaosocial || c.nome_fantasia || null, cidade });
+      servicos.push({
+        ...s,
+        cliente_nome: c.nome_razaosocial || c.nome_fantasia || null,
+        cidade,
+        tipo_pessoa: c.tipo_pessoa || null,   // 'pf' | 'pj' — usado na análise da meta
+      });
     }
   }
   return servicos;

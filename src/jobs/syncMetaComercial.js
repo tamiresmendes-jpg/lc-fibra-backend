@@ -25,19 +25,22 @@ async function sincronizarEmpresa(empresa_id) {
     };
     await run(
       `INSERT INTO meta_comercial_venda_sync
-        (empresa_id, id_cliente_servico, id_vendedor, vendedor_nome, vendedor_email, nome_cliente, nome_servico, data_venda, status_prefixo, data_cancelamento, motivo_cancelamento, data_cadastro, data_habilitacao, cidade, sincronizado_em)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,NOW())
+        (empresa_id, id_cliente_servico, id_vendedor, vendedor_nome, vendedor_email, nome_cliente, nome_servico, data_venda, status_prefixo, data_cancelamento, motivo_cancelamento, data_cadastro, data_habilitacao, cidade, tipo_pessoa, valor, tecnologia, sincronizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,NOW())
        ON CONFLICT (empresa_id, id_cliente_servico) DO UPDATE SET
          id_vendedor=EXCLUDED.id_vendedor, vendedor_nome=EXCLUDED.vendedor_nome, vendedor_email=EXCLUDED.vendedor_email,
          nome_cliente=EXCLUDED.nome_cliente, nome_servico=EXCLUDED.nome_servico, data_venda=EXCLUDED.data_venda,
          status_prefixo=EXCLUDED.status_prefixo, data_cancelamento=EXCLUDED.data_cancelamento,
          motivo_cancelamento=EXCLUDED.motivo_cancelamento, data_cadastro=EXCLUDED.data_cadastro,
-         data_habilitacao=EXCLUDED.data_habilitacao, cidade=EXCLUDED.cidade, sincronizado_em=NOW()`,
+         data_habilitacao=EXCLUDED.data_habilitacao, cidade=EXCLUDED.cidade,
+         tipo_pessoa=EXCLUDED.tipo_pessoa, valor=EXCLUDED.valor, tecnologia=EXCLUDED.tecnologia,
+         sincronizado_em=NOW()`,
       [
         empresa_id, s.id_cliente_servico, v.id_vendedor || null, v.nome || null, (v.email || '').toLowerCase() || null,
         s.cliente_nome, s.nome || null, paraISO(s.data_venda), s.status_prefixo || null,
         paraISO(s.data_cancelamento), s.motivo_cancelamento || null,
         paraISO(s.data_cadastro), paraISO(s.data_habilitacao), s.cidade || null,
+        s.tipo_pessoa || null, Number(s.valor) || null, s.tecnologia || null,
       ]
     );
     gravados++;
