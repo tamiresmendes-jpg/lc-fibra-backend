@@ -5,6 +5,7 @@ const {
   temPermissaoServer,
   resolverPermissao,
   ehRotaPessoal,
+  ehLeituraDeApoio,
   ehModuloOptIn,
 } = require('../utils/permissoes');
 
@@ -18,10 +19,14 @@ const METODOS_MUTACAO = ['POST', 'PUT', 'PATCH', 'DELETE'];
 //   colaborador           → BLOQUEADO em qualquer alteração (somente leitura)
 //   líder / gestor        → segue o grupo (editar onde liberado; bloqueado em "visualizar")
 //
+// LEITURA (GET) também é verificada: módulo que o grupo não libera não pode nem
+// ser lido pela API. Esconder só na tela não protege — bastaria chamar o endereço
+// da API para ver salário, premiação, feedback, etc.
 async function verificarPermissao(req, res, next) {
   try {
-    // Apenas operações que alteram dados
-    if (!METODOS_MUTACAO.includes(req.method)) return next();
+    const ehMutacao = METODOS_MUTACAO.includes(req.method);
+    // Métodos que não leem nem escrevem (OPTIONS/HEAD) seguem livres
+    if (!ehMutacao && req.method !== 'GET') return next();
 
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
@@ -35,9 +40,11 @@ async function verificarPermissao(req, res, next) {
 
     if (usuario.perfil === 'admin') return next();
     if (ehRotaPessoal(path)) return next();
+    // Listas de apoio: leitura liberada (alimentam seletores de todo o sistema)
+    if (!ehMutacao && ehLeituraDeApoio(path)) return next();
 
-    // Colaborador: somente leitura total
-    if (usuario.perfil === 'colaborador') {
+    // Colaborador: somente leitura total (a leitura em si ainda segue o grupo, abaixo)
+    if (ehMutacao && usuario.perfil === 'colaborador') {
       return res.status(403).json({ erro: 'Colaboradores têm acesso somente de leitura. Esta ação não é permitida.' });
     }
 
@@ -65,6 +72,12 @@ async function verificarPermissao(req, res, next) {
     }
 
     if (!perms) return next(); // sem restrição configurada → acesso total
+
+    // Leitura exige 'visualizar'; alteração exige 'editar'
+    if (!ehMutacao) {
+      if (temPermissaoServer(perms, chave, 'visualizar')) return next();
+      return res.status(403).json({ erro: 'Este módulo não está liberado para o seu grupo.' });
+    }
 
     if (temPermissaoServer(perms, chave, 'editar')) return next();
 

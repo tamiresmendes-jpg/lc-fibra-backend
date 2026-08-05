@@ -241,11 +241,52 @@ function ehRotaPessoal(path) {
   return ROTAS_PESSOAIS.some(re => re.test(path));
 }
 
+// Listas de apoio: alimentam seletores e rótulos em TODO o sistema (escolher a
+// pessoa de um feedback, o departamento de um POP, o cargo num organograma...).
+// A LEITURA delas fica liberada, senão bloquear "Pessoas" quebraria em cascata
+// telas que o grupo liberou. Trazem apenas nome/vínculo — o dado sensível de cada
+// módulo (salário, férias, feedback, meta) continua protegido pela regra normal.
+// A ALTERAÇÃO segue exigindo permissão do módulo.
+const LEITURA_APOIO = [
+  /^\/api\/usuarios(\/|$)/,
+  /^\/api\/departamentos(\/|$)/,
+  /^\/api\/cargos(\/|$)/,
+  /^\/api\/setores(\/|$)/,
+  /^\/api\/unidades(\/|$)/,
+  /^\/api\/empresa(\/|$)/,
+  /^\/api\/grupos-permissao(\/|$)/,
+  /^\/api\/feriados(\/|$)/,   // usado no cálculo de day off, escala e hora extra 100%
+];
+function ehLeituraDeApoio(path) {
+  return LEITURA_APOIO.some(re => re.test(path));
+}
+
+// Para telas que juntam dados de VÁRIOS módulos (calendário, dashboard, mural):
+// devolve uma função pode('modulo.item') já com as permissões efetivas do usuário
+// da requisição. Módulo que o grupo não libera não deve aparecer nessas telas.
+// Admin vê tudo; usuário sem restrição configurada também (mantém o comportamento atual).
+async function permissoesDoUsuario(req) {
+  const u = req.usuario || {};
+  if (u.perfil === 'admin') return () => true;
+  let ownPerms = null;
+  try {
+    const row = await get('SELECT permissoes_modulos FROM usuarios WHERE id = ?', [u.id]);
+    if (row?.permissoes_modulos) ownPerms = JSON.parse(row.permissoes_modulos);
+  } catch { ownPerms = null; }
+  let perms = null;
+  try { perms = await buscarPermsEfetivas(u.id, u.empresa_id, ownPerms); }
+  catch { return () => true; } // falha ao ler permissão não deve esvaziar a tela
+  if (!perms) return () => true;
+  return (chave) => temPermissaoServer(perms, chave, 'visualizar');
+}
+
 module.exports = {
   mesclarPermissoes,
   buscarPermsEfetivas,
   temPermissaoServer,
   resolverPermissao,
   ehRotaPessoal,
+  ehLeituraDeApoio,
   ehModuloOptIn,
+  permissoesDoUsuario,
 };

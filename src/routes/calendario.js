@@ -1,6 +1,7 @@
 const express = require('express');
 const { all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
+const { permissoesDoUsuario } = require('../utils/permissoes');
 
 const router = express.Router();
 router.use(autenticar);
@@ -183,7 +184,21 @@ router.get('/', async (req, res) => {
       }
     }
 
-    res.json({ agenda, reunioes, eventos, coffeeBreaks, ferias, feriados, avisos, aniversarios, dayoffsAniversario });
+    // O calendário junta dados de vários módulos. Cada bloco só sai se o grupo de
+    // permissão liberar o módulo de origem — módulo bloqueado não aparece aqui.
+    const pode = await permissoesDoUsuario(req);
+    const vazio = [];
+    res.json({
+      agenda,                                                             // pessoal: só itens do próprio usuário
+      reunioes:           pode('cultura.comunicacao')    ? reunioes     : vazio,
+      eventos:            pode('cultura.eventos')        ? eventos      : vazio,
+      coffeeBreaks:       pode('equipe.coffee-break')    ? coffeeBreaks : vazio,
+      ferias:             pode('equipe.ferias')          ? ferias       : vazio,
+      feriados:           pode('empresa.feriados')       ? feriados     : vazio,
+      avisos:             pode('cultura.mural')          ? avisos       : vazio,
+      aniversarios:       pode('equipe.aniversariantes') ? aniversarios : vazio,
+      dayoffsAniversario: pode('equipe.dayoff')          ? dayoffsAniversario : vazio,
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
