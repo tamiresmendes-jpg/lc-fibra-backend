@@ -18,8 +18,11 @@ async function enriquecerMes(empresa_id, mesRef) {
     : new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }).slice(0, 7);
   const [ano, m] = mes.split('-').map(Number);
   const ultimo = new Date(ano, m, 0).getDate();
+  const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  // O relatório recusa data futura: no mês corrente, o fim é hoje
+  const fimIso = mes === hoje.slice(0, 7) ? hoje : `${mes}-${String(ultimo).padStart(2, '0')}`;
   const di = ddmmaaaa(`${mes}-01`);
-  const df = ddmmaaaa(`${mes}-${String(ultimo).padStart(2, '0')}`);
+  const df = ddmmaaaa(fimIso);
 
   let pagina = 1, paginas = 1, atualizados = 0, lidos = 0;
   do {
