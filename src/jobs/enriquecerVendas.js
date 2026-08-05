@@ -41,8 +41,9 @@ async function enriquecerMes(empresa_id, mesRef) {
           WHERE empresa_id = $1 AND id_cliente_servico = $2`,
         [empresa_id, id, s.cidade || null, s.bairro || null,
          (s.origem || '').toLowerCase() || null, s.servico_status || null,
-         // O painel manda "-" quando não há contrato registrado
-         (s.situacao_contrato && s.situacao_contrato !== '-') ? s.situacao_contrato : null]
+         // No relatório, "Contrato Aceito" = assinado e "-" = ainda não assinado.
+         // O traço É a informação: guardamos como "Não assinado" para não sumir.
+         /aceito/i.test(s.situacao_contrato || '') ? 'Assinado' : 'Não assinado']
       );
       if (res?.rowCount) atualizados += res.rowCount;
     }
