@@ -371,7 +371,10 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
 
     const base = await montarMetaComercial(eid, mes, req.usuario.perfil);
     let itens = base.itens || [];
-    if (setor !== 'todos') {
+    // Visão individual: um vendedor só (pelo id cadastrado)
+    const vendedorId = (req.query.vendedor || '').trim();
+    if (vendedorId) itens = itens.filter(i => String(i.id) === vendedorId);
+    else if (setor !== 'todos') {
       itens = itens.filter(i => {
         const f = (i.filial || '').toLowerCase();
         if (setor === 'escritorio') return f.includes('esc');
@@ -405,6 +408,27 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
       get(`SELECT COALESCE(SUM(valor),0)::float AS total, COALESCE(AVG(valor),0)::float AS ticket
            FROM meta_comercial_venda_sync WHERE ${filtroVendas}`, p),
+    ]);
+
+    // Cortes que dependem do Relatório de Serviços do painel (cidade real, bairro,
+    // origem e contrato). Ficam vazios até o enriquecimento rodar.
+    const [porCidadeReal, porBairro, porOrigem, porContrato, clientes] = await Promise.all([
+      all(`SELECT cidade, COUNT(*)::int AS qtd FROM meta_comercial_venda_sync
+           WHERE ${filtroVendas} AND cidade IS NOT NULL AND cidade <> ''
+           GROUP BY 1 ORDER BY 2 DESC`, p),
+      all(`SELECT bairro, COUNT(*)::int AS qtd FROM meta_comercial_venda_sync
+           WHERE ${filtroVendas} AND bairro IS NOT NULL AND bairro <> ''
+           GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, p),
+      all(`SELECT INITCAP(origem) AS origem, COUNT(*)::int AS qtd FROM meta_comercial_venda_sync
+           WHERE ${filtroVendas} AND origem IS NOT NULL AND origem <> ''
+           GROUP BY 1 ORDER BY 2 DESC`, p),
+      all(`SELECT COALESCE(NULLIF(situacao_contrato,''),'Não informado') AS contrato, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
+      all(`SELECT nome_cliente, nome_servico, cidade, bairro, origem, servico_status,
+                  TO_CHAR(data_venda,'DD/MM/YYYY') AS data_venda,
+                  CASE WHEN LOWER(COALESCE(tipo_pessoa,''))='pj' THEN 'PJ' ELSE 'PF' END AS tipo
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas}
+           ORDER BY data_venda, nome_cliente LIMIT 400`, p),
     ]);
 
     // Por filial (meta x vendas x %) e por cidade — a partir dos itens já calculados
@@ -444,8 +468,16 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
         ticket_medio: Math.round((receita?.ticket || 0) * 100) / 100,
       },
       por_filial: porFilial,
-      por_cidade: Object.entries(cidades).map(([cidade, qtd]) => ({ cidade, qtd }))
-        .filter(c => c.qtd > 0).sort((a, b) => b.qtd - a.qtd),
+      // Cidade real do serviço quando o relatório já preencheu; senão, a unidade do vendedor
+      por_cidade: porCidadeReal.length ? porCidadeReal
+        : Object.entries(cidades).map(([cidade, qtd]) => ({ cidade, qtd }))
+            .filter(c => c.qtd > 0).sort((a, b) => b.qtd - a.qtd),
+      cidade_real: porCidadeReal.length > 0,
+      por_bairro: porBairro,
+      por_origem: porOrigem,
+      por_contrato: porContrato,
+      clientes,
+      vendedores: (base.itens || []).map(i => ({ id: i.id, nome: i.nome, filial: i.filial })),
       por_dia: porDia.map(d => ({ dia: parseInt(d.dia, 10), qtd: d.qtd })),
       por_servico: porServico,
       por_tipo: porTipo,

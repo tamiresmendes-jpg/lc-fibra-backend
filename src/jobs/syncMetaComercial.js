@@ -71,6 +71,8 @@ async function tick() {
         console.log(`[syncMetaComercial] ${empresa_id}: ${n} serviços sincronizados`);
         // Com os dados atualizados, avisa no Discord quem bateu a meta e os cancelamentos novos
         const avisos = require('./metaComercialAvisos');
+        // Completa cidade, bairro, origem e situação com o Relatório de Serviços do painel
+        await require('./enriquecerVendas').enriquecerRecentes(empresa_id).catch(() => {});
         await avisos.avisarMetasBatidas(empresa_id).catch(() => {});
         await avisos.avisarCancelamentos(empresa_id).catch(() => {});
       } catch (e) {
