@@ -6,9 +6,11 @@
 const { run, all } = require('../config/database');
 const hubsoft = require('../services/hubsoft');
 
+// ATENÇÃO: o Relatório de Serviços lê data no formato AMERICANO (mm/dd/aaaa).
+// Enviar 01/08/2026 achando que é 1º de agosto traz 8 de janeiro.
 function ddmmaaaa(iso) {
   const [a, m, d] = iso.split('-');
-  return `${d}/${m}/${a}`;
+  return `${m}/${d}/${a}`;
 }
 
 // Período = mês inteiro (YYYY-MM). Sem mês, usa o mês corrente em SP.
