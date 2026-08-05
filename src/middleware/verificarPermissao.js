@@ -11,6 +11,13 @@ const {
 
 const METODOS_MUTACAO = ['POST', 'PUT', 'PATCH', 'DELETE'];
 
+// Bloqueio de LEITURA (GET) por permissão. Fica desligado até os grupos serem
+// revisados: eles foram montados quando só a edição era checada, então "não
+// marcado" significava na prática "vê mas não edita". Ligar sem revisar tiraria
+// mural, reconhecimento e treinamentos de quase todos os grupos.
+// Para ligar: PERM_LEITURA=on no .env do servidor.
+const CHECAR_LEITURA = String(process.env.PERM_LEITURA || '').toLowerCase() === 'on';
+
 // Middleware GLOBAL: garante que as regras de permissão sejam aplicadas no
 // servidor, independentemente do frontend. Roda em server.js antes das rotas.
 //
@@ -27,6 +34,7 @@ async function verificarPermissao(req, res, next) {
     const ehMutacao = METODOS_MUTACAO.includes(req.method);
     // Métodos que não leem nem escrevem (OPTIONS/HEAD) seguem livres
     if (!ehMutacao && req.method !== 'GET') return next();
+    if (!ehMutacao && !CHECAR_LEITURA) return next();
 
     const authHeader = req.headers['authorization'];
     const token = authHeader && authHeader.split(' ')[1];
