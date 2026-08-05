@@ -67,22 +67,26 @@ async function enviarMetaSemanal() {
     const { di, df } = semanaAtualAcum();
     const chave = df; // dedup por dia (envia uma vez ao dia)
 
+    // Dedup por dia e por departamento (cada um tem seu próprio horário)
+    await run('CREATE TABLE IF NOT EXISTS meta_auto_envio (empresa_id TEXT NOT NULL, evento TEXT NOT NULL, dia TEXT, PRIMARY KEY (empresa_id, evento))');
+
     const empresas = await all(
       `SELECT empresa_id, notif_cfg FROM integracao_discord
-       WHERE ativo = 1 AND ev_meta = 1 AND meta_auto = 1
-       AND (ultimo_meta_env IS DISTINCT FROM $1)`, [chave]);
+       WHERE ativo = 1 AND ev_meta = 1 AND meta_auto = 1`);
 
     for (const emp of empresas) {
       const empresa_id = emp.empresa_id;
-      // Respeita a config do evento "meta": agendado espera a hora; tempo real envia no ciclo.
       let ncfg = {}; try { ncfg = emp.notif_cfg ? JSON.parse(emp.notif_cfg) : {}; } catch { /* */ }
-      const mc = ncfg.meta || {};
-      const modo = mc.modo || 'agendado';
-      const hora = (mc.hora !== undefined && mc.hora !== null && mc.hora !== '') ? +mc.hora : 8;
-      const minuto = Number.isFinite(+mc.minuto) ? Math.min(59, Math.max(0, +mc.minuto)) : 0;
-      if (modo !== 'realtime' && minutosSP() < (hora * 60 + minuto)) continue;
-      await run('UPDATE integracao_discord SET ultimo_meta_env = $1 WHERE empresa_id = $2', [chave, empresa_id]);
       const cfg = await getConfig(empresa_id);
+      // Este é um relatório DIÁRIO, então sempre espera o horário configurado.
+      // "Tempo real" não se aplica aqui: sem o portão da hora ele disparava no
+      // primeiro ciclo depois da meia-noite (era a causa do envio 01h).
+      const horarioDe = (ev) => {
+        const c = ncfg[ev] || {};
+        const h = (c.hora !== undefined && c.hora !== null && c.hora !== '') ? +c.hora : 8;
+        const m = Number.isFinite(+c.minuto) ? Math.min(59, Math.max(0, +c.minuto)) : 0;
+        return h * 60 + m;
+      };
       // Usa a MESMA lógica do relatório da tela (fonte única) — require lazy p/ evitar ciclo.
       const { calcularMeta } = require('../routes/chatmix');
 
@@ -91,6 +95,12 @@ async function enviarMetaSemanal() {
         { label: 'Call Center', ev: 'meta_cc', deps: ['Suporte'] },
       ];
       for (const g of grupos) {
+        // Cada departamento sai no horário que está configurado para ele, uma vez ao dia
+        if (minutosSP() < horarioDe(g.ev)) continue;
+        const ja = await get('SELECT dia FROM meta_auto_envio WHERE empresa_id=$1 AND evento=$2', [empresa_id, g.ev]);
+        if (ja?.dia === chave) continue;
+        await run(`INSERT INTO meta_auto_envio (empresa_id, evento, dia) VALUES ($1,$2,$3)
+                   ON CONFLICT (empresa_id, evento) DO UPDATE SET dia = EXCLUDED.dia`, [empresa_id, g.ev, chave]);
         const dados = await calcularMeta(empresa_id, di, df, 90, 55, { deps: g.deps });
         if (!dados.itens.length) continue;
         const url = await resolverWebhook(empresa_id, cfg, g.ev);
@@ -113,7 +123,7 @@ async function enviarMetaSemanal() {
 function iniciar() {
   setTimeout(enviarMetaSemanal, 45 * 1000);
   setInterval(enviarMetaSemanal, 10 * 60 * 1000);
-  console.log('[metaSemanal] iniciado (segunda 8h, por departamento)');
+  console.log('[metaSemanal] iniciado (uma vez ao dia, no horário de cada departamento)');
 }
 
 module.exports = { iniciar, enviarMetaSemanal };
