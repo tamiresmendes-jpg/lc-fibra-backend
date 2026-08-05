@@ -370,19 +370,19 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
     const setor = (req.query.setor || 'todos').toLowerCase(); // todos | comercial | pap | escritorio
 
     const base = await montarMetaComercial(eid, mes, req.usuario.perfil);
-    let itens = base.itens || [];
-    // Visão individual: um vendedor só (pelo id cadastrado)
+    // 1) Filtra pelo setor. A lista de vendedores do seletor sai daqui, então em
+    //    "Comercial" só aparecem os do Comercial; em "Geral", todos.
+    const doSetor = (base.itens || []).filter(i => {
+      if (setor === 'todos') return true;
+      const f = (i.filial || '').toLowerCase();
+      if (setor === 'escritorio') return f.includes('esc');
+      if (setor === 'pap') return f.includes('pap');
+      if (setor === 'comercial') return f.includes('comercial');
+      return true;
+    });
+    // 2) Dentro do setor, pode restringir a um vendedor
     const vendedorId = (req.query.vendedor || '').trim();
-    if (vendedorId) itens = itens.filter(i => String(i.id) === vendedorId);
-    else if (setor !== 'todos') {
-      itens = itens.filter(i => {
-        const f = (i.filial || '').toLowerCase();
-        if (setor === 'escritorio') return f.includes('esc');
-        if (setor === 'pap') return f.includes('pap');
-        if (setor === 'comercial') return f.includes('comercial');
-        return true;
-      });
-    }
+    let itens = vendedorId ? doSetor.filter(i => String(i.id) === vendedorId) : doSetor;
     const emails = itens.map(i => (i.hubsoft_email || '').toLowerCase()).filter(Boolean);
 
     // Vendas do mês (excluindo as canceladas dentro do próprio mês — mesma regra do painel)
@@ -477,7 +477,9 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       por_origem: porOrigem,
       por_contrato: porContrato,
       clientes,
-      vendedores: (base.itens || []).map(i => ({ id: i.id, nome: i.nome, filial: i.filial })),
+      // Só os do setor selecionado, para o seletor não misturar times
+      vendedores: doSetor.map(i => ({ id: i.id, nome: i.nome, filial: i.filial })),
+      vendedor_selecionado: vendedorId || null,
       por_dia: porDia.map(d => ({ dia: parseInt(d.dia, 10), qtd: d.qtd })),
       por_servico: porServico,
       por_tipo: porTipo,
