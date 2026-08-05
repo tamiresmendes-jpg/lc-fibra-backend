@@ -127,7 +127,9 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
     tipo_data: 'data_venda', order_by: 'data_venda', order_by_key: 'ASC',
     tipo_endereco: { descricao: 'Instalação', valor: 'instalacao' },
     tipo_pessoa: { descricao: 'Todos', valor: 'todos' },
-    origem, limit, pagina, per_page: limit, itens_por_pagina: limit,
+    // A paginação do relatório é pelo parâmetro `page` (Laravel). `pagina` sozinho
+    // devolve sempre a primeira página, o que fazia o enriquecimento repetir 15 registros.
+    origem, limit, pagina, page: pagina, per_page: limit, itens_por_pagina: limit,
   };
   const chamar = async (token) => fetch(`${baseUrl()}/api/v1/relatorio/cliente_servico`, {
     method: 'POST',
