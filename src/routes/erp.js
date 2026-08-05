@@ -1161,11 +1161,13 @@ function soAdminGestorErp(req, res) {
 router.get('/painel-config', autenticar, async (req, res) => {
   try {
     if (!soAdminGestorErp(req, res)) return;
-    const c = await pget('SELECT usuario, senha, atualizado_em FROM integracao_hubsoft_painel WHERE empresa_id=$1',
+    const c = await pget('SELECT usuario, senha, client_id, client_secret, atualizado_em FROM integracao_hubsoft_painel WHERE empresa_id=$1',
       [req.usuario.empresa_id]);
     res.json({
       usuario: c?.usuario || '',
       tem_senha: !!c?.senha,           // a senha em si nunca é devolvida
+      client_id: c?.client_id || '',
+      tem_client_secret: !!c?.client_secret,
       atualizado_em: c?.atualizado_em || null,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -1177,15 +1179,19 @@ router.put('/painel-config', autenticar, async (req, res) => {
     const usuario = (req.body.usuario || '').trim();
     const senha = req.body.senha || '';
     if (!usuario) return res.status(400).json({ erro: 'Informe o usuário do painel.' });
-    const atual = await pget('SELECT senha FROM integracao_hubsoft_painel WHERE empresa_id=$1', [req.usuario.empresa_id]);
-    // Campo de senha em branco = manter a que já está guardada
+    const atual = await pget('SELECT senha, client_secret FROM integracao_hubsoft_painel WHERE empresa_id=$1', [req.usuario.empresa_id]);
+    // Campos em branco = manter o que já está guardado
     const senhaFinal = senha ? cifrar(senha) : (atual?.senha || null);
     if (!senhaFinal) return res.status(400).json({ erro: 'Informe a senha do painel.' });
+    const clientId = (req.body.client_id || '').trim() || null;
+    const segredo = (req.body.client_secret || '').trim();
+    const segredoFinal = segredo ? cifrar(segredo) : (atual?.client_secret || null);
     await prun(
-      `INSERT INTO integracao_hubsoft_painel (empresa_id, usuario, senha, atualizado_em)
-       VALUES ($1,$2,$3,NOW())
-       ON CONFLICT (empresa_id) DO UPDATE SET usuario=EXCLUDED.usuario, senha=EXCLUDED.senha, atualizado_em=NOW()`,
-      [req.usuario.empresa_id, usuario, senhaFinal]
+      `INSERT INTO integracao_hubsoft_painel (empresa_id, usuario, senha, client_id, client_secret, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET usuario=EXCLUDED.usuario, senha=EXCLUDED.senha,
+         client_id=EXCLUDED.client_id, client_secret=EXCLUDED.client_secret, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, usuario, senhaFinal, clientId, segredoFinal]
     );
     res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }

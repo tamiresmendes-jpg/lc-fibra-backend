@@ -74,9 +74,15 @@ let _tokenPainel = null, _expiraPainel = 0, _loginPainelEmAndamento = null;
 async function credenciaisPainel(empresaId) {
   const { get } = require('../config/database');
   const { decifrar } = require('../utils/segredos');
-  const c = await get('SELECT usuario, senha FROM integracao_hubsoft_painel WHERE empresa_id = $1', [empresaId]);
+  const c = await get('SELECT usuario, senha, client_id, client_secret FROM integracao_hubsoft_painel WHERE empresa_id = $1', [empresaId]);
   if (!c?.usuario || !c?.senha) return null;
-  return { usuario: c.usuario, senha: decifrar(c.senha) };
+  return {
+    usuario: c.usuario,
+    senha: decifrar(c.senha),
+    // Sem client próprio, cai no da integração — que gera identidade sem acesso a relatórios
+    clientId: c.client_id || process.env.HUBSOFT_CLIENT_ID,
+    clientSecret: c.client_secret ? decifrar(c.client_secret) : process.env.HUBSOFT_CLIENT_SECRET,
+  };
 }
 
 async function autenticarPainel(empresaId) {
@@ -87,8 +93,8 @@ async function autenticarPainel(empresaId) {
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
       grant_type: 'password',
-      client_id: process.env.HUBSOFT_CLIENT_ID,
-      client_secret: process.env.HUBSOFT_CLIENT_SECRET,
+      client_id: cred.clientId,
+      client_secret: cred.clientSecret,
       username: cred.usuario,
       password: cred.senha,
     }),

@@ -1122,6 +1122,10 @@ async function initSchema() {
       senha TEXT,
       atualizado_em TIMESTAMP DEFAULT NOW()
     );
+    -- O client do PAINEL é diferente do client de integração: o mesmo e-mail gera
+    -- identidades distintas conforme o client_id, e só a do painel vê relatórios.
+    ALTER TABLE integracao_hubsoft_painel ADD COLUMN IF NOT EXISTS client_id TEXT;
+    ALTER TABLE integracao_hubsoft_painel ADD COLUMN IF NOT EXISTS client_secret TEXT;
     -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
     CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
       id TEXT PRIMARY KEY,
