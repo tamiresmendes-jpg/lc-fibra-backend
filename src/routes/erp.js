@@ -1143,6 +1143,74 @@ router.post('/consultar', async (req, res) => {
   }
 });
 
+// ─── Login do PAINEL HubSoft ─────────────────────────────────────────────────
+// A conta de integração não enxerga os relatórios. Este login (de um usuário real)
+// libera o Relatório de Serviços, única fonte de cidade, bairro e novo/migrado.
+// A senha é guardada cifrada (AES-256-GCM) e nunca volta para a tela.
+const { run: prun } = require('../config/database');
+const { cifrar } = require('../utils/segredos');
+
+function soAdminGestorErp(req, res) {
+  if (!['admin', 'gestor'].includes(req.usuario.perfil)) {
+    res.status(403).json({ erro: 'Sem permissão' });
+    return false;
+  }
+  return true;
+}
+
+router.get('/painel-config', autenticar, async (req, res) => {
+  try {
+    if (!soAdminGestorErp(req, res)) return;
+    const c = await pget('SELECT usuario, senha, atualizado_em FROM integracao_hubsoft_painel WHERE empresa_id=$1',
+      [req.usuario.empresa_id]);
+    res.json({
+      usuario: c?.usuario || '',
+      tem_senha: !!c?.senha,           // a senha em si nunca é devolvida
+      atualizado_em: c?.atualizado_em || null,
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/painel-config', autenticar, async (req, res) => {
+  try {
+    if (!soAdminGestorErp(req, res)) return;
+    const usuario = (req.body.usuario || '').trim();
+    const senha = req.body.senha || '';
+    if (!usuario) return res.status(400).json({ erro: 'Informe o usuário do painel.' });
+    const atual = await pget('SELECT senha FROM integracao_hubsoft_painel WHERE empresa_id=$1', [req.usuario.empresa_id]);
+    // Campo de senha em branco = manter a que já está guardada
+    const senhaFinal = senha ? cifrar(senha) : (atual?.senha || null);
+    if (!senhaFinal) return res.status(400).json({ erro: 'Informe a senha do painel.' });
+    await prun(
+      `INSERT INTO integracao_hubsoft_painel (empresa_id, usuario, senha, atualizado_em)
+       VALUES ($1,$2,$3,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET usuario=EXCLUDED.usuario, senha=EXCLUDED.senha, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, usuario, senhaFinal]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Testa o login e já confirma que o relatório responde
+router.post('/painel-testar', autenticar, async (req, res) => {
+  try {
+    if (!soAdminGestorErp(req, res)) return;
+    await hubsoft.autenticarPainel(req.usuario.empresa_id);
+    const hoje = new Date();
+    const dd = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const r = await hubsoft.relatorioServicos(req.usuario.empresa_id, {
+      dataInicio: dd(ini), dataFim: dd(hoje), limit: 1, pagina: 1,
+    });
+    const a = r.registros[0] || {};
+    res.json({
+      ok: true,
+      total: r.total,
+      amostra: r.registros.length ? { cidade: a.cidade, bairro: a.bairro, origem: a.origem, status: a.servico_status } : null,
+    });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;

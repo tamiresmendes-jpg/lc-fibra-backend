@@ -1111,6 +1111,17 @@ async function initSchema() {
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS tipo_pessoa TEXT;   -- pf | pj
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS valor NUMERIC(12,2);
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS tecnologia TEXT;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS bairro TEXT;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS origem TEXT;          -- novo | migrado
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS servico_status TEXT;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS situacao_contrato TEXT;
+    -- Login do PAINEL HubSoft (usuário real): a conta de integração não vê relatórios
+    CREATE TABLE IF NOT EXISTS integracao_hubsoft_painel (
+      empresa_id TEXT PRIMARY KEY,
+      usuario TEXT,
+      senha TEXT,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
     -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
     CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
       id TEXT PRIMARY KEY,

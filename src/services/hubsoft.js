@@ -64,6 +64,80 @@ async function getToken() {
   return _loginEmAndamento;
 }
 
+// ── Conta de PAINEL (usuário real) ─────────────────────────────────────────
+// A conta de integração não enxerga os relatórios (403 em /api/v1/relatorio/*).
+// Para o Relatório de Serviços — única fonte de cidade, bairro e novo/migrado —
+// usamos o login de um usuário do painel, guardado cifrado em integracao_hubsoft_painel.
+// O client_id/secret são os mesmos da aplicação (ficam no .env).
+let _tokenPainel = null, _expiraPainel = 0, _loginPainelEmAndamento = null;
+
+async function credenciaisPainel(empresaId) {
+  const { get } = require('../config/database');
+  const { decifrar } = require('../utils/segredos');
+  const c = await get('SELECT usuario, senha FROM integracao_hubsoft_painel WHERE empresa_id = $1', [empresaId]);
+  if (!c?.usuario || !c?.senha) return null;
+  return { usuario: c.usuario, senha: decifrar(c.senha) };
+}
+
+async function autenticarPainel(empresaId) {
+  const cred = await credenciaisPainel(empresaId);
+  if (!cred) throw new Error('Cadastre o usuário e a senha do painel HubSoft em Configurações → Integrações.');
+  const resp = await fetch(`${baseUrl()}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'password',
+      client_id: process.env.HUBSOFT_CLIENT_ID,
+      client_secret: process.env.HUBSOFT_CLIENT_SECRET,
+      username: cred.usuario,
+      password: cred.senha,
+    }),
+  });
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => '');
+    throw new Error(`HubSoft painel: login recusado (${resp.status}) ${t.slice(0, 160)}`);
+  }
+  const d = await resp.json();
+  _tokenPainel = d.access_token;
+  _expiraPainel = Date.now() + Math.max(0, (Number(d.expires_in) || 3600) - 300) * 1000;
+  return _tokenPainel;
+}
+
+async function getTokenPainel(empresaId) {
+  if (_tokenPainel && Date.now() < _expiraPainel) return _tokenPainel;
+  if (!_loginPainelEmAndamento) {
+    _loginPainelEmAndamento = autenticarPainel(empresaId).finally(() => { _loginPainelEmAndamento = null; });
+  }
+  return _loginPainelEmAndamento;
+}
+
+// Relatório de Serviços do painel — a fonte com cidade, bairro, origem e status.
+// ATENÇÃO ao formato: tipo_data/order_by/order_by_key/origem são STRING;
+// tipo_endereco e tipo_pessoa são OBJETO {descricao, valor}. Misturar dá erro de validação.
+// Os registros vêm em paginador.data (15 por página por padrão).
+async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, limit = 200, origem = 'todos' } = {}) {
+  const corpo = {
+    data_inicio: dataInicio, data_fim: dataFim,          // dd/mm/aaaa
+    tipo_data: 'data_venda', order_by: 'data_venda', order_by_key: 'ASC',
+    tipo_endereco: { descricao: 'Instalação', valor: 'instalacao' },
+    tipo_pessoa: { descricao: 'Todos', valor: 'todos' },
+    origem, limit, pagina,
+  };
+  const chamar = async (token) => fetch(`${baseUrl()}/api/v1/relatorio/cliente_servico`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
+    body: JSON.stringify(corpo),
+  });
+  let resp = await chamar(await getTokenPainel(empresaId));
+  if (resp.status === 401) { _tokenPainel = null; _expiraPainel = 0; resp = await chamar(await getTokenPainel(empresaId)); }
+  const j = await resp.json().catch(() => null);
+  if (!j || j.status !== 'success') {
+    throw new Error(`HubSoft relatório: ${(j?.errors || []).join(' | ') || j?.msg || 'falha'}`);
+  }
+  const pg = j.paginador || {};
+  return { registros: pg.data || [], pagina: pg.current_page || pagina, paginas: pg.last_page || 1, total: pg.total || 0 };
+}
+
 // ── Requisição autenticada genérica (GET) ──────────────────────────────────
 // Refaz o login uma vez se receber 401 (token revogado / sistema atualizado).
 async function apiGet(caminho, params = {}) {
@@ -301,6 +375,7 @@ async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } 
 
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
+  relatorioServicos, autenticarPainel,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
 };
