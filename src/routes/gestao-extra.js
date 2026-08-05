@@ -388,7 +388,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
        AND LOWER(vendedor_email) = ANY($3)`;
     const p = [eid, mes, emails.length ? emails : ['']];
 
-    const [porDia, porServico, porTipo, porTecnologia, receita] = await Promise.all([
+    const [porDia, porServico, porTipo, porTecnologia, porStatus, receita] = await Promise.all([
       all(`SELECT TO_CHAR(data_venda,'DD') AS dia, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 1`, p),
       all(`SELECT COALESCE(NULLIF(nome_servico,''),'Sem plano') AS servico, COUNT(*)::int AS qtd
@@ -398,6 +398,10 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
                        ELSE 'Não informado' END AS tipo, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
       all(`SELECT COALESCE(NULLIF(tecnologia,''),'Não informada') AS tecnologia, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
+      // Status do serviço vem do próprio cadastro do serviço (não da ordem de serviço)
+      all(`SELECT INITCAP(REPLACE(COALESCE(NULLIF(status_prefixo,''),'nao_informado'),'_',' ')) AS status,
+                  COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
       get(`SELECT COALESCE(SUM(valor),0)::float AS total, COALESCE(AVG(valor),0)::float AS ticket
            FROM meta_comercial_venda_sync WHERE ${filtroVendas}`, p),
@@ -446,6 +450,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       por_servico: porServico,
       por_tipo: porTipo,
       por_tecnologia: porTecnologia,
+      por_status: porStatus,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

@@ -144,6 +144,33 @@ async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 60 } = {}
   );
 }
 
+// Dados que só existem na ORDEM DE SERVIÇO, indexados por id_cliente_servico:
+// cidade real da instalação, status do serviço e o tipo da OS (que diz se foi
+// instalação nova ou transferência). O cadastro do cliente não traz endereço.
+async function dadosDeInstalacaoPorServico({ dataInicio, dataFim, maxPaginas = 80 } = {}) {
+  const ordens = await buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/ordem_servico/todos', {
+      pagina, itens_por_pagina: 100, data_inicio: dataInicio, data_fim: dataFim,
+    }),
+    { extrair: d => d.ordens_servico || d.data || [], maxPaginas }
+  );
+  const porServico = new Map();
+  for (const o of ordens) {
+    const id = o.dados_servico?.id_cliente_servico;
+    if (!id) continue;
+    const tipo = (o.tipo_ordem_servico?.descricao || '').trim();
+    const anterior = porServico.get(id) || {};
+    porServico.set(id, {
+      cidade: o.dados_endereco_instalacao?.cidade || anterior.cidade || null,
+      bairro: o.dados_endereco_instalacao?.bairro || anterior.bairro || null,
+      servico_status: o.dados_servico?.servico_status || anterior.servico_status || null,
+      // "INSTALAÇÃO" manda: se o serviço teve OS de instalação, é venda nova.
+      tipo_os: anterior.tipo_os === 'INSTALAÇÃO' ? anterior.tipo_os : (tipo || anterior.tipo_os || null),
+    });
+  }
+  return porServico;
+}
+
 // Paginador genérico para endpoints /todos com data_inicio/data_fim
 async function listarPaginado(caminho, { dataInicio, dataFim, relacoes, extra = {}, chaveArray, maxPaginas = 60 } = {}) {
   return buscarTodasPaginas(
@@ -273,7 +300,7 @@ async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } 
 }
 
 module.exports = {
-  apiGet, listarEquipamentos, listarProdutos, listarOrdensServico,
+  apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
 };
