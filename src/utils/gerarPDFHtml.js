@@ -157,14 +157,14 @@ async function getBrowser() {
   return _browserPromise;
 }
 
-async function htmlParaPdf(html, browser) {
+async function htmlParaPdf(html, browser, opcoes = {}) {
   const b = browser || await getBrowser();
   const page = await b.newPage();
   try {
     await page.setContent(html, { waitUntil: 'load' });
     const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const pdf = await page.pdf({
-      format: 'A4', printBackground: true,
+      format: 'A4', landscape: !!opcoes.landscape, printBackground: true,
       displayHeaderFooter: true,
       headerTemplate: '<span></span>',
       footerTemplate: `<div style="font-size:8px;color:#94a3b8;width:100%;padding:0 12mm;display:flex;justify-content:space-between;align-items:center;font-family:Arial,sans-serif;">

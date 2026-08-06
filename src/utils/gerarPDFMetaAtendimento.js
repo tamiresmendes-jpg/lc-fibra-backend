@@ -81,19 +81,19 @@ function montarHtmlMetaAtendimento(dados) {
   const totalAtendimentos = semanas.reduce((s, sem) => s + (sem.resumo?.total_atendimentos || 0), 0);
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     * { box-sizing: border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 24px; font-size: 12px; }
-    h1 { font-size: 18px; margin: 0 0 2px; }
-    .sub { color: #64748b; font-size: 11px; margin: 0 0 18px; }
-    .semana { margin-bottom: 18px; page-break-inside: avoid; }
-    .semana-titulo { background: #0f172a; color: #fff; font-weight: 700; padding: 6px 10px; border-radius: 6px 6px 0 0; font-size: 12.5px; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #0f172a; margin: 8px 10px; font-size: 8px; line-height: 1.15; }
+    h1 { font-size: 13px; margin: 0 0 1px; }
+    .sub { color: #64748b; font-size: 8px; margin: 0 0 6px; }
+    .semana { margin-bottom: 4px; }
+    .semana-titulo { background: #0f172a; color: #fff; font-weight: 700; padding: 2px 6px; border-radius: 4px 4px 0 0; font-size: 8.5px; }
     table { width: 100%; border-collapse: collapse; }
-    th, td { border: 1px solid #e2e8f0; padding: 5px 7px; font-size: 11px; }
+    th, td { border: 1px solid #e2e8f0; padding: 1.5px 4px; font-size: 7.5px; }
     th { background: #f1f5f9; text-align: left; }
-    .semana-resumo { font-size: 11px; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-top: none; padding: 6px 10px; }
-    .fechamento { margin-top: 8px; margin-bottom: 12px; page-break-inside: avoid; }
-    .total-mes { margin-top: 10px; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 12px 16px; }
-    .total-mes b { font-size: 15px; color: #166534; }
-    .rodape { margin-top: 20px; font-size: 10px; color: #94a3b8; }
+    .semana-resumo { font-size: 7.5px; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-top: none; padding: 2px 6px; }
+    .fechamento { margin-top: 4px; margin-bottom: 6px; }
+    .total-mes { margin-top: 4px; background: #dcfce7; border: 1px solid #86efac; border-radius: 5px; padding: 4px 8px; }
+    .total-mes b { font-size: 9px; color: #166534; }
+    .rodape { margin-top: 4px; font-size: 6.5px; color: #94a3b8; }
   </style></head><body>
     <h1>Meta de Atendimento — ${esc(nomeDepto)}</h1>
     <div class="sub">${esc(mesBR(mes))} · ${semanas.length} semana(s) · ${totalAtendimentos} atendimento(s) avaliado(s) · Emitido em ${emissao()}</div>
@@ -105,7 +105,7 @@ function montarHtmlMetaAtendimento(dados) {
 }
 
 async function gerarPDFMetaAtendimento(dados) {
-  return htmlParaPdf(montarHtmlMetaAtendimento(dados));
+  return htmlParaPdf(montarHtmlMetaAtendimento(dados), null, { landscape: true });
 }
 
 module.exports = { gerarPDFMetaAtendimento, montarHtmlMetaAtendimento };
