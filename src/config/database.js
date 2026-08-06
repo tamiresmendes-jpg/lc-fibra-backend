@@ -1117,6 +1117,13 @@ async function initSchema() {
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS situacao_contrato TEXT;
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS pacotes TEXT;         -- adicionais: Watch TV, Telemedicina, LC Livros...
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS valor_pacotes NUMERIC(12,2);
+    -- Ordem e tamanho dos painéis da Análise da Meta, ajustável por admin/gestor.
+    -- Sem registro, a tela usa a ordem padrão do código.
+    CREATE TABLE IF NOT EXISTS meta_comercial_analise_layout (
+      empresa_id TEXT PRIMARY KEY,
+      layout JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
     -- Login do PAINEL HubSoft (usuário real): a conta de integração não vê relatórios
     CREATE TABLE IF NOT EXISTS integracao_hubsoft_painel (
       empresa_id TEXT PRIMARY KEY,
@@ -1141,6 +1148,18 @@ async function initSchema() {
       PRIMARY KEY (empresa_id, vendedor_id, mes)
     );
     -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
+    -- Histórico de PDFs da Meta de Atendimento (Financeiro/Call Center) — satisfação semanal
+    CREATE TABLE IF NOT EXISTS meta_atendimento_pdf (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      mes TEXT NOT NULL,
+      arquivo TEXT NOT NULL,
+      gerado_por TEXT,
+      gerado_por_nome TEXT,
+      total_semanas INTEGER,
+      total_bonus REAL,
+      created_at TIMESTAMP DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

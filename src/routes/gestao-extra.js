@@ -146,10 +146,21 @@ router.get('/ranking-indicadores', autenticar, async (req, res) => {
 // Vendas sincronizadas do HubSoft (meta_comercial_venda_sync) + config de meta/bônus
 // por vendedor (meta_comercial_vendedor) + faixas de premiação do supervisor.
 const PODE_EDITAR_META_COMERCIAL = ['admin', 'gestor', 'lider'];
+// Ajustar ORDEM/TAMANHO dos painéis é mais restrito que editar meta: só admin e gestor.
+const PODE_AJUSTAR_LAYOUT_ANALISE = ['admin', 'gestor'];
 
 // A Meta do Comercial expõe salário do supervisor e bônus por vendedor, então a LEITURA
 // também é verificada no servidor (o middleware global só cobre POST/PUT/DELETE).
 const { buscarPermsEfetivas, temPermissaoServer } = require('../utils/permissoes');
+// Vendedor logado que tem o próprio cadastro vinculado (meta_comercial_vendedor.usuario_id)
+// pode ver a TELA, mas só a PRÓPRIA linha — sem permissão de módulo, sem ver os colegas.
+async function vendedorVinculado(req) {
+  return get(
+    'SELECT id, nome FROM meta_comercial_vendedor WHERE empresa_id=$1 AND usuario_id=$2 AND ativo=true',
+    [req.usuario.empresa_id, req.usuario.id]
+  );
+}
+
 async function exigirVerMetaComercial(req, res, next) {
   try {
     const u = req.usuario;
@@ -161,6 +172,10 @@ async function exigirVerMetaComercial(req, res, next) {
     } catch { /* usa só os grupos */ }
     const perms = await buscarPermsEfetivas(u.id, u.empresa_id, ownPerms);
     if (temPermissaoServer(perms, 'gestao.meta-comercial', 'visualizar')) return next();
+
+    const proprio = await vendedorVinculado(req).catch(() => null);
+    if (proprio) { req.somenteVendedorId = proprio.id; return next(); }
+
     return res.status(403).json({ erro: 'Você não tem permissão para ver a Meta do Comercial.' });
   } catch {
     return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); // fail-closed
@@ -326,6 +341,13 @@ router.get('/meta-comercial', autenticar, exigirVerMetaComercial, async (req, re
     const eid = req.usuario.empresa_id;
     const mesRef = mesRefDe(req.query);
     const dados = await montarMetaComercial(eid, mesRef, req.usuario.perfil);
+    if (req.somenteVendedorId) {
+      // Vendedor comum: só a própria linha, sem ver colegas, supervisor ou quem falta cadastrar
+      dados.itens = (dados.itens || []).filter(i => String(i.id) === String(req.somenteVendedorId));
+      dados.supervisor = null;
+      dados.detectados_sem_config = [];
+      dados.somente_proprio = true;
+    }
     res.json(dados);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -391,6 +413,30 @@ router.put('/meta-comercial/vendedor/:id/mes/:mes', autenticar, async (req, res)
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ─── Layout dos painéis da Análise (ordem e tamanho) ─────────────────────────
+// Ajuste é de admin/gestor e vale para todo mundo que abre a tela — não é por usuário.
+router.get('/meta-comercial/analise/layout', autenticar, exigirVerMetaComercial, async (req, res) => {
+  try {
+    const row = await get('SELECT layout FROM meta_comercial_analise_layout WHERE empresa_id=$1', [req.usuario.empresa_id]);
+    res.json({ layout: row?.layout || null });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/meta-comercial/analise/layout', autenticar, async (req, res) => {
+  try {
+    if (!PODE_AJUSTAR_LAYOUT_ANALISE.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const layout = req.body.layout;
+    if (!Array.isArray(layout)) return res.status(400).json({ erro: 'Layout inválido' });
+    await run(
+      `INSERT INTO meta_comercial_analise_layout (empresa_id, layout, atualizado_em)
+       VALUES ($1,$2,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET layout=EXCLUDED.layout, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, JSON.stringify(layout)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── Acompanhamento e Análise da Meta (dados do HubSoft) ─────────────────────
 // Cidade vem da FILIAL do vendedor: a API de integração do HubSoft não devolve
 // endereço do cliente em nenhum endpoint (conferido em ago/2026).
@@ -427,9 +473,11 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       if (setor === 'comercial') return f.includes('comercial');
       return true;
     });
-    // 2) Dentro do setor, pode restringir a um vendedor
-    const vendedorId = (req.query.vendedor || '').trim();
-    let itens = vendedorId ? doSetor.filter(i => String(i.id) === vendedorId) : doSetor;
+    // 2) Dentro do setor, pode restringir a um vendedor — vendedor comum é sempre
+    //    forçado à própria linha, ignorando setor e o que veio na URL.
+    const vendedorId = req.somenteVendedorId ? String(req.somenteVendedorId) : (req.query.vendedor || '').trim();
+    const base_ = req.somenteVendedorId ? (base.itens || []) : doSetor;
+    let itens = vendedorId ? base_.filter(i => String(i.id) === vendedorId) : base_;
     const emails = itens.map(i => (i.hubsoft_email || '').toLowerCase()).filter(Boolean);
 
     // Vendas do mês (excluindo as canceladas dentro do próprio mês — mesma regra do painel)

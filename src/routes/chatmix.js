@@ -481,6 +481,29 @@ function periodoMeta(req) {
   if (req.query.data_inicial || req.query.data_final) return periodo(req);
   return semanaAtual();
 }
+// Nome completo do atendente, buscado no cadastro real (usuarios) pelo primeiro
+// nome — o Chatmix só manda "Clara Suporte", sem sobrenome. Se dois colaboradores
+// ativos tiverem o mesmo primeiro nome, fica ambíguo e mantém o nome do Chatmix
+// mesmo, para nunca atribuir o nome de uma pessoa a outra por engano.
+const semAcentoAt = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+async function mapaPrimeiroNome(empresa_id) {
+  const us = await all('SELECT nome FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
+  const candidatos = new Map(); // primeiro nome -> Set de nomes completos distintos
+  for (const u of us) {
+    const primeiro = semAcentoAt(u.nome).split(/\s+/)[0];
+    if (!primeiro) continue;
+    if (!candidatos.has(primeiro)) candidatos.set(primeiro, new Set());
+    candidatos.get(primeiro).add(u.nome);
+  }
+  const mapa = new Map();
+  for (const [primeiro, nomes] of candidatos) if (nomes.size === 1) mapa.set(primeiro, [...nomes][0]);
+  return mapa;
+}
+function nomeCompletoDe(mapa, atendenteNome) {
+  const primeiro = semAcentoAt(atendenteNome).split(/\s+/)[0];
+  return mapa.get(primeiro) || atendenteNome;
+}
+
 // Departamento derivado do NOME do atendente (ex.: "Maiza Suporte" → Suporte)
 const DEPT_SQL = `CASE
   WHEN atendente_nome ILIKE '%financeiro%' THEN 'Financeiro'
@@ -935,6 +958,7 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     const rotuloDept = nome => deptDeNome(nome) === 'Suporte' ? 'Call Center' : deptDeNome(nome);
     // Fonte OFICIAL do painel Chatmix (exata). Se disponível, substitui a dedução por mensagem.
     const oficial = await satisfacaoOficial(emp, di, df);
+    const mapaNomes = await mapaPrimeiroNome(emp).catch(() => new Map());
     const itens = rows.map(r => {
       const o = oficial ? oficial[(r.nome || '').toLowerCase()] : null;
       const satisfeitas = o ? o.sat : r.satisfeitas;
@@ -946,12 +970,14 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
       return {
-        atendente: r.nome, departamento: rotuloDept(r.nome), total: r.total,
+        atendente: r.nome, nome_completo: nomeCompletoDe(mapaNomes, r.nome),
+        departamento: rotuloDept(r.nome), total: r.total,
         respondidas: o ? (o.sat + o.insat + o.inval) : r.respondidas, pendentes: o ? 0 : r.pendentes,
         validas, invalidas, satisfeitas, insatisfeitas,
         perc_satisfacao: percSat, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
         bonificacao: bateSat && bateTaxa,
+        bonus_valor: (bateSat && bateTaxa) ? 50 : 0, // R$50 por bater as duas metas na semana
         situacao: percSat == null ? (r.pendentes > 0 ? `${r.pendentes} pesquisa(s) ainda sendo lida(s)…` : 'Sem pesquisas no período.') : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
     });
@@ -981,7 +1007,8 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       media_taxa_resposta: totAtend ? Math.round((totValidas / totAtend) * 10000) / 100 : null,
       atingiram_ambas: ambas.length,
       perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
-      destaques: ambas.map(i => i.atendente),
+      destaques: ambas.map(i => i.nome_completo || i.atendente),
+      bonus_total: ambas.length * 50,
     };
     return { fonte: fonteSatisfacao, painel: statusPainel(emp), metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
 }
@@ -995,6 +1022,93 @@ router.get('/meta', async (req, res) => {
     const ats = listaParam(req.query.atendente);
     const data = await calcularMeta(emp, di, df, metaSatisfacao, metaTaxa, { deps, ats });
     res.json({ periodo: { di, df }, semana: true, ...data });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Semanas cheias (domingo→sábado) de um mês, até a semana de hoje — não lista
+// semana futura. A semana que contém o dia 1º só entra se o domingo dela cair
+// dentro do próprio mês (senão pertence ao mês anterior).
+function semanasDoMes(mesRef) {
+  const [ano, mes] = (mesRef || '').match(/^\d{4}-\d{2}$/) ? mesRef.split('-').map(Number) : (() => {
+    const h = new Date(); return [h.getFullYear(), h.getMonth() + 1];
+  })();
+  const primeiroDia = new Date(ano, mes - 1, 1);
+  const ultimoDia = new Date(ano, mes, 0);
+  const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
+  const iso = d => d.toISOString().slice(0, 10);
+  const semanas = [];
+  // Acha o primeiro domingo dentro (ou depois) do início do mês
+  let dom = new Date(primeiroDia);
+  dom.setDate(dom.getDate() - dom.getDay());
+  if (dom < primeiroDia) dom.setDate(dom.getDate() + 7);
+  while (dom <= ultimoDia && dom <= hoje) {
+    const sab = new Date(dom); sab.setDate(dom.getDate() + 6);
+    semanas.push({ di: iso(dom), df: iso(sab) });
+    dom = new Date(dom); dom.setDate(dom.getDate() + 7);
+  }
+  return semanas;
+}
+
+// Lista as semanas do mês já calculadas, para a tabela e para montar o PDF
+router.get('/meta/semanas', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
+    const metaTaxa = Number(req.query.meta_taxa || 55);
+    const deps = listaParam(req.query.departamento);
+    const ats = listaParam(req.query.atendente);
+    const semanas = semanasDoMes(req.query.mes);
+    const resultado = [];
+    for (const s of semanas) {
+      const data = await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, { deps, ats });
+      resultado.push({ periodo: s, ...data });
+    }
+    const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
+    res.json({ mes: req.query.mes || new Date().toISOString().slice(0, 7), semanas: resultado, bonus_total_mes: bonusMes });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.get('/meta/pdf', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
+    const metaTaxa = Number(req.query.meta_taxa || 55);
+    const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
+    const semanas = semanasDoMes(mesRef);
+    const resultado = [];
+    for (const s of semanas) resultado.push({ periodo: s, ...(await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, {})) });
+    const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
+
+    const { gerarPDFMetaAtendimento } = require('../utils/gerarPDFMetaAtendimento');
+    const pdfBuffer = await gerarPDFMetaAtendimento({ mes: mesRef, semanas: resultado, bonus_total_mes: bonusMes });
+
+    try {
+      const fs = require('fs'); const path = require('path');
+      const dir = path.join(__dirname, '../../uploads/meta-atendimento');
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+      const nome = `meta-atendimento-${mesRef}-${Date.now()}.pdf`;
+      fs.writeFileSync(path.join(dir, nome), pdfBuffer);
+      const { v4: uuidv4 } = require('uuid');
+      await run(
+        `INSERT INTO meta_atendimento_pdf (id, empresa_id, mes, arquivo, gerado_por, gerado_por_nome, total_semanas, total_bonus)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+        [uuidv4(), emp, mesRef, `/uploads/meta-atendimento/${nome}`, req.usuario.id, req.usuario.nome || null, resultado.length, bonusMes]
+      );
+    } catch (e) { console.error('[meta/pdf] histórico:', e.message); }
+
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="Meta-Atendimento-${mesRef}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.get('/meta/pdfs', async (req, res) => {
+  try {
+    const rows = await all(
+      `SELECT id, mes, arquivo, gerado_por_nome, total_semanas, total_bonus, created_at
+       FROM meta_atendimento_pdf WHERE empresa_id=$1 ORDER BY created_at DESC LIMIT 100`,
+      [req.usuario.empresa_id]);
+    res.json(rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
