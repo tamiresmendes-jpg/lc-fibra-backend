@@ -26,6 +26,14 @@ function ddmmaaaa(iso) {
   return `${m}/${d}/${a}`;
 }
 
+// "R$ 10,00" -> 10 (o relatório manda o valor já formatado em texto)
+function paraNumero(brl) {
+  if (brl == null) return null;
+  const limpo = String(brl).replace(/[^\d,-]/g, '').replace(',', '.');
+  const n = parseFloat(limpo);
+  return Number.isFinite(n) ? n : null;
+}
+
 // Período = mês inteiro (YYYY-MM). Sem mês, usa o mês corrente em SP.
 async function enriquecerMes(empresa_id, mesRef) {
   const mes = /^\d{4}-\d{2}$/.test(mesRef || '')
@@ -50,10 +58,12 @@ async function enriquecerMes(empresa_id, mesRef) {
       if (!id) continue;
       const res = await run(
         `UPDATE meta_comercial_venda_sync
-            SET cidade = COALESCE($3, cidade), bairro = $4, origem = $5, servico_status = $6
+            SET cidade = COALESCE($3, cidade), bairro = $4, origem = $5, servico_status = $6,
+                pacotes = $7, valor_pacotes = $8
           WHERE empresa_id = $1 AND id_cliente_servico = $2`,
         [empresa_id, id, s.cidade || null, s.bairro || null,
-         (s.origem || '').toLowerCase() || null, s.servico_status || null]
+         (s.origem || '').toLowerCase() || null, s.servico_status || null,
+         s.pacotes || null, paraNumero(s.valor_pacotes)]
       );
       if (res?.rowCount) atualizados += res.rowCount;
       idsParaContrato.push(id);

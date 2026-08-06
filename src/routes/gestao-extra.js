@@ -459,7 +459,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
 
     // Cortes que dependem do Relatório de Serviços do painel (cidade real, bairro,
     // origem e contrato). Ficam vazios até o enriquecimento rodar.
-    const [porCidadeReal, porBairro, porOrigem, porContrato, clientes] = await Promise.all([
+    const [porCidadeReal, porBairro, porOrigem, porContrato, porPacote, receitaPacotes, clientes] = await Promise.all([
       all(`SELECT cidade, COUNT(*)::int AS qtd FROM meta_comercial_venda_sync
            WHERE ${filtroVendas} AND cidade IS NOT NULL AND cidade <> ''
            GROUP BY 1 ORDER BY 2 DESC`, p),
@@ -471,7 +471,15 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
            GROUP BY 1 ORDER BY 2 DESC`, p),
       all(`SELECT COALESCE(NULLIF(situacao_contrato,''),'Não informado') AS contrato, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
-      all(`SELECT nome_cliente, nome_servico, cidade, bairro, origem, servico_status,
+      // Uma venda pode ter vários pacotes juntos ("Watch TV, Telemedicina") — separa
+      // por vírgula para contar cada adicional individualmente.
+      all(`SELECT TRIM(pacote) AS pacote, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync, LATERAL unnest(string_to_array(pacotes, ',')) AS pacote
+           WHERE ${filtroVendas} AND pacotes IS NOT NULL AND pacotes <> ''
+           GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, p),
+      get(`SELECT COALESCE(SUM(valor_pacotes),0)::float AS total, COUNT(*) FILTER (WHERE valor_pacotes > 0)::int AS vendas_com_pacote
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas}`, p),
+      all(`SELECT nome_cliente, nome_servico, cidade, bairro, origem, servico_status, pacotes,
                   TO_CHAR(data_venda,'DD/MM/YYYY') AS data_venda,
                   CASE WHEN LOWER(COALESCE(tipo_pessoa,''))='pj' THEN 'PJ' ELSE 'PF' END AS tipo
            FROM meta_comercial_venda_sync WHERE ${filtroVendas}
@@ -523,6 +531,11 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       por_bairro: porBairro,
       por_origem: porOrigem,
       por_contrato: porContrato,
+      por_pacote: porPacote,
+      pacotes_resumo: {
+        receita: Math.round((receitaPacotes?.total || 0) * 100) / 100,
+        vendas_com_pacote: receitaPacotes?.vendas_com_pacote || 0,
+      },
       clientes,
       // Só os do setor selecionado, para o seletor não misturar times
       vendedores: doSetor.map(i => ({ id: i.id, nome: i.nome, filial: i.filial })),

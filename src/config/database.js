@@ -1115,6 +1115,8 @@ async function initSchema() {
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS origem TEXT;          -- novo | migrado
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS servico_status TEXT;
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS situacao_contrato TEXT;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS pacotes TEXT;         -- adicionais: Watch TV, Telemedicina, LC Livros...
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS valor_pacotes NUMERIC(12,2);
     -- Login do PAINEL HubSoft (usuário real): a conta de integração não vê relatórios
     CREATE TABLE IF NOT EXISTS integracao_hubsoft_painel (
       empresa_id TEXT PRIMARY KEY,
