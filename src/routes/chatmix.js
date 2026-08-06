@@ -1095,7 +1095,7 @@ router.get('/meta/pdf', async (req, res) => {
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
 
     const { gerarPDFMetaAtendimento } = require('../utils/gerarPDFMetaAtendimento');
-    const pdfBuffer = await gerarPDFMetaAtendimento({ mes: mesRef, semanas: resultado, bonus_total_mes: bonusMes });
+    const pdfBuffer = await gerarPDFMetaAtendimento({ mes: mesRef, semanas: resultado, bonus_total_mes: bonusMes, departamento: deps[0] || null });
 
     try {
       const fs = require('fs'); const path = require('path');

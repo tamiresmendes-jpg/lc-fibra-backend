@@ -55,7 +55,8 @@ function tabelaSemana(semana) {
 }
 
 function montarHtmlMetaAtendimento(dados) {
-  const { mes, semanas = [], bonus_total_mes = 0 } = dados;
+  const { mes, semanas = [], bonus_total_mes = 0, departamento } = dados;
+  const nomeDepto = departamento === 'Suporte' ? 'Call Center' : (departamento || 'Financeiro e Call Center');
   const totalAtendimentos = semanas.reduce((s, sem) => s + (sem.resumo?.total_atendimentos || 0), 0);
   return `<!doctype html><html><head><meta charset="utf-8"><style>
     * { box-sizing: border-box; }
@@ -72,7 +73,7 @@ function montarHtmlMetaAtendimento(dados) {
     .total-mes b { font-size: 15px; color: #166534; }
     .rodape { margin-top: 20px; font-size: 10px; color: #94a3b8; }
   </style></head><body>
-    <h1>Meta de Atendimento — Financeiro e Call Center</h1>
+    <h1>Meta de Atendimento — ${esc(nomeDepto)}</h1>
     <div class="sub">${esc(mesBR(mes))} · ${semanas.length} semana(s) · ${totalAtendimentos} atendimento(s) avaliado(s) · Emitido em ${emissao()}</div>
     ${semanas.map(tabelaSemana).join('')}
     <div class="total-mes">Bônus total do mês (R$ 50,00 por atendente que bateu as duas metas em cada semana): <b>${fx(bonus_total_mes)}</b></div>
