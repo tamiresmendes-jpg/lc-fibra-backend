@@ -146,6 +146,23 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
   return { registros: pg.data || [], pagina: pg.current_page || pagina, paginas: pg.last_page || 1, total: pg.total || 0 };
 }
 
+// Situação REAL do contrato de um serviço. O Relatório de Serviços devolve "-"
+// para todo mundo nesse campo (não é confiável); este endpoint devolve o campo
+// `aceito` (true/false) direto, sem ambiguidade. Sem contrato = array vazio.
+async function statusContrato(empresaId, idClienteServico) {
+  const chamar = async (token) => fetch(`${baseUrl()}/api/v1/cliente/servico/contrato/${idClienteServico}?status=true`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  let resp = await chamar(await getTokenPainel(empresaId));
+  if (resp.status === 401) { _tokenPainel = null; _expiraPainel = 0; resp = await chamar(await getTokenPainel(empresaId)); }
+  const j = await resp.json().catch(() => null);
+  if (!j || j.status !== 'success') return null; // não afirma nada se a chamada falhar
+  const contratos = j.contratos || [];
+  if (!contratos.length) return 'sem_contrato';
+  // Mais de um contrato no serviço: se algum foi aceito, considera assinado
+  return contratos.some(c => c.aceito) ? 'assinado' : 'nao_assinado';
+}
+
 // ── Requisição autenticada genérica (GET) ──────────────────────────────────
 // Refaz o login uma vez se receber 401 (token revogado / sistema atualizado).
 async function apiGet(caminho, params = {}) {
@@ -383,7 +400,7 @@ async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } 
 
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
-  relatorioServicos, autenticarPainel,
+  relatorioServicos, autenticarPainel, statusContrato,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
 };

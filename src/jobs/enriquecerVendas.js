@@ -1,10 +1,23 @@
-// Completa as vendas já sincronizadas com o que só existe no Relatório de Serviços
-// do PAINEL HubSoft: cidade e bairro reais do serviço, origem (novo/migrado),
-// situação do serviço e do contrato. A API de integração não devolve nada disso.
+// Completa as vendas já sincronizadas com o que só existe no PAINEL HubSoft:
+// cidade e bairro reais do serviço, origem (novo/migrado) e situação do serviço,
+// vindos do Relatório de Serviços; e a situação REAL do contrato (assinado ou
+// não), vinda de um endpoint próprio — o relatório sempre devolve "-" nesse
+// campo, então não serve. A API de integração não devolve nada disso.
 //
 // Casa pelo id_cliente_servico, que é a chave dos dois lados.
 const { run, all } = require('../config/database');
 const hubsoft = require('../services/hubsoft');
+
+// Contrato é uma chamada POR SERVIÇO — roda algumas em paralelo (não 1 a 1,
+// nem todas de uma vez) para não demorar demais nem sobrecarregar o HubSoft.
+async function comConcorrenciaLimitada(itens, limite, tarefa) {
+  const fila = [...itens];
+  const trabalhador = async () => {
+    let item;
+    while ((item = fila.shift()) !== undefined) await tarefa(item);
+  };
+  await Promise.all(Array.from({ length: limite }, trabalhador));
+}
 
 // ATENÇÃO: o Relatório de Serviços lê data no formato AMERICANO (mm/dd/aaaa).
 // Enviar 01/08/2026 achando que é 1º de agosto traz 8 de janeiro.
@@ -27,6 +40,7 @@ async function enriquecerMes(empresa_id, mesRef) {
   const df = ddmmaaaa(fimIso);
 
   let pagina = 1, paginas = 1, atualizados = 0, lidos = 0;
+  const idsParaContrato = [];
   do {
     const r = await hubsoft.relatorioServicos(empresa_id, { dataInicio: di, dataFim: df, pagina, limit: 200 });
     paginas = r.paginas || 1;
@@ -36,24 +50,34 @@ async function enriquecerMes(empresa_id, mesRef) {
       if (!id) continue;
       const res = await run(
         `UPDATE meta_comercial_venda_sync
-            SET cidade = COALESCE($3, cidade), bairro = $4, origem = $5,
-                servico_status = $6, situacao_contrato = $7
+            SET cidade = COALESCE($3, cidade), bairro = $4, origem = $5, servico_status = $6
           WHERE empresa_id = $1 AND id_cliente_servico = $2`,
         [empresa_id, id, s.cidade || null, s.bairro || null,
-         (s.origem || '').toLowerCase() || null, s.servico_status || null,
-         // "Contrato Aceito" = assinado. O "-" a tela do HubSoft mostra como não
-         // assinado, mas por esta chamada ele vem em 100% dos registros — inclusive
-         // nos que a tela exibe como aceitos. Enquanto a fonte certa não for
-         // encontrada, "-" fica como desconhecido em vez de afirmar "não assinado".
-         /aceito/i.test(s.situacao_contrato || '') ? 'Assinado' : null]
+         (s.origem || '').toLowerCase() || null, s.servico_status || null]
       );
       if (res?.rowCount) atualizados += res.rowCount;
+      idsParaContrato.push(id);
     }
     pagina++;
   } while (pagina <= paginas);
 
-  console.log(`[enriquecerVendas] ${mes}: ${lidos} do relatório, ${atualizados} venda(s) completada(s)`);
-  return { mes, lidos, atualizados, paginas };
+  // Situação do contrato: uma chamada por serviço, num endpoint próprio — o campo
+  // do relatório acima ("-" sempre) não é confiável para isso.
+  const ROTULOS = { assinado: 'Assinado', nao_assinado: 'Não assinado', sem_contrato: 'Sem contrato' };
+  let contratosAtualizados = 0;
+  await comConcorrenciaLimitada(idsParaContrato, 5, async (id) => {
+    const situacao = await hubsoft.statusContrato(empresa_id, id).catch(() => null);
+    if (!situacao) return; // chamada falhou: não afirma nada, mantém o que já tinha
+    await run(
+      `UPDATE meta_comercial_venda_sync SET situacao_contrato = $3
+        WHERE empresa_id = $1 AND id_cliente_servico = $2`,
+      [empresa_id, id, ROTULOS[situacao] || null]
+    );
+    contratosAtualizados++;
+  });
+
+  console.log(`[enriquecerVendas] ${mes}: ${lidos} do relatório, ${atualizados} venda(s) completada(s), ${contratosAtualizados} contrato(s) verificado(s)`);
+  return { mes, lidos, atualizados, contratosAtualizados, paginas };
 }
 
 // Roda para o mês atual e o anterior (o anterior importa por causa dos cancelamentos)
