@@ -54,8 +54,29 @@ function tabelaSemana(semana) {
     </div>`;
 }
 
+function tabelaFechamento(fechamento) {
+  if (!fechamento?.length) return '';
+  const linhas = fechamento.map(f => `
+    <tr>
+      <td style="font-weight:600">${esc(f.nome)}</td>
+      <td style="text-align:center">${f.semanas_bateu}/${f.semanas_total}</td>
+      <td style="text-align:right;font-weight:800;color:#166534;background:#dcfce7">${fx(f.total_bonus)}</td>
+    </tr>`).join('');
+  const totalGeral = fechamento.reduce((s, f) => s + f.total_bonus, 0);
+  return `
+    <div class="fechamento">
+      <div class="semana-titulo" style="background:#166534">Fechamento do mês — valor a pagar por atendente</div>
+      <table>
+        <thead><tr><th>Atendente</th><th>Semanas que bateu a meta</th><th>Total do mês</th></tr></thead>
+        <tbody>${linhas}</tbody>
+        <tfoot><tr><td colspan="2" style="text-align:right;font-weight:700">Total geral</td>
+          <td style="text-align:right;font-weight:800;color:#166534">${fx(totalGeral)}</td></tr></tfoot>
+      </table>
+    </div>`;
+}
+
 function montarHtmlMetaAtendimento(dados) {
-  const { mes, semanas = [], bonus_total_mes = 0, departamento } = dados;
+  const { mes, semanas = [], bonus_total_mes = 0, departamento, fechamento_mes = [] } = dados;
   const nomeDepto = departamento === 'Suporte' ? 'Call Center' : (departamento || 'Financeiro e Call Center');
   const totalAtendimentos = semanas.reduce((s, sem) => s + (sem.resumo?.total_atendimentos || 0), 0);
   return `<!doctype html><html><head><meta charset="utf-8"><style>
@@ -69,6 +90,7 @@ function montarHtmlMetaAtendimento(dados) {
     th, td { border: 1px solid #e2e8f0; padding: 5px 7px; font-size: 11px; }
     th { background: #f1f5f9; text-align: left; }
     .semana-resumo { font-size: 11px; color: #334155; background: #f8fafc; border: 1px solid #e2e8f0; border-top: none; padding: 6px 10px; }
+    .fechamento { margin-top: 8px; margin-bottom: 12px; page-break-inside: avoid; }
     .total-mes { margin-top: 10px; background: #dcfce7; border: 1px solid #86efac; border-radius: 8px; padding: 12px 16px; }
     .total-mes b { font-size: 15px; color: #166534; }
     .rodape { margin-top: 20px; font-size: 10px; color: #94a3b8; }
@@ -76,6 +98,7 @@ function montarHtmlMetaAtendimento(dados) {
     <h1>Meta de Atendimento — ${esc(nomeDepto)}</h1>
     <div class="sub">${esc(mesBR(mes))} · ${semanas.length} semana(s) · ${totalAtendimentos} atendimento(s) avaliado(s) · Emitido em ${emissao()}</div>
     ${semanas.map(tabelaSemana).join('')}
+    ${tabelaFechamento(fechamento_mes)}
     <div class="total-mes">Bônus total do mês (R$ 50,00 por atendente que bateu as duas metas em cada semana): <b>${fx(bonus_total_mes)}</b></div>
     <div class="rodape">Bônus de R$ 50,00 por atendente, por semana, quando satisfação e taxa de resposta atingem a meta configurada.</div>
   </body></html>`;

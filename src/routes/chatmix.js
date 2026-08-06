@@ -1042,6 +1042,27 @@ router.get('/meta', async (req, res) => {
 // Semanas cheias (domingo→sábado) de um mês, até a semana de hoje — não lista
 // semana futura. A semana que contém o dia 1º só entra se o domingo dela cair
 // dentro do próprio mês (senão pertence ao mês anterior).
+// Fechamento do mês: total de cada atendente somando TODAS as semanas do mês —
+// é o valor a pagar. Junta pelo nome completo (ou o nome do Chatmix quando o
+// cadastro não resolveu). Cada departamento fecha separado, pois `semanas` já
+// vem filtrado por um só (deps=[departamento]) na chamada de quem usa isto.
+function fechamentoDoMes(semanas) {
+  const porAtendente = new Map();
+  for (const semana of semanas) {
+    for (const item of (semana.itens || [])) {
+      const chave = item.nome_completo || item.atendente;
+      const atual = porAtendente.get(chave) || {
+        nome: chave, departamento: item.departamento, total_bonus: 0, semanas_bateu: 0, semanas_total: 0,
+      };
+      atual.total_bonus += item.bonus_valor || 0;
+      atual.semanas_total += 1;
+      if (item.bonificacao) atual.semanas_bateu += 1;
+      porAtendente.set(chave, atual);
+    }
+  }
+  return [...porAtendente.values()].sort((a, b) => b.total_bonus - a.total_bonus);
+}
+
 function semanasDoMes(mesRef) {
   const [ano, mes] = (mesRef || '').match(/^\d{4}-\d{2}$/) ? mesRef.split('-').map(Number) : (() => {
     const h = new Date(); return [h.getFullYear(), h.getMonth() + 1];
@@ -1078,7 +1099,10 @@ router.get('/meta/semanas', async (req, res) => {
       resultado.push({ periodo: s, ...data });
     }
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
-    res.json({ mes: req.query.mes || new Date().toISOString().slice(0, 7), semanas: resultado, bonus_total_mes: bonusMes });
+    res.json({
+      mes: req.query.mes || new Date().toISOString().slice(0, 7),
+      semanas: resultado, bonus_total_mes: bonusMes, fechamento_mes: fechamentoDoMes(resultado),
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -1095,7 +1119,10 @@ router.get('/meta/pdf', async (req, res) => {
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
 
     const { gerarPDFMetaAtendimento } = require('../utils/gerarPDFMetaAtendimento');
-    const pdfBuffer = await gerarPDFMetaAtendimento({ mes: mesRef, semanas: resultado, bonus_total_mes: bonusMes, departamento: deps[0] || null });
+    const pdfBuffer = await gerarPDFMetaAtendimento({
+      mes: mesRef, semanas: resultado, bonus_total_mes: bonusMes, departamento: deps[0] || null,
+      fechamento_mes: fechamentoDoMes(resultado),
+    });
 
     try {
       const fs = require('fs'); const path = require('path');
