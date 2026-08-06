@@ -4,8 +4,44 @@ const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { getConfig, resolverWebhook, postWebhookImagem } = require('../utils/discord');
 const { cifrar, decifrar } = require('../utils/segredos');
+const { buscarPermsEfetivas, temPermissaoServer } = require('../utils/permissoes');
 
 router.use(autenticar);
+
+// A Meta de Atendimento mostra satisfação e bônus por pessoa — cada departamento só
+// pode ser visto por quem tem a permissão DAQUELE departamento, ou "meta-geral"
+// (concedida à mão para quem deve ver todos). Sem isso, ANY usuário logado
+// conseguia ver a meta de qualquer setor, inclusive de colegas de outro departamento.
+async function podeVerMetaAtendimento(req, departamento) {
+  if (req.usuario.perfil === 'admin') return true;
+  let ownPerms = null;
+  try {
+    const row = await get('SELECT permissoes_modulos FROM usuarios WHERE id=$1', [req.usuario.id]);
+    if (row?.permissoes_modulos) ownPerms = JSON.parse(row.permissoes_modulos);
+  } catch { /* usa só os grupos */ }
+  const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
+  if (temPermissaoServer(perms, 'atendimentos.meta-geral', 'visualizar')) return true;
+  const chave = departamento === 'Suporte' ? 'atendimentos.meta-callcenter'
+    : departamento === 'Financeiro' ? 'atendimentos.meta-financeiro' : null;
+  return chave ? temPermissaoServer(perms, chave, 'visualizar') : false;
+}
+function exigirVerMetaAtendimento(origemDepto) {
+  return async (req, res, next) => {
+    try {
+      const dep = (origemDepto(req) || '').trim();
+      // Sem departamento = visão combinada (Financeiro + Call Center juntos):
+      // só quem tem acesso geral pode ver — nunca dá pra "adivinhar" um departamento aqui.
+      if (!dep) {
+        if (req.usuario.perfil === 'admin' || await podeVerMetaAtendimento(req, '__geral__')) return next();
+        return res.status(403).json({ erro: 'Você não tem permissão para ver a meta combinada. Escolha um departamento.' });
+      }
+      if (await podeVerMetaAtendimento(req, dep)) return next();
+      return res.status(403).json({ erro: 'Você não tem permissão para ver a meta deste departamento.' });
+    } catch { return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); }
+  };
+}
+const depDaQuery = req => req.query.departamento;
+const depDoBody = req => req.body.departamento;
 
 const BASE_PADRAO = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
@@ -1027,7 +1063,7 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     return { fonte: fonteSatisfacao, painel: statusPainel(emp), metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
 }
 
-router.get('/meta', async (req, res) => {
+router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodoMeta(req);
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
@@ -1085,7 +1121,7 @@ function semanasDoMes(mesRef) {
 }
 
 // Lista as semanas do mês já calculadas, para a tabela e para montar o PDF
-router.get('/meta/semanas', async (req, res) => {
+router.get('/meta/semanas', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id;
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
@@ -1106,7 +1142,7 @@ router.get('/meta/semanas', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-router.get('/meta/pdf', async (req, res) => {
+router.get('/meta/pdf', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id;
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
@@ -1147,7 +1183,7 @@ router.get('/meta/pdf', async (req, res) => {
 // Meta de satisfação/taxa LEMBRADA por departamento — Financeiro e Call Center
 // guardam seu próprio valor, sem se misturar.
 const PODE_EDITAR_META_ATENDIMENTO = ['admin', 'gestor', 'lider'];
-router.get('/meta/config', async (req, res) => {
+router.get('/meta/config', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   try {
     const dep = (req.query.departamento || '').trim();
     if (!dep) return res.status(400).json({ erro: 'Informe o departamento.' });
@@ -1158,7 +1194,7 @@ router.get('/meta/config', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-router.put('/meta/config', async (req, res) => {
+router.put('/meta/config', exigirVerMetaAtendimento(depDoBody), async (req, res) => {
   try {
     if (!PODE_EDITAR_META_ATENDIMENTO.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const dep = (req.body.departamento || '').trim();
@@ -1175,7 +1211,7 @@ router.put('/meta/config', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-router.get('/meta/pdfs', async (req, res) => {
+router.get('/meta/pdfs', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   try {
     const dep = (req.query.departamento || '').trim();
     const params = [req.usuario.empresa_id];
