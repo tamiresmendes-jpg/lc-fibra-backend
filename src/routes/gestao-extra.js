@@ -193,6 +193,22 @@ async function montarMetaComercial(eid, mesRef, perfil) {
        LEFT JOIN usuarios u ON u.id = v.usuario_id
        WHERE v.empresa_id=$1 AND v.ativo=true
        ORDER BY v.meta DESC, v.ordem, v.nome`, [eid]);
+    // Meta daquele mês, quando foi ajustada. Sem registro, vale a do cadastro —
+    // por isso mexer na meta de um mês não altera o que já foi apurado nos outros.
+    const doMes = await all(
+      `SELECT vendedor_id, meta, bonus_meta, bonus_gap FROM meta_comercial_vendedor_mes
+       WHERE empresa_id=$1 AND mes=$2`, [eid, mesRef]);
+    const mapaMes = Object.fromEntries(doMes.map(m => [String(m.vendedor_id), m]));
+    for (const v of vendedores) {
+      const m = mapaMes[String(v.id)];
+      if (!m) continue;
+      if (m.meta !== null && m.meta !== undefined) v.meta = m.meta;
+      if (m.bonus_meta !== null && m.bonus_meta !== undefined) v.bonus_meta = m.bonus_meta;
+      if (m.bonus_gap !== null && m.bonus_gap !== undefined) v.bonus_gap = m.bonus_gap;
+      v.meta_do_mes = true;   // a tela mostra que este mês tem meta própria
+    }
+    vendedores.sort((a, b) => (b.meta || 0) - (a.meta || 0) || (a.ordem || 0) - (b.ordem || 0) || String(a.nome).localeCompare(String(b.nome)));
+
     const supervisor = await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [eid])
       || { empresa_id: eid, nome: null, faixa1_pct: 15, faixa1_valor: 0, faixa2_pct: 25, faixa2_valor: 0, salario: 0 };
     const syncStatus = await get(`SELECT * FROM meta_comercial_sync_status WHERE empresa_id=$1`, [eid]);
@@ -341,6 +357,37 @@ router.get('/meta-comercial/pdf', autenticar, exigirVerMetaComercial, async (req
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="Meta-Comercial-${mesRef}.pdf"`);
     res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ─── Meta de um MÊS específico ───────────────────────────────────────────────
+// Ajusta a meta só naquele mês, sem tocar nos outros nem no cadastro do vendedor.
+// Enviar meta vazia remove o ajuste e o mês volta a usar a meta padrão.
+router.put('/meta-comercial/vendedor/:id/mes/:mes', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { id, mes } = req.params;
+    if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido (use AAAA-MM).' });
+    const existe = await get('SELECT id FROM meta_comercial_vendedor WHERE id=$1 AND empresa_id=$2', [id, req.usuario.empresa_id]);
+    if (!existe) return res.status(404).json({ erro: 'Vendedor não encontrado' });
+
+    const vazio = (v) => v === '' || v === null || v === undefined;
+    if (vazio(req.body.meta) && vazio(req.body.bonus_meta) && vazio(req.body.bonus_gap)) {
+      await run('DELETE FROM meta_comercial_vendedor_mes WHERE empresa_id=$1 AND vendedor_id=$2 AND mes=$3',
+        [req.usuario.empresa_id, id, mes]);
+      return res.json({ ok: true, removido: true });
+    }
+    await run(
+      `INSERT INTO meta_comercial_vendedor_mes (empresa_id, vendedor_id, mes, meta, bonus_meta, bonus_gap, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,$6,NOW())
+       ON CONFLICT (empresa_id, vendedor_id, mes) DO UPDATE SET
+         meta=EXCLUDED.meta, bonus_meta=EXCLUDED.bonus_meta, bonus_gap=EXCLUDED.bonus_gap, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, id, mes,
+       vazio(req.body.meta) ? null : parseInt(req.body.meta, 10) || 0,
+       vazio(req.body.bonus_meta) ? null : Number(req.body.bonus_meta) || 0,
+       vazio(req.body.bonus_gap) ? null : Number(req.body.bonus_gap) || 0]
+    );
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

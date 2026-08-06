@@ -1126,6 +1126,18 @@ async function initSchema() {
     -- identidades distintas conforme o client_id, e só a do painel vê relatórios.
     ALTER TABLE integracao_hubsoft_painel ADD COLUMN IF NOT EXISTS client_id TEXT;
     ALTER TABLE integracao_hubsoft_painel ADD COLUMN IF NOT EXISTS client_secret TEXT;
+    -- Meta POR MÊS. Sem registro aqui, vale a meta padrão do cadastro do vendedor.
+    -- Assim, mudar a meta de agosto não mexe no que já foi apurado em julho.
+    CREATE TABLE IF NOT EXISTS meta_comercial_vendedor_mes (
+      empresa_id  TEXT NOT NULL,
+      vendedor_id TEXT NOT NULL,
+      mes         TEXT NOT NULL,          -- YYYY-MM
+      meta        INTEGER,
+      bonus_meta  NUMERIC(12,2),
+      bonus_gap   NUMERIC(12,2),
+      atualizado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, vendedor_id, mes)
+    );
     -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
     CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
       id TEXT PRIMARY KEY,
