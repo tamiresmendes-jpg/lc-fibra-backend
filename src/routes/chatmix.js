@@ -481,27 +481,36 @@ function periodoMeta(req) {
   if (req.query.data_inicial || req.query.data_final) return periodo(req);
   return semanaAtual();
 }
-// Nome completo do atendente, buscado no cadastro real (usuarios) pelo primeiro
-// nome — o Chatmix só manda "Clara Suporte", sem sobrenome. Se dois colaboradores
-// ativos tiverem o mesmo primeiro nome, fica ambíguo e mantém o nome do Chatmix
-// mesmo, para nunca atribuir o nome de uma pessoa a outra por engano.
+// Nome completo do atendente, buscado no cadastro real (usuarios) — o Chatmix só
+// manda "Clara Suporte", sem sobrenome. Muita gente aqui tem nome composto que
+// começa com "Ana" (Ana Clara, Ana Maiza, Ana Cleiza...), então casar só pela
+// PRIMEIRA palavra perdia esses casos. Em vez disso, procura o nome do Chatmix
+// (sem o departamento) como SEQUÊNCIA DE PALAVRAS dentro do nome completo —
+// "Eduarda Reis" só bate com "Maria EDUARDA REIS Ramos", não com outra Eduarda.
+// Se mais de um colaborador ativo bater, fica ambíguo e mantém o nome do Chatmix,
+// para nunca atribuir o nome de uma pessoa a outra por engano.
 const semAcentoAt = s => (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
-async function mapaPrimeiroNome(empresa_id) {
-  const us = await all('SELECT nome FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
-  const candidatos = new Map(); // primeiro nome -> Set de nomes completos distintos
-  for (const u of us) {
-    const primeiro = semAcentoAt(u.nome).split(/\s+/)[0];
-    if (!primeiro) continue;
-    if (!candidatos.has(primeiro)) candidatos.set(primeiro, new Set());
-    candidatos.get(primeiro).add(u.nome);
-  }
-  const mapa = new Map();
-  for (const [primeiro, nomes] of candidatos) if (nomes.size === 1) mapa.set(primeiro, [...nomes][0]);
-  return mapa;
+const SUFIXOS_DEPTO_AT = ['financeiro', 'suporte', 'comercial', 'noc', 'recepcao', 'remocao', 'cobranca'];
+function nomeChatmixSemDepto(atendenteNome) {
+  const tokens = semAcentoAt(atendenteNome).split(/\s+/).filter(Boolean);
+  if (tokens.length > 1 && SUFIXOS_DEPTO_AT.includes(tokens[tokens.length - 1])) tokens.pop();
+  return tokens;
 }
-function nomeCompletoDe(mapa, atendenteNome) {
-  const primeiro = semAcentoAt(atendenteNome).split(/\s+/)[0];
-  return mapa.get(primeiro) || atendenteNome;
+function contemSequencia(tokensNomeCompleto, tokensBusca) {
+  for (let i = 0; i <= tokensNomeCompleto.length - tokensBusca.length; i++) {
+    if (tokensBusca.every((t, j) => tokensNomeCompleto[i + j] === t)) return true;
+  }
+  return false;
+}
+async function candidatosDeNomes(empresa_id) {
+  const us = await all('SELECT nome FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
+  return us.map(u => ({ nome: u.nome, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
+}
+function nomeCompletoDe(candidatos, atendenteNome) {
+  const busca = nomeChatmixSemDepto(atendenteNome);
+  if (!busca.length) return atendenteNome;
+  const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
+  return achados.length === 1 ? achados[0].nome : atendenteNome;
 }
 
 // Departamento derivado do NOME do atendente (ex.: "Maiza Suporte" → Suporte)
@@ -958,7 +967,7 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     const rotuloDept = nome => deptDeNome(nome) === 'Suporte' ? 'Call Center' : deptDeNome(nome);
     // Fonte OFICIAL do painel Chatmix (exata). Se disponível, substitui a dedução por mensagem.
     const oficial = await satisfacaoOficial(emp, di, df);
-    const mapaNomes = await mapaPrimeiroNome(emp).catch(() => new Map());
+    const candidatosNomes = await candidatosDeNomes(emp).catch(() => []);
     const itens = rows.map(r => {
       const o = oficial ? oficial[(r.nome || '').toLowerCase()] : null;
       const satisfeitas = o ? o.sat : r.satisfeitas;
@@ -969,12 +978,15 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       const taxaResp = r.total ? Math.round((validas / r.total) * 10000) / 100 : 0;        // válidas / total (atendimentos)
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
+      // Nota média (1 a 5) do painel oficial do Chatmix — número puro, além do %
+      const notaMedia = (o && o.media != null && Number.isFinite(Number(o.media)))
+        ? Math.round(Number(o.media) * 100) / 100 : null;
       return {
-        atendente: r.nome, nome_completo: nomeCompletoDe(mapaNomes, r.nome),
+        atendente: r.nome, nome_completo: nomeCompletoDe(candidatosNomes, r.nome),
         departamento: rotuloDept(r.nome), total: r.total,
         respondidas: o ? (o.sat + o.insat + o.inval) : r.respondidas, pendentes: o ? 0 : r.pendentes,
         validas, invalidas, satisfeitas, insatisfeitas,
-        perc_satisfacao: percSat, taxa_resposta: taxaResp,
+        perc_satisfacao: percSat, nota_media: notaMedia, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
         bonificacao: bateSat && bateTaxa,
         bonus_valor: (bateSat && bateTaxa) ? 50 : 0, // R$50 por bater as duas metas na semana
@@ -999,11 +1011,13 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     const totValidas = itens.reduce((s, i) => s + i.validas, 0);
     const totSatisf = itens.reduce((s, i) => s + i.satisfeitas, 0);
     const ambas = itens.filter(i => i.bonificacao);
+    const comNota = itens.filter(i => i.nota_media != null);
     const resumo = {
       total_atendimentos: totAtend,
       pesquisas_pendentes: totPend,
       atendentes_avaliados: itens.length,
       media_satisfacao: totValidas ? Math.round((totSatisf / totValidas) * 10000) / 100 : null,
+      media_nota: comNota.length ? Math.round((comNota.reduce((s, i) => s + i.nota_media, 0) / comNota.length) * 100) / 100 : null,
       media_taxa_resposta: totAtend ? Math.round((totValidas / totAtend) * 10000) / 100 : null,
       atingiram_ambas: ambas.length,
       perc_atingiram: itens.length ? Math.round((ambas.length / itens.length) * 1000) / 10 : 0,
