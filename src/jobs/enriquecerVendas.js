@@ -41,9 +41,11 @@ async function enriquecerMes(empresa_id, mesRef) {
           WHERE empresa_id = $1 AND id_cliente_servico = $2`,
         [empresa_id, id, s.cidade || null, s.bairro || null,
          (s.origem || '').toLowerCase() || null, s.servico_status || null,
-         // No relatório, "Contrato Aceito" = assinado e "-" = ainda não assinado.
-         // O traço É a informação: guardamos como "Não assinado" para não sumir.
-         /aceito/i.test(s.situacao_contrato || '') ? 'Assinado' : 'Não assinado']
+         // "Contrato Aceito" = assinado. O "-" a tela do HubSoft mostra como não
+         // assinado, mas por esta chamada ele vem em 100% dos registros — inclusive
+         // nos que a tela exibe como aceitos. Enquanto a fonte certa não for
+         // encontrada, "-" fica como desconhecido em vez de afirmar "não assinado".
+         /aceito/i.test(s.situacao_contrato || '') ? 'Assinado' : null]
       );
       if (res?.rowCount) atualizados += res.rowCount;
     }
