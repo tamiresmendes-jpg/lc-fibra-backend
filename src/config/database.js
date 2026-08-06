@@ -1161,6 +1161,17 @@ async function initSchema() {
       created_at TIMESTAMP DEFAULT NOW()
     );
     ALTER TABLE meta_atendimento_pdf ADD COLUMN IF NOT EXISTS departamento TEXT; -- Financeiro | Suporte (Call Center)
+    -- Metas de satisfação/taxa de resposta LEMBRADAS separadamente por departamento
+    -- (Financeiro tem sua própria meta, Call Center a sua) — sem isso, a tela sempre
+    -- resetava para 90%/55% ao recarregar.
+    CREATE TABLE IF NOT EXISTS meta_atendimento_config (
+      empresa_id TEXT NOT NULL,
+      departamento TEXT NOT NULL,
+      meta_satisfacao INTEGER NOT NULL DEFAULT 90,
+      meta_taxa INTEGER NOT NULL DEFAULT 55,
+      atualizado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, departamento)
+    );
     CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

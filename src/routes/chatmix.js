@@ -1103,6 +1103,37 @@ router.get('/meta/pdf', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Meta de satisfação/taxa LEMBRADA por departamento — Financeiro e Call Center
+// guardam seu próprio valor, sem se misturar.
+const PODE_EDITAR_META_ATENDIMENTO = ['admin', 'gestor', 'lider'];
+router.get('/meta/config', async (req, res) => {
+  try {
+    const dep = (req.query.departamento || '').trim();
+    if (!dep) return res.status(400).json({ erro: 'Informe o departamento.' });
+    const row = await get(
+      'SELECT meta_satisfacao, meta_taxa FROM meta_atendimento_config WHERE empresa_id=$1 AND departamento=$2',
+      [req.usuario.empresa_id, dep]);
+    res.json({ meta_satisfacao: row?.meta_satisfacao ?? 90, meta_taxa: row?.meta_taxa ?? 55 });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/meta/config', async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_ATENDIMENTO.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const dep = (req.body.departamento || '').trim();
+    const sat = parseInt(req.body.meta_satisfacao, 10);
+    const taxa = parseInt(req.body.meta_taxa, 10);
+    if (!dep || !Number.isFinite(sat) || !Number.isFinite(taxa)) return res.status(400).json({ erro: 'Dados inválidos.' });
+    await run(
+      `INSERT INTO meta_atendimento_config (empresa_id, departamento, meta_satisfacao, meta_taxa, atualizado_em)
+       VALUES ($1,$2,$3,$4,NOW())
+       ON CONFLICT (empresa_id, departamento) DO UPDATE SET meta_satisfacao=EXCLUDED.meta_satisfacao, meta_taxa=EXCLUDED.meta_taxa, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, dep, sat, taxa]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/meta/pdfs', async (req, res) => {
   try {
     const dep = (req.query.departamento || '').trim();
