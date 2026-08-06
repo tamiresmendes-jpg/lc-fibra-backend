@@ -1160,6 +1160,7 @@ async function initSchema() {
       total_bonus REAL,
       created_at TIMESTAMP DEFAULT NOW()
     );
+    ALTER TABLE meta_atendimento_pdf ADD COLUMN IF NOT EXISTS departamento TEXT; -- Financeiro | Suporte (Call Center)
     CREATE TABLE IF NOT EXISTS meta_comercial_pdf (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

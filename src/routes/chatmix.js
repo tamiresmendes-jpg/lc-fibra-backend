@@ -1073,10 +1073,11 @@ router.get('/meta/pdf', async (req, res) => {
     const emp = req.usuario.empresa_id;
     const metaSatisfacao = Number(req.query.meta_satisfacao || 90);
     const metaTaxa = Number(req.query.meta_taxa || 55);
+    const deps = listaParam(req.query.departamento);       // ex.: ['Financeiro'] ou ['Suporte']
     const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
     const semanas = semanasDoMes(mesRef);
     const resultado = [];
-    for (const s of semanas) resultado.push({ periodo: s, ...(await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, {})) });
+    for (const s of semanas) resultado.push({ periodo: s, ...(await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, { deps })) });
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
 
     const { gerarPDFMetaAtendimento } = require('../utils/gerarPDFMetaAtendimento');
@@ -1090,9 +1091,9 @@ router.get('/meta/pdf', async (req, res) => {
       fs.writeFileSync(path.join(dir, nome), pdfBuffer);
       const { v4: uuidv4 } = require('uuid');
       await run(
-        `INSERT INTO meta_atendimento_pdf (id, empresa_id, mes, arquivo, gerado_por, gerado_por_nome, total_semanas, total_bonus)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
-        [uuidv4(), emp, mesRef, `/uploads/meta-atendimento/${nome}`, req.usuario.id, req.usuario.nome || null, resultado.length, bonusMes]
+        `INSERT INTO meta_atendimento_pdf (id, empresa_id, mes, arquivo, gerado_por, gerado_por_nome, total_semanas, total_bonus, departamento)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [uuidv4(), emp, mesRef, `/uploads/meta-atendimento/${nome}`, req.usuario.id, req.usuario.nome || null, resultado.length, bonusMes, deps[0] || null]
       );
     } catch (e) { console.error('[meta/pdf] histórico:', e.message); }
 
@@ -1104,10 +1105,14 @@ router.get('/meta/pdf', async (req, res) => {
 
 router.get('/meta/pdfs', async (req, res) => {
   try {
+    const dep = (req.query.departamento || '').trim();
+    const params = [req.usuario.empresa_id];
+    let filtroDep = '';
+    if (dep) { params.push(dep); filtroDep = ` AND departamento=$${params.length}`; }
     const rows = await all(
-      `SELECT id, mes, arquivo, gerado_por_nome, total_semanas, total_bonus, created_at
-       FROM meta_atendimento_pdf WHERE empresa_id=$1 ORDER BY created_at DESC LIMIT 100`,
-      [req.usuario.empresa_id]);
+      `SELECT id, mes, arquivo, gerado_por_nome, total_semanas, total_bonus, departamento, created_at
+       FROM meta_atendimento_pdf WHERE empresa_id=$1${filtroDep} ORDER BY created_at DESC LIMIT 100`,
+      params);
     res.json(rows);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
