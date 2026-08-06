@@ -531,6 +531,9 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       por_servico: porServico,
       por_tipo: porTipo,
       por_tecnologia: porTecnologia,
+      ultima_sincronizacao: (await get(
+        'SELECT ultima_sync FROM meta_comercial_sync_status WHERE empresa_id=$1', [eid]
+      ))?.ultima_sync || null,
       por_status: porStatus,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -630,7 +633,10 @@ router.post('/meta-comercial/sync-agora', autenticar, async (req, res) => {
     _ultimaSyncManual[eid] = agora;
     const { sincronizarEmpresa } = require('../jobs/syncMetaComercial');
     const n = await sincronizarEmpresa(eid);
-    res.json({ ok: true, servicos_sincronizados: n });
+    // Também busca cidade, bairro, origem, status e situação do contrato —
+    // senão o botão "Atualizar agora" traria a venda, mas sem esses dados.
+    const enriquecido = await require('../jobs/enriquecerVendas').enriquecerRecentes(eid).catch(e => ({ erro: e.message }));
+    res.json({ ok: true, servicos_sincronizados: n, enriquecido, quando: new Date().toISOString() });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

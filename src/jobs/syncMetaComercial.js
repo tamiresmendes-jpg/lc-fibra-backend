@@ -32,7 +32,11 @@ async function sincronizarEmpresa(empresa_id) {
          nome_cliente=EXCLUDED.nome_cliente, nome_servico=EXCLUDED.nome_servico, data_venda=EXCLUDED.data_venda,
          status_prefixo=EXCLUDED.status_prefixo, data_cancelamento=EXCLUDED.data_cancelamento,
          motivo_cancelamento=EXCLUDED.motivo_cancelamento, data_cadastro=EXCLUDED.data_cadastro,
-         data_habilitacao=EXCLUDED.data_habilitacao, cidade=EXCLUDED.cidade,
+         data_habilitacao=EXCLUDED.data_habilitacao,
+         -- A API de integração nunca traz cidade (é sempre nula) — sem COALESCE,
+         -- esta sincronização apagava a cidade real que o enriquecimento (painel)
+         -- já tinha preenchido minutos antes.
+         cidade=COALESCE(EXCLUDED.cidade, meta_comercial_venda_sync.cidade),
          tipo_pessoa=EXCLUDED.tipo_pessoa, valor=EXCLUDED.valor, tecnologia=EXCLUDED.tecnologia,
          sincronizado_em=NOW()`,
       [
@@ -55,7 +59,14 @@ async function sincronizarEmpresa(empresa_id) {
   return gravados;
 }
 
+// Trava para não rodar dois ciclos ao mesmo tempo. Necessária porque o ciclo
+// ficou curto (poucos minutos) e a verificação de contrato pode demorar mais
+// que isso quando tem muita venda no mês.
+let _rodando = false;
+
 async function tick() {
+  if (_rodando) { console.log('[syncMetaComercial] ciclo anterior ainda rodando, pulou esta vez'); return; }
+  _rodando = true;
   try {
     // Empresas com o módulo "ativado" (já tem vendedor cadastrado OU já sincronizou alguma vez).
     // Mantém o sync rodando mesmo com a lista de vendedores zerada, para a lista de
@@ -86,14 +97,15 @@ async function tick() {
       }
     }
   } catch (e) { console.error('[syncMetaComercial]', e.message); }
+  finally { _rodando = false; }
 }
 
 function iniciar() {
   setTimeout(tick, 30 * 1000); // primeira carga logo após subir
-  // De hora em hora — vendas "recentes" sem sobrecarregar o ERP (janela filtrada por data,
-  // não varre a base inteira de clientes; ~476 clientes no teste, bem leve).
-  setInterval(tick, 60 * 60 * 1000);
-  console.log('[syncMetaComercial] iniciado (a cada 1h)');
+  // A cada 4 minutos — quase tempo real sem sobrecarregar o HubSoft. A trava
+  // acima evita que dois ciclos se cruzem se um demorar mais que isso.
+  setInterval(tick, 4 * 60 * 1000);
+  console.log('[syncMetaComercial] iniciado (a cada 4 min)');
 }
 
 module.exports = { iniciar, tick, sincronizarEmpresa };
