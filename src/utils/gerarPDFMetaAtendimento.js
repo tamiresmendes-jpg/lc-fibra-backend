@@ -31,6 +31,7 @@ function tabelaSemana(semana) {
       <td style="text-align:center;color:#16a34a">${i.satisfeitas}</td>
       <td style="text-align:center;color:#dc2626">${i.insatisfeitas}</td>
       <td style="text-align:center;font-weight:700">${i.perc_satisfacao == null ? '—' : i.perc_satisfacao + '%'} ${i.bate_satisfacao ? '✓' : (i.perc_satisfacao == null ? '' : '✗')}</td>
+      <td style="text-align:center;font-weight:700;color:#0b2b6b">${i.nota_media != null ? i.nota_media.toFixed(2) : '—'}</td>
       <td style="text-align:center;font-weight:700">${i.taxa_resposta}% ${i.bate_taxa ? '✓' : '✗'}</td>
       <td style="text-align:right;font-weight:700;color:${i.bonus_valor > 0 ? '#166534' : '#94a3b8'};background:${i.bonus_valor > 0 ? '#dcfce7' : 'transparent'}">${fx(i.bonus_valor)}</td>
     </tr>`).join('');
@@ -40,9 +41,9 @@ function tabelaSemana(semana) {
       <table>
         <thead><tr>
           <th>Atendente</th><th>Depto.</th><th>Total</th><th>Válidas</th><th>Inválidas</th>
-          <th>Satisfeitas</th><th>Insatisfeitas</th><th>Satisfação</th><th>Taxa Resp.</th><th>Bônus</th>
+          <th>Satisfeitas</th><th>Insatisfeitas</th><th>Satisfação</th><th>Nota Média</th><th>Taxa Resp.</th><th>Bônus</th>
         </tr></thead>
-        <tbody>${linhas || '<tr><td colspan="10" style="text-align:center;padding:12px;color:#94a3b8">Sem atendimentos avaliados nesta semana.</td></tr>'}</tbody>
+        <tbody>${linhas || '<tr><td colspan="11" style="text-align:center;padding:12px;color:#94a3b8">Sem atendimentos avaliados nesta semana.</td></tr>'}</tbody>
       </table>
       <div class="semana-resumo">
         Média de satisfação: <b>${resumo.media_satisfacao == null ? '—' : resumo.media_satisfacao + '%'}</b>
