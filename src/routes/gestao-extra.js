@@ -597,6 +597,36 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
 
 // Análise da Cobrança: visão ampla (todos os técnicos/cobradores, motivos de
 // fechamento, valores recebidos) — igual em espírito à Análise do Comercial.
+// PDF da Meta de Cobrança — mesma restrição de visibilidade da tela: se o
+// próprio cobrador pedir, só sai a linha dele.
+router.get('/meta-cobranca/pdf', autenticar, async (req, res) => {
+  try {
+    const { podeVerTudoNaMeta, mesmoEmail } = require('../utils/visibilidadeMeta');
+    const vTudo = await podeVerTudoNaMeta(req.usuario, 'cobranca');
+    const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
+    const [ano, mes] = mesRef.split('-').map(Number);
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const { montarMetaCobranca } = require('../jobs/metaCobranca');
+    const dados = await montarMetaCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
+
+    let payload = { mes: mesRef, ...dados };
+    if (!vTudo) {
+      const comEmail = await Promise.all(dados.itens.map(async i => ({ ...i, _email: await emailDoNomeHubsoft(req.usuario.empresa_id, i.nome) })));
+      const propria = comEmail.filter(i => mesmoEmail(i._email, req.usuario.email)).map(({ _email, ...i }) => i);
+      if (!propria.length) return res.status(403).json({ erro: 'Você não tem permissão para ver a Meta de Cobrança.' });
+      const nomesProprios = new Set(propria.map(i => i.nome));
+      payload = { mes: mesRef, meta_efetividade: dados.meta_efetividade, itens: propria, recebimentos: (dados.recebimentos || []).filter(r => nomesProprios.has(r.cobrador)) };
+    }
+
+    const { gerarPDFMetaCobranca } = require('../utils/gerarPDFMetaCobranca');
+    const pdfBuffer = await gerarPDFMetaCobranca(payload);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="meta-cobranca-${mesRef}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
