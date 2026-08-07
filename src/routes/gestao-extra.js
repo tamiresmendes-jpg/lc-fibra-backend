@@ -457,15 +457,18 @@ function cidadeDaFilial(filial) {
 }
 
 // ─── Meta de Cobrança (efetividade de remoção/recebimento) ───────────────────
+// ATENÇÃO: o endpoint de O.S. espera data em yyyy-mm-dd. Mandar dd/mm/yyyy (como
+// era antes) faz a API IGNORAR o filtro de período e devolver tudo (conferido em
+// 07/08/2026: 11.502 registros em vez dos 405 esperados na janela certa).
 router.get('/meta-cobranca', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
     const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
     const [ano, mes] = mesRef.split('-').map(Number);
-    const ultimo = new Date(ano, mes, 0).getDate();
-    const dd = (d) => `${String(d).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`;
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const { montarMetaCobranca } = require('../jobs/metaCobranca');
-    const dados = await montarMetaCobranca({ dataInicio: dd(1), dataFim: dd(ultimo) });
+    const dados = await montarMetaCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
     res.json({ mes: mesRef, ...dados });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
