@@ -1128,6 +1128,12 @@ async function initSchema() {
       layout JSONB,
       atualizado_em TIMESTAMP DEFAULT NOW()
     );
+    -- Mesma ideia, pro layout da Análise da Meta de Cobrança.
+    CREATE TABLE IF NOT EXISTS meta_cobranca_analise_layout (
+      empresa_id TEXT PRIMARY KEY,
+      layout JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
     -- Login do PAINEL HubSoft (usuário real): a conta de integração não vê relatórios
     CREATE TABLE IF NOT EXISTS integracao_hubsoft_painel (
       empresa_id TEXT PRIMARY KEY,

@@ -437,6 +437,30 @@ router.put('/meta-comercial/analise/layout', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Mesma ideia, pro layout da Análise da Meta de Cobrança.
+router.get('/meta-cobranca/analise/layout', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const row = await get('SELECT layout FROM meta_cobranca_analise_layout WHERE empresa_id=$1', [req.usuario.empresa_id]);
+    res.json({ layout: row?.layout || null });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/meta-cobranca/analise/layout', autenticar, async (req, res) => {
+  try {
+    if (!PODE_AJUSTAR_LAYOUT_ANALISE.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const layout = req.body.layout;
+    if (!Array.isArray(layout)) return res.status(400).json({ erro: 'Layout inválido' });
+    await run(
+      `INSERT INTO meta_cobranca_analise_layout (empresa_id, layout, atualizado_em)
+       VALUES ($1,$2,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET layout=EXCLUDED.layout, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, JSON.stringify(layout)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── Acompanhamento e Análise da Meta (dados do HubSoft) ─────────────────────
 // Cidade vem da FILIAL do vendedor: a API de integração do HubSoft não devolve
 // endereço do cliente em nenhum endpoint (conferido em ago/2026).
