@@ -375,11 +375,14 @@ async function mapaVendedores() {
 }
 
 // "Quem deu baixa": no histórico da cobrança, a entrada de fato do recebimento
-// tem o texto "recebida no caixa ..." — pode ser um usuário real ou o próprio
-// HubSoft (baixa automática via boleto/PIX). As demais entradas do histórico
-// são criação da cobrança ou edição da observação, não a baixa em si.
+// tem o texto "recebida no caixa ..." (automática, via boleto/PIX/webhook) ou
+// "recebida MANUALMENTE no caixa ..." (alguém deu baixa na mão) — a palavra
+// "manualmente" no meio fazia a busca antiga não reconhecer a baixa manual
+// (confirmado com caso real: cliente Maria da Conceição Ramos Rabelo, baixa
+// manual no CAIXA STONE). As demais entradas do histórico são criação da
+// cobrança ou edição da observação, não a baixa em si.
 function quemDeuBaixa(historico) {
-  const entrada = (historico || []).find(h => /recebida no caixa/i.test(h.historico || ''));
+  const entrada = (historico || []).find(h => /recebida\s+(manualmente\s+)?no caixa/i.test(h.historico || ''));
   return { nome: entrada?.usuario?.name || null, data: entrada?.data_cadastro || null };
 }
 
