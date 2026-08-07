@@ -7,11 +7,12 @@
 //     "REMOVIDO"            → remoção de equipamento (bônus R$ 5,00 fixo cada)
 //     "PAGAMENTO REALIZADO" → cliente pagou (bônus 5% do valor recebido)
 // - Efetividade = bem-sucedidas / total das O.S. do colaborador. Meta: 20%.
-// - O valor do "PAGAMENTO REALIZADO" vem da baixa da fatura do cliente, numa
-//   observação no formato "Cobrança recebida pelo cobrador <NOME> no valor de
-//   R$ <VALOR>". PENDENTE: a empresa ainda não começou a preencher essa
-//   observação nas faturas — enquanto isso, o valor fica "a confirmar".
-const { listarOrdensServico } = require('../services/hubsoft');
+// - O valor do "PAGAMENTO REALIZADO" vem da observação da cobrança mais recente
+//   do serviço do cliente, no formato "Cobrança recebida pelo cobrador <NOME>
+//   no valor de R$ <VALOR>" — confirmado em teste real em 07/08/2026 (endpoint
+//   /api/v1/cliente/financeiro/cobranca/{id_cobranca}, campo `observacao`).
+//   Se a observação não existir ou não bater no formato, o valor fica "a confirmar".
+const { listarOrdensServico, buscarObservacaoRecebimento } = require('../services/hubsoft');
 
 const REGEX_RECEBIMENTO = /cobran[çc]a recebida pelo cobrador\s+(.+?)\s+no valor de\s+r\$\s*([\d.,]+)/i;
 
@@ -30,12 +31,23 @@ function extrairRecebimento(observacaoTexto) {
   return { cobrador: m[1].trim(), valor: paraNumeroBR(m[2]) };
 }
 
+// Roda `tarefa` sobre os itens com concorrência limitada (não sobrecarrega o ERP).
+async function comConcorrenciaLimitada(itens, limite, tarefa) {
+  const fila = [...itens];
+  const trabalhador = async () => {
+    let item;
+    while ((item = fila.shift()) !== undefined) await tarefa(item);
+  };
+  await Promise.all(Array.from({ length: limite }, trabalhador));
+}
+
 // Monta a Meta de Cobrança de um mês: uma linha por colaborador (quem fechou
 // as O.S.), com total, remoções, pagamentos, efetividade e bônus.
 async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 }) {
   const ordens = await listarOrdensServico({ dataInicio, dataFim, maxPaginas: 80 });
 
   const porColaborador = new Map();
+  const osComPagamento = []; // { colaboradorId, idClienteServico }
   for (const o of ordens) {
     const fechou = o.usuario_fechamento;
     if (!fechou?.id) continue; // O.S. ainda aberta, sem responsável definido
@@ -49,11 +61,26 @@ async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 })
     if (/^removido$/i.test(motivo)) atual.os_removido += 1;
     if (/^pagamento realizado$/i.test(motivo)) {
       atual.os_pagamento += 1;
-      // A observação da baixa ainda não está disponível numa relação testada —
-      // quando a empresa começar a preencher, plugar aqui a busca real por
-      // id_cliente_servico e passar o texto pra extrairRecebimento().
+      const idClienteServico = o.dados_servico?.id_cliente_servico;
+      if (idClienteServico) osComPagamento.push({ colaboradorId: fechou.id, idClienteServico });
     }
     porColaborador.set(fechou.id, atual);
+  }
+
+  // Busca a observação da cobrança mais recente de cada serviço com pagamento
+  // realizado (uma chamada por id_cliente_servico único, concorrência baixa).
+  const idsUnicos = [...new Set(osComPagamento.map(x => x.idClienteServico))];
+  const observacaoPorServico = new Map();
+  await comConcorrenciaLimitada(idsUnicos, 4, async (idServico) => {
+    const obs = await buscarObservacaoRecebimento(idServico).catch(() => null);
+    observacaoPorServico.set(idServico, obs);
+  });
+  for (const { colaboradorId, idClienteServico } of osComPagamento) {
+    const recebimento = extrairRecebimento(observacaoPorServico.get(idClienteServico));
+    if (!recebimento?.valor) continue; // sem observação no formato esperado: fica "a confirmar"
+    const atual = porColaborador.get(colaboradorId);
+    atual.valor_recebido += recebimento.valor;
+    atual.valor_recebido_confirmado = true;
   }
 
   const itens = [...porColaborador.values()].map(c => {
@@ -66,7 +93,7 @@ async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 })
       total_os: c.total_os, os_removido: c.os_removido, os_pagamento: c.os_pagamento,
       bem_sucedidas: bemSucedidas, efetividade, bate_meta: bateuMeta,
       valor_recebido: Math.round(c.valor_recebido * 100) / 100,
-      valor_recebido_pendente: c.os_pagamento > 0, // tem pagamento mas ainda sem confirmar o valor
+      valor_recebido_pendente: c.os_pagamento > 0 && !c.valor_recebido_confirmado, // tem pagamento mas nenhuma observação achada nesse formato
       bonus_remocao: bonusRemocao,
       bonus_recebimento: Math.round(c.valor_recebido * 0.05 * 100) / 100,
       bonus_total: Math.round((bonusRemocao + c.valor_recebido * 0.05) * 100) / 100,
