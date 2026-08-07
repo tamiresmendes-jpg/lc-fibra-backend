@@ -461,6 +461,60 @@ router.put('/meta-cobranca/analise/layout', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ─── Visibilidade das Metas: quem vê TODOS, além de admin/gestor/líder ───────
+// (confirmado 08/08/2026: cada colaborador só vê a própria linha, casada pelo
+// e-mail; admin/gestor/líder veem tudo por padrão; esta lista libera mais gente
+// específica, por departamento, sem precisar mudar o perfil da pessoa)
+const DEPARTAMENTOS_META = ['comercial', 'financeiro', 'callcenter', 'cobranca'];
+router.get('/metas/visibilidade', autenticar, async (req, res) => {
+  try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const linhas = await all(
+      'SELECT departamento, email FROM meta_visibilidade_extra WHERE empresa_id=$1 ORDER BY departamento, email',
+      [req.usuario.empresa_id]
+    );
+    res.json({ linhas });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.post('/metas/visibilidade', autenticar, async (req, res) => {
+  try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { departamento, email } = req.body;
+    if (!DEPARTAMENTOS_META.includes(departamento)) return res.status(400).json({ erro: 'Departamento inválido' });
+    if (!email || !/^\S+@\S+\.\S+$/.test(email)) return res.status(400).json({ erro: 'E-mail inválido' });
+    await run(
+      `INSERT INTO meta_visibilidade_extra (empresa_id, departamento, email) VALUES ($1,$2,$3)
+       ON CONFLICT (empresa_id, departamento, email) DO NOTHING`,
+      [req.usuario.empresa_id, departamento, email.trim().toLowerCase()]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.delete('/metas/visibilidade', autenticar, async (req, res) => {
+  try {
+    if (!['admin', 'gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { departamento, email } = req.query;
+    await run(
+      'DELETE FROM meta_visibilidade_extra WHERE empresa_id=$1 AND departamento=$2 AND LOWER(email)=LOWER($3)',
+      [req.usuario.empresa_id, departamento, email]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Diz pro front, num único lugar, o que o usuário logado pode ver em cada meta —
+// evita duplicar a lógica de "é líder/admin/tá na lista extra" no React.
+router.get('/metas/meu-acesso', autenticar, async (req, res) => {
+  try {
+    const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+    const resultado = {};
+    for (const dep of DEPARTAMENTOS_META) resultado[dep] = await podeVerTudoNaMeta(req.usuario, dep) ? 'tudo' : 'proprio';
+    res.json(resultado);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ─── Acompanhamento e Análise da Meta (dados do HubSoft) ─────────────────────
 // Cidade vem da FILIAL do vendedor: a API de integração do HubSoft não devolve
 // endereço do cliente em nenhum endpoint (conferido em ago/2026).
@@ -484,16 +538,60 @@ function cidadeDaFilial(filial) {
 // ATENÇÃO: o endpoint de O.S. espera data em yyyy-mm-dd. Mandar dd/mm/yyyy (como
 // era antes) faz a API IGNORAR o filtro de período e devolver tudo (conferido em
 // 07/08/2026: 11.502 registros em vez dos 405 esperados na janela certa).
+// Acha o e-mail do usuário do sistema cujo nome corresponde ao nome do cobrador
+// vindo do HubSoft (ex.: "Ronald Rego" → "Ronald Rego De Sousa" no cadastro).
+// Mesma ideia da resolução de nome completo do Chatmix: casa por SEQUÊNCIA de
+// palavras, e só aceita se achar exatamente UM colaborador ativo — ambíguo não afirma nada.
+function semAcento(s) { return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim(); }
+async function emailDoNomeHubsoft(empresaId, nomeHubsoft) {
+  const busca = semAcento(nomeHubsoft).split(/\s+/).filter(Boolean);
+  if (!busca.length) return null;
+  const usuarios = await all('SELECT nome, email FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresaId]);
+  const achados = usuarios.filter(u => {
+    const tokens = semAcento(u.nome).split(/\s+/).filter(Boolean);
+    for (let i = 0; i <= tokens.length - busca.length; i++) {
+      if (busca.every((t, j) => tokens[i + j] === t)) return true;
+    }
+    return false;
+  });
+  return achados.length === 1 ? achados[0].email : null;
+}
+
 router.get('/meta-cobranca', autenticar, async (req, res) => {
   try {
-    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { podeVerTudoNaMeta, mesmoEmail } = require('../utils/visibilidadeMeta');
+    const vTudo = await podeVerTudoNaMeta(req.usuario, 'cobranca');
+    // Sem ver tudo: só entra se ele mesmo for um dos cobradores (casado pelo
+    // e-mail mais abaixo) — a checagem de permissão de módulo não se aplica
+    // mais aqui sozinha, porque o próprio cobrador pode não ter perfil líder/admin.
     const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const { montarMetaCobranca } = require('../jobs/metaCobranca');
     const dados = await montarMetaCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
-    res.json({ mes: mesRef, ...dados });
+
+    if (vTudo) return res.json({ mes: mesRef, ...dados });
+
+    // Casa cada item com o e-mail do usuário do sistema, pra achar a PRÓPRIA linha.
+    const comEmail = await Promise.all(dados.itens.map(async i => ({ ...i, _email: await emailDoNomeHubsoft(req.usuario.empresa_id, i.nome) })));
+    const propria = comEmail.filter(i => mesmoEmail(i._email, req.usuario.email));
+    if (!propria.length) return res.status(403).json({ erro: 'Você não tem permissão para ver a Meta de Cobrança.' });
+
+    const itens = propria.map(({ _email, ...i }) => i);
+    const nomesProprios = new Set(itens.map(i => i.nome));
+    const recebimentos = (dados.recebimentos || []).filter(r => nomesProprios.has(r.cobrador));
+    res.json({
+      mes: mesRef, meta_efetividade: dados.meta_efetividade, itens, recebimentos, somente_proprio: true,
+      resumo: {
+        colaboradores: itens.length,
+        total_os: itens.reduce((s, i) => s + i.total_os, 0),
+        total_removidas: itens.reduce((s, i) => s + i.os_removido, 0),
+        total_pagamentos: itens.reduce((s, i) => s + i.os_pagamento, 0),
+        bonus_total: itens.reduce((s, i) => s + i.bonus_total, 0),
+        valor_pendente_confirmar: itens.some(i => i.valor_recebido_pendente),
+      },
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

@@ -1128,6 +1128,16 @@ async function initSchema() {
       layout JSONB,
       atualizado_em TIMESTAMP DEFAULT NOW()
     );
+    -- Quem, além de admin/gestor/líder, pode ver TODOS os colaboradores de uma
+    -- meta por departamento (em vez de só a própria linha). Um e-mail por linha,
+    -- por departamento ('comercial' | 'financeiro' | 'callcenter' | 'cobranca').
+    CREATE TABLE IF NOT EXISTS meta_visibilidade_extra (
+      empresa_id TEXT NOT NULL,
+      departamento TEXT NOT NULL,
+      email TEXT NOT NULL,
+      criado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, departamento, email)
+    );
     -- Mesma ideia, pro layout da Análise da Meta de Cobrança.
     CREATE TABLE IF NOT EXISTS meta_cobranca_analise_layout (
       empresa_id TEXT PRIMARY KEY,

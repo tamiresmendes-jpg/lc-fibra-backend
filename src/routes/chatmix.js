@@ -539,14 +539,22 @@ function contemSequencia(tokensNomeCompleto, tokensBusca) {
   return false;
 }
 async function candidatosDeNomes(empresa_id) {
-  const us = await all('SELECT nome FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
-  return us.map(u => ({ nome: u.nome, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
+  const us = await all('SELECT nome, email FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
+  return us.map(u => ({ nome: u.nome, email: u.email, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
 }
 function nomeCompletoDe(candidatos, atendenteNome) {
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return atendenteNome;
   const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
   return achados.length === 1 ? achados[0].nome : atendenteNome;
+}
+// E-mail do usuário do sistema casado com o nome do atendente (mesma resolução
+// do nome completo) — usado pra filtrar "só a própria linha" na Meta.
+function emailDoAtendente(candidatos, atendenteNome) {
+  const busca = nomeChatmixSemDepto(atendenteNome);
+  if (!busca.length) return null;
+  const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
+  return achados.length === 1 ? achados[0].email : null;
 }
 
 // Departamento derivado do NOME do atendente (ex.: "Maiza Suporte" → Suporte)
@@ -1019,6 +1027,7 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
         ? Math.round(Number(o.media) * 100) / 100 : null;
       return {
         atendente: r.nome, nome_completo: nomeCompletoDe(candidatosNomes, r.nome),
+        _email: emailDoAtendente(candidatosNomes, r.nome),
         departamento: rotuloDept(r.nome), total: r.total,
         respondidas: o ? (o.sat + o.insat + o.inval) : r.respondidas, pendentes: o ? 0 : r.pendentes,
         validas, invalidas, satisfeitas, insatisfeitas,
@@ -1063,6 +1072,16 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     return { fonte: fonteSatisfacao, painel: statusPainel(emp), metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
 }
 
+// Restringe à PRÓPRIA linha quando o usuário não tem "vê tudo" naquele
+// departamento (líder/admin/gestor/lista extra) — casado pelo e-mail resolvido
+// junto com o nome completo. Sem bater com nenhuma linha, não afirma nada (a
+// pessoa simplesmente não aparece na meta desse período).
+async function restringirProprio(req, departamentoChave, itens) {
+  const { podeVerTudoNaMeta, mesmoEmail } = require('../utils/visibilidadeMeta');
+  if (await podeVerTudoNaMeta(req.usuario, departamentoChave)) return itens;
+  return itens.filter(i => mesmoEmail(i._email, req.usuario.email));
+}
+
 router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodoMeta(req);
@@ -1071,6 +1090,8 @@ router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
     const deps = listaParam(req.query.departamento);
     const ats = listaParam(req.query.atendente);
     const data = await calcularMeta(emp, di, df, metaSatisfacao, metaTaxa, { deps, ats });
+    const depChave = deps[0] === 'Suporte' ? 'callcenter' : deps[0] === 'Financeiro' ? 'financeiro' : null;
+    if (depChave) data.itens = await restringirProprio(req, depChave, data.itens);
     res.json({ periodo: { di, df }, semana: true, ...data });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -1129,9 +1150,11 @@ router.get('/meta/semanas', exigirVerMetaAtendimento(depDaQuery), async (req, re
     const deps = listaParam(req.query.departamento);
     const ats = listaParam(req.query.atendente);
     const semanas = semanasDoMes(req.query.mes);
+    const depChave = deps[0] === 'Suporte' ? 'callcenter' : deps[0] === 'Financeiro' ? 'financeiro' : null;
     const resultado = [];
     for (const s of semanas) {
       const data = await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, { deps, ats });
+      if (depChave) data.itens = await restringirProprio(req, depChave, data.itens);
       resultado.push({ periodo: s, ...data });
     }
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
@@ -1150,8 +1173,13 @@ router.get('/meta/pdf', exigirVerMetaAtendimento(depDaQuery), async (req, res) =
     const deps = listaParam(req.query.departamento);       // ex.: ['Financeiro'] ou ['Suporte']
     const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
     const semanas = semanasDoMes(mesRef);
+    const depChave = deps[0] === 'Suporte' ? 'callcenter' : deps[0] === 'Financeiro' ? 'financeiro' : null;
     const resultado = [];
-    for (const s of semanas) resultado.push({ periodo: s, ...(await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, { deps })) });
+    for (const s of semanas) {
+      const data = await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, { deps });
+      if (depChave) data.itens = await restringirProprio(req, depChave, data.itens);
+      resultado.push({ periodo: s, ...data });
+    }
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
 
     const { gerarPDFMetaAtendimento } = require('../utils/gerarPDFMetaAtendimento');
