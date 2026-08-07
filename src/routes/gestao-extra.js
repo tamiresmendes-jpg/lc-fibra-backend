@@ -565,16 +565,16 @@ async function emailDoNomeHubsoft(empresaId, nomeHubsoft) {
 async function metaCobrancaCacheada(mesRef, dataInicio, dataFim) {
   const row = await get('SELECT dados, atualizado_em FROM meta_cobranca_cache WHERE mes=$1', [mesRef]);
   const idadeMin = row ? (Date.now() - new Date(row.atualizado_em).getTime()) / 60000 : Infinity;
-  if (row && idadeMin < 15) return row.dados;
+  if (row && idadeMin < 15) return { dados: row.dados, cache_atualizado_em: row.atualizado_em };
   const { montarMetaCobranca } = require('../jobs/metaCobranca');
-  return montarMetaCobranca({ dataInicio, dataFim });
+  return { dados: await montarMetaCobranca({ dataInicio, dataFim }), cache_atualizado_em: null };
 }
 async function analiseCobrancaCacheada(mesRef, dataInicio, dataFim) {
   const row = await get('SELECT dados, atualizado_em FROM meta_cobranca_analise_cache WHERE mes=$1', [mesRef]);
   const idadeMin = row ? (Date.now() - new Date(row.atualizado_em).getTime()) / 60000 : Infinity;
-  if (row && idadeMin < 15) return row.dados;
+  if (row && idadeMin < 15) return { dados: row.dados, cache_atualizado_em: row.atualizado_em };
   const { montarAnaliseCobranca } = require('../jobs/metaCobranca');
-  return montarAnaliseCobranca({ dataInicio, dataFim });
+  return { dados: await montarAnaliseCobranca({ dataInicio, dataFim }), cache_atualizado_em: null };
 }
 
 router.get('/meta-cobranca', autenticar, async (req, res) => {
@@ -588,9 +588,9 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dados = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    const { dados, cache_atualizado_em } = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
 
-    if (vTudo) return res.json({ mes: mesRef, ...dados });
+    if (vTudo) return res.json({ mes: mesRef, cache_atualizado_em, ...dados });
 
     // Casa cada item com o e-mail do usuário do sistema, pra achar a PRÓPRIA linha.
     const comEmail = await Promise.all(dados.itens.map(async i => ({ ...i, _email: await emailDoNomeHubsoft(req.usuario.empresa_id, i.nome) })));
@@ -601,7 +601,7 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
     const nomesProprios = new Set(itens.map(i => i.nome));
     const recebimentos = (dados.recebimentos || []).filter(r => nomesProprios.has(r.cobrador));
     res.json({
-      mes: mesRef, meta_efetividade: dados.meta_efetividade, itens, recebimentos, somente_proprio: true,
+      mes: mesRef, cache_atualizado_em, meta_efetividade: dados.meta_efetividade, itens, recebimentos, somente_proprio: true,
       resumo: {
         colaboradores: itens.length,
         total_os: itens.reduce((s, i) => s + i.total_os, 0),
@@ -626,7 +626,7 @@ router.get('/meta-cobranca/pdf', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dados = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    const { dados } = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
 
     let payload = { mes: mesRef, ...dados };
     if (!vTudo) {
@@ -652,8 +652,8 @@ router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const dados = await analiseCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
-    res.json({ mes: mesRef, ...dados });
+    const { dados, cache_atualizado_em } = await analiseCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    res.json({ mes: mesRef, cache_atualizado_em, ...dados });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
