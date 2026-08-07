@@ -1120,6 +1120,7 @@ async function initSchema() {
     -- Gênero: o HubSoft ADIVINHA pelo primeiro nome do cliente, não é dado real
     -- informado por ele — por isso pode vir errado (ex.: "Marina" saiu masculino).
     ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS genero TEXT;
+    ALTER TABLE meta_comercial_venda_sync ADD COLUMN IF NOT EXISTS vencimento TEXT; -- dia do venc. (ou "ultimo_dia")
     -- Ordem e tamanho dos painéis da Análise da Meta, ajustável por admin/gestor.
     -- Sem registro, a tela usa a ordem padrão do código.
     CREATE TABLE IF NOT EXISTS meta_comercial_analise_layout (

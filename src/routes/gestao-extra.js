@@ -486,7 +486,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
        AND LOWER(vendedor_email) = ANY($3)`;
     const p = [eid, mes, emails.length ? emails : ['']];
 
-    const [porDia, porServico, porTipo, porTecnologia, porStatus, porGenero, receita] = await Promise.all([
+    const [porDia, porServico, porTipo, porVencimento, porStatus, porGenero, receita] = await Promise.all([
       all(`SELECT TO_CHAR(data_venda,'DD') AS dia, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 1`, p),
       all(`SELECT COALESCE(NULLIF(nome_servico,''),'Sem plano') AS servico, COUNT(*)::int AS qtd
@@ -495,8 +495,10 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
                        WHEN LOWER(COALESCE(tipo_pessoa,''))='pf' THEN 'Pessoa Física'
                        ELSE 'Não informado' END AS tipo, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
-      all(`SELECT COALESCE(NULLIF(tecnologia,''),'Não informada') AS tecnologia, COUNT(*)::int AS qtd
-           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
+      all(`SELECT CASE WHEN vencimento='ultimo_dia' THEN 'Último dia' WHEN vencimento IS NOT NULL THEN 'Dia ' || vencimento
+                       ELSE 'Não informado' END AS vencimento, COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1, vencimento
+           ORDER BY (vencimento = 'ultimo_dia'), NULLIF(vencimento,'ultimo_dia')::int`, p),
       // Status do serviço vem do próprio cadastro do serviço (não da ordem de serviço)
       all(`SELECT INITCAP(REPLACE(COALESCE(NULLIF(status_prefixo,''),'nao_informado'),'_',' ')) AS status,
                   COUNT(*)::int AS qtd
@@ -596,7 +598,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       por_servico: porServico,
       por_tipo: porTipo,
       por_genero: porGenero,
-      por_tecnologia: porTecnologia,
+      por_vencimento: porVencimento,
       ultima_sincronizacao: (await get(
         'SELECT ultima_sync FROM meta_comercial_sync_status WHERE empresa_id=$1', [eid]
       ))?.ultima_sync || null,
