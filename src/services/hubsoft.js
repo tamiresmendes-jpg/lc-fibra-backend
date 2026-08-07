@@ -354,25 +354,38 @@ async function buscarTiposOSPorId(ids = [], deveCancelar) {
   return mapa;
 }
 
-// Meta de Cobrança: acha a cobrança mais recente de um serviço e lê sua
-// observação de baixa (formato "Cobrança recebida pelo cobrador X no valor de R$Y").
+// Meta de Cobrança: acha TODAS as cobranças de um serviço pagas dentro do
+// período e lê a observação de baixa de cada uma (formato "Cobrança recebida
+// pelo cobrador X no valor de R$Y"). Um cliente pode ter várias cobranças
+// baixadas no mesmo dia (ex.: internet + pacotes avulsos cobrados juntos) —
+// pegar só a "mais recente" perdia as outras (confirmado em 07/08/2026: cliente
+// com 4 cobranças pagas no mesmo dia, cada uma com sua observação e valor).
 // Dois passos porque são IDs em namespaces diferentes: primeiro acha o id_cobranca
 // dentro do detalhamento da fatura, depois consulta a cobrança em si (só ali
 // existe o campo `observacao` — a fatura e o financeiro/cliente não têm esse campo).
-async function buscarObservacaoRecebimento(idClienteServico) {
+async function buscarObservacoesRecebimento(idClienteServico, { dataInicio, dataFim } = {}) {
   const fin = await apiGet('/api/v1/integracao/cliente/financeiro', {
     busca: 'id_cliente_servico', termo_busca: idClienteServico,
     apenas_pendente: 'nao', cobrancas_agrupadas: 'sim', retornar_composicao_cobranca: 'sim',
-    order_by: 'data_vencimento', order_type: 'desc', limit: 20,
+    order_by: 'data_vencimento', order_type: 'desc', limit: 30,
   }).catch(() => null);
   const faturas = fin?.faturas || [];
   const cobrancas = faturas.flatMap(f => f.detalhamento || []);
-  // A mais recente que já foi paga (tem data_pagamento) é a candidata à observação.
-  const paga = cobrancas.find(c => c.data_pagamento) || cobrancas[0];
-  if (!paga?.id_cobranca) return null;
+  // Só as pagas dentro do período pedido (mesma data de referência do relatório) —
+  // sem isso, uma cobrança paga meses atrás entraria de novo em todo mês seguinte.
+  const pagas = cobrancas.filter(c => {
+    if (!c.data_pagamento) return false;
+    const dia = String(c.data_pagamento).slice(0, 10);
+    return (!dataInicio || dia >= dataInicio) && (!dataFim || dia <= dataFim);
+  });
+  if (!pagas.length) return [];
 
-  const det = await apiGet(`/api/v1/cliente/financeiro/cobranca/${paga.id_cobranca}`).catch(() => null);
-  return det?.cobranca?.observacao || null;
+  const observacoes = [];
+  for (const c of pagas) {
+    const det = await apiGet(`/api/v1/cliente/financeiro/cobranca/${c.id_cobranca}`).catch(() => null);
+    if (det?.cobranca?.observacao) observacoes.push(det.cobranca.observacao);
+  }
+  return observacoes;
 }
 
 // Clientes (com busca opcional por nome/CPF/código)
@@ -429,5 +442,5 @@ module.exports = {
   relatorioServicos, autenticarPainel, statusContrato,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
-  buscarObservacaoRecebimento,
+  buscarObservacoesRecebimento,
 };

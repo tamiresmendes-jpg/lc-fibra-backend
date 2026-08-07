@@ -16,7 +16,7 @@
 //   demais nomes que aparecem fechando O.S. de remoção são TÉCNICOS de campo,
 //   não recebem bônus de cobrança — mas entram na Análise (todo mundo que
 //   participa da remoção/recebimento), só não na tabela de bônus.
-const { listarOrdensServico, buscarObservacaoRecebimento } = require('../services/hubsoft');
+const { listarOrdensServico, buscarObservacoesRecebimento } = require('../services/hubsoft');
 
 const REGEX_RECEBIMENTO = /cobran[çc]a recebida pelo cobrador\s+(.+?)\s+no valor de\s+r\$\s*([\d.,]+)/i;
 
@@ -83,19 +83,22 @@ async function calcularBase({ dataInicio, dataFim }) {
     porColaborador.set(fechou.id, atual);
   }
 
-  // Busca a observação da cobrança mais recente de cada serviço com pagamento
-  // realizado (uma chamada por id_cliente_servico único, concorrência baixa).
+  // Busca as observações de TODAS as cobranças pagas no período pra cada
+  // serviço com pagamento realizado (uma chamada por id_cliente_servico único,
+  // concorrência baixa) — um cliente pode ter mais de uma cobrança baixada no
+  // mesmo dia, cada uma com seu valor.
   const idsUnicos = [...new Set(osComPagamento.map(x => x.idClienteServico))];
-  const observacaoPorServico = new Map();
+  const observacoesPorServico = new Map();
   await comConcorrenciaLimitada(idsUnicos, 4, async (idServico) => {
-    const obs = await buscarObservacaoRecebimento(idServico).catch(() => null);
-    observacaoPorServico.set(idServico, obs);
+    const obs = await buscarObservacoesRecebimento(idServico, { dataInicio, dataFim }).catch(() => []);
+    observacoesPorServico.set(idServico, obs);
   });
   for (const { colaboradorId, idClienteServico } of osComPagamento) {
-    const recebimento = extrairRecebimento(observacaoPorServico.get(idClienteServico));
-    if (!recebimento?.valor) continue; // sem observação no formato esperado: fica "a confirmar"
+    const observacoes = observacoesPorServico.get(idClienteServico) || [];
+    const recebimentos = observacoes.map(extrairRecebimento).filter(r => r?.valor);
+    if (!recebimentos.length) continue; // sem observação no formato esperado: fica "a confirmar"
     const atual = porColaborador.get(colaboradorId);
-    atual.valor_recebido += recebimento.valor;
+    atual.valor_recebido += recebimentos.reduce((s, r) => s + r.valor, 0);
     atual.valor_recebido_confirmado = true;
   }
 
