@@ -1039,25 +1039,36 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       };
     });
     const fonteSatisfacao = oficial ? 'oficial' : 'mensagens';
-    // Agrupa por departamento (Financeiro e Call Center)
-    const porDept = {};
-    for (const i of itens) {
-      const d = porDept[i.departamento] || (porDept[i.departamento] = { departamento: i.departamento, total: 0, satisfeitas: 0, validas: 0, atendentes: 0 });
-      d.total += i.total; d.satisfeitas += i.satisfeitas; d.validas += i.validas; d.atendentes++;
-    }
-    const departamentos = Object.values(porDept).map(d => ({
-      ...d,
-      perc_satisfacao: d.validas ? Math.round((d.satisfeitas / d.validas) * 10000) / 100 : null,
-      taxa_resposta: d.total ? Math.round((d.validas / d.total) * 10000) / 100 : 0,
-    }));
-    // Resumo do setor
+    const departamentos = montarDepartamentos(itens);
+    const resumo = montarResumoMeta(itens);
+    return { fonte: fonteSatisfacao, painel: statusPainel(emp), metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
+}
+
+// Agrupa por departamento (Financeiro e Call Center) — separado da função
+// principal pra poder ser recalculado depois de restringir "só a própria linha".
+function montarDepartamentos(itens) {
+  const porDept = {};
+  for (const i of itens) {
+    const d = porDept[i.departamento] || (porDept[i.departamento] = { departamento: i.departamento, total: 0, satisfeitas: 0, validas: 0, atendentes: 0 });
+    d.total += i.total; d.satisfeitas += i.satisfeitas; d.validas += i.validas; d.atendentes++;
+  }
+  return Object.values(porDept).map(d => ({
+    ...d,
+    perc_satisfacao: d.validas ? Math.round((d.satisfeitas / d.validas) * 10000) / 100 : null,
+    taxa_resposta: d.total ? Math.round((d.validas / d.total) * 10000) / 100 : 0,
+  }));
+}
+// Resumo do setor (ou da própria linha, quando os itens já vieram filtrados) —
+// separado pra poder recalcular depois de restringirProprio, senão o resumo
+// continuava mostrando o total do setor inteiro pro colaborador comum.
+function montarResumoMeta(itens) {
     const totAtend = itens.reduce((s, i) => s + i.total, 0);
     const totPend = itens.reduce((s, i) => s + (i.pendentes || 0), 0);
     const totValidas = itens.reduce((s, i) => s + i.validas, 0);
     const totSatisf = itens.reduce((s, i) => s + i.satisfeitas, 0);
     const ambas = itens.filter(i => i.bonificacao);
     const comNota = itens.filter(i => i.nota_media != null);
-    const resumo = {
+    return {
       total_atendimentos: totAtend,
       pesquisas_pendentes: totPend,
       atendentes_avaliados: itens.length,
@@ -1069,7 +1080,6 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       destaques: ambas.map(i => i.nome_completo || i.atendente),
       bonus_total: ambas.length * 50,
     };
-    return { fonte: fonteSatisfacao, painel: statusPainel(emp), metas: { satisfacao: metaSatisfacao, taxa: metaTaxa }, departamentos, itens, resumo };
 }
 
 // Restringe à PRÓPRIA linha quando o usuário não tem "vê tudo" naquele
@@ -1091,7 +1101,13 @@ router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
     const ats = listaParam(req.query.atendente);
     const data = await calcularMeta(emp, di, df, metaSatisfacao, metaTaxa, { deps, ats });
     const depChave = deps[0] === 'Suporte' ? 'callcenter' : deps[0] === 'Financeiro' ? 'financeiro' : null;
-    if (depChave) data.itens = await restringirProprio(req, depChave, data.itens);
+    if (depChave) {
+      data.itens = await restringirProprio(req, depChave, data.itens);
+      // Recalcula o resumo com base só nos itens já restritos, senão continuava
+      // mostrando o total do setor inteiro pro colaborador comum.
+      data.departamentos = montarDepartamentos(data.itens);
+      data.resumo = montarResumoMeta(data.itens);
+    }
     res.json({ periodo: { di, df }, semana: true, ...data });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
@@ -1154,7 +1170,11 @@ router.get('/meta/semanas', exigirVerMetaAtendimento(depDaQuery), async (req, re
     const resultado = [];
     for (const s of semanas) {
       const data = await calcularMeta(emp, s.di, s.df, metaSatisfacao, metaTaxa, { deps, ats });
-      if (depChave) data.itens = await restringirProprio(req, depChave, data.itens);
+      if (depChave) {
+        data.itens = await restringirProprio(req, depChave, data.itens);
+        data.departamentos = montarDepartamentos(data.itens);
+        data.resumo = montarResumoMeta(data.itens);
+      }
       resultado.push({ periodo: s, ...data });
     }
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
