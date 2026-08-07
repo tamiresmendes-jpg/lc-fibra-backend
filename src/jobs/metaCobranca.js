@@ -124,17 +124,25 @@ async function calcularBase({ dataInicio, dataFim }) {
   for (const { colaboradorId, idClienteServico, dataExecucaoOS, idOrdemServico } of osComPagamento) {
     const brutos = recebimentosPorServico.get(idClienteServico) || [];
     for (const r of brutos) {
+      // Preferência: usa o valor da observação quando existe (é o registro
+      // manual do cobrador). Sem observação, usa o valor REAL da baixa
+      // (r.valor_pago) — já sabemos quem fechou a O.S. de pagamento, então
+      // não precisa de anotação manual pra confirmar que o cliente pagou: a
+      // baixa já aconteceu de verdade no sistema (buscarRecebimentos só traz
+      // cobranças com data_pagamento preenchida, ou seja, já pagas).
       const extraido = extrairRecebimento(r.observacao);
-      if (!extraido?.valor) continue; // sem observação no formato esperado: fica "a confirmar"
+      const viaObservacao = !!extraido?.valor;
+      const valor = viaObservacao ? extraido.valor : (Number(r.valor_pago) || 0);
+      if (!valor) continue; // nem observação nem baixa real com valor: não afirma nada
       const atual = porColaborador.get(colaboradorId);
-      atual.valor_recebido += extraido.valor;
+      atual.valor_recebido += valor;
       atual.valor_recebido_confirmado = true;
       recebimentosDetalhados.push({
         colaboradorId,
         id_fatura: r.id_fatura, id_cobranca: r.id_cobranca, descricao_cobranca: r.descricao_cobranca,
         codigo_cliente: r.codigo_cliente, nome_cliente: r.nome_cliente,
-        valor_pago: extraido.valor, forma_pagamento: r.forma_pagamento,
-        vendedor: r.vendedor, quem_deu_baixa: r.quem_deu_baixa,
+        valor_pago: valor, forma_pagamento: r.forma_pagamento,
+        vendedor: r.vendedor, quem_deu_baixa: r.quem_deu_baixa, via_observacao: viaObservacao,
         data_pagamento: r.data_pagamento, data_baixa: r.data_baixa,
         data_execucao_os: dataExecucaoOS, id_ordem_servico: idOrdemServico,
       });
