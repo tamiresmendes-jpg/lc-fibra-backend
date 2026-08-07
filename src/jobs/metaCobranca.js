@@ -208,7 +208,10 @@ async function montarAnaliseCobranca({ dataInicio, dataFim }) {
     const cidade = o.dados_endereco_instalacao?.cidade || 'Sem cidade';
     porCidade.set(cidade, (porCidade.get(cidade) || 0) + 1);
     const tipo = o.tipo_ordem_servico?.descricao || 'Sem tipo';
-    porTipo.set(tipo, (porTipo.get(tipo) || 0) + 1);
+    const atualTipo = porTipo.get(tipo) || { total: 0, removido: 0, nao_removido: 0 };
+    atualTipo.total += 1;
+    if (/^removido$/i.test(motivo)) atualTipo.removido += 1; else atualTipo.nao_removido += 1;
+    porTipo.set(tipo, atualTipo);
 
     const atual = porPessoa.get(fechou.id) || { id: fechou.id, nome: fechou.name, cobrador: ehCobrador(fechou.name), total_os: 0, concluidas: 0 };
     atual.total_os += 1;
@@ -237,7 +240,9 @@ async function montarAnaliseCobranca({ dataInicio, dataFim }) {
   const pessoas = [...porPessoa.values()].sort((a, b) => b.total_os - a.total_os);
   const motivosOrdenados = [...motivos.entries()].map(([motivo, total]) => ({ motivo, total })).sort((a, b) => b.total - a.total);
   const cidadesOrdenadas = [...porCidade.entries()].map(([cidade, total]) => ({ cidade, total })).sort((a, b) => b.total - a.total);
-  const tiposOrdenados = [...porTipo.entries()].map(([tipo, total]) => ({ tipo, total })).sort((a, b) => b.total - a.total);
+  const tiposOrdenados = [...porTipo.entries()]
+    .map(([tipo, v]) => ({ tipo, total: v.total, removido: v.removido, nao_removido: v.nao_removido }))
+    .sort((a, b) => b.total - a.total);
   const equipamentosOrdenados = [...equipamentos.entries()]
     .map(([produto, v]) => ({ produto, quantidade: v.quantidade, valor: Math.round(v.valor * 100) / 100 }))
     .sort((a, b) => b.valor - a.valor);
