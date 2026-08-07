@@ -456,6 +456,20 @@ function cidadeDaFilial(filial) {
   return antes || f;
 }
 
+// ─── Meta de Cobrança (efetividade de remoção/recebimento) ───────────────────
+router.get('/meta-cobranca', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
+    const [ano, mes] = mesRef.split('-').map(Number);
+    const ultimo = new Date(ano, mes, 0).getDate();
+    const dd = (d) => `${String(d).padStart(2, '0')}/${String(mes).padStart(2, '0')}/${ano}`;
+    const { montarMetaCobranca } = require('../jobs/metaCobranca');
+    const dados = await montarMetaCobranca({ dataInicio: dd(1), dataFim: dd(ultimo) });
+    res.json({ mes: mesRef, ...dados });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
