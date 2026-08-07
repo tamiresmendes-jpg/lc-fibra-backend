@@ -17,6 +17,32 @@
 //   não recebem bônus de cobrança — mas entram na Análise (todo mundo que
 //   participa da remoção/recebimento), só não na tabela de bônus.
 const { listarOrdensServico, buscarRecebimentos, listarMovimentosEstoque } = require('../services/hubsoft');
+const { all } = require('../config/database');
+
+// O HubSoft só devolve o nome curto de quem fechou a O.S. (ex.: "Ronald Rego",
+// "Jhonaldo") — troca pelo nome completo do cadastro (usuarios), casando por
+// SEQUÊNCIA de palavras (mesma ideia usada no Chatmix/nome completo do atendente).
+// Só troca quando acha exatamente UM colaborador ativo — ambíguo mantém o nome
+// original do HubSoft, nunca afirma o nome errado.
+function semAcentoNome(s) { return (s || '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().trim(); }
+async function resolverNomesCompletos(itens, chaveNome = 'nome') {
+  const busca = new Set(itens.map(i => i[chaveNome]).filter(Boolean));
+  if (!busca.size) return itens;
+  const usuarios = await all('SELECT nome FROM usuarios WHERE ativo=1').catch(() => []);
+  const candidatos = usuarios.map(u => ({ nome: u.nome, tokens: semAcentoNome(u.nome).split(/\s+/).filter(Boolean) }));
+  const mapa = new Map();
+  for (const nomeCurto of busca) {
+    const tokensBusca = semAcentoNome(nomeCurto).split(/\s+/).filter(Boolean);
+    const achados = candidatos.filter(c => {
+      for (let i = 0; i <= c.tokens.length - tokensBusca.length; i++) {
+        if (tokensBusca.every((t, j) => c.tokens[i + j] === t)) return true;
+      }
+      return false;
+    });
+    mapa.set(nomeCurto, achados.length === 1 ? achados[0].nome : nomeCurto);
+  }
+  return itens.map(i => ({ ...i, [chaveNome]: mapa.get(i[chaveNome]) || i[chaveNome] }));
+}
 
 const REGEX_RECEBIMENTO = /cobran[çc]a recebida pelo cobrador\s+(.+?)\s+no valor de\s+r\$\s*([\d.,]+)/i;
 
@@ -123,7 +149,8 @@ async function calcularBase({ dataInicio, dataFim }) {
 async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 }) {
   const { porColaborador, recebimentosDetalhados } = await calcularBase({ dataInicio, dataFim });
 
-  const itens = [...porColaborador.values()]
+  const colaboradores = await resolverNomesCompletos([...porColaborador.values()]);
+  const itens = colaboradores
     .filter(c => ehCobrador(c.nome))
     .map(c => {
       const bemSucedidas = c.os_removido + c.os_pagamento;
@@ -237,7 +264,7 @@ async function montarAnaliseCobranca({ dataInicio, dataFim }) {
     }
   }
 
-  const pessoas = [...porPessoa.values()].sort((a, b) => b.total_os - a.total_os);
+  const pessoas = (await resolverNomesCompletos([...porPessoa.values()])).sort((a, b) => b.total_os - a.total_os);
   const motivosOrdenados = [...motivos.entries()].map(([motivo, total]) => ({ motivo, total })).sort((a, b) => b.total - a.total);
   const cidadesOrdenadas = [...porCidade.entries()].map(([cidade, total]) => ({ cidade, total })).sort((a, b) => b.total - a.total);
   const tiposOrdenados = [...porTipo.entries()]
