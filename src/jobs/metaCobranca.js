@@ -217,18 +217,27 @@ async function montarAnaliseCobranca({ dataInicio, dataFim }) {
   // de volta pro estoque (tipo_vinculo_origem = servico_cliente), ligado a uma
   // dessas O.S. de remoção pelo id_ordem_servico.
   const movimentos = await listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoOrigem: 'servico_cliente', maxPaginas: 300 }).catch(() => []);
-  const equipamentos = new Map(); // produto -> quantidade
+  const equipamentos = new Map(); // produto -> { quantidade, valor }
   for (const m of movimentos) {
     if (!idsOS.has(m.id_ordem_servico)) continue;
     for (const p of (m.produtos || [])) {
-      equipamentos.set(p.produto, (equipamentos.get(p.produto) || 0) + (Number(p.quantidade) || 0));
+      // "valor" no movimento já é o valor da linha (confirmado: bate com o
+      // valor_total do movimento quando é o único produto) — não multiplica
+      // pela quantidade de novo, senão dobra o valor recuperado.
+      const atual = equipamentos.get(p.produto) || { quantidade: 0, valor: 0 };
+      atual.quantidade += Number(p.quantidade) || 0;
+      atual.valor += Number(p.valor) || 0;
+      equipamentos.set(p.produto, atual);
     }
   }
 
   const pessoas = [...porPessoa.values()].sort((a, b) => b.total_os - a.total_os);
   const motivosOrdenados = [...motivos.entries()].map(([motivo, total]) => ({ motivo, total })).sort((a, b) => b.total - a.total);
   const cidadesOrdenadas = [...porCidade.entries()].map(([cidade, total]) => ({ cidade, total })).sort((a, b) => b.total - a.total);
-  const equipamentosOrdenados = [...equipamentos.entries()].map(([produto, quantidade]) => ({ produto, quantidade })).sort((a, b) => b.quantidade - a.quantidade);
+  const equipamentosOrdenados = [...equipamentos.entries()]
+    .map(([produto, v]) => ({ produto, quantidade: v.quantidade, valor: Math.round(v.valor * 100) / 100 }))
+    .sort((a, b) => b.valor - a.valor);
+  const valorRecuperado = Math.round(equipamentosOrdenados.reduce((s, e) => s + e.valor, 0) * 100) / 100;
 
   return {
     resumo: {
@@ -236,6 +245,7 @@ async function montarAnaliseCobranca({ dataInicio, dataFim }) {
       pessoas_envolvidas: pessoas.length,
       cidades_envolvidas: cidadesOrdenadas.length,
       equipamentos_removidos: equipamentosOrdenados.reduce((s, e) => s + e.quantidade, 0),
+      valor_recuperado: valorRecuperado,
     },
     motivos: motivosOrdenados,
     por_pessoa: pessoas,
