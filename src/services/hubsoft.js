@@ -404,7 +404,7 @@ async function buscarRecebimentos(idClienteServico, { dataInicio, dataFim } = {}
       if (!c.data_pagamento) continue;
       const dia = String(c.data_pagamento).slice(0, 10);
       if ((dataInicio && dia < dataInicio) || (dataFim && dia > dataFim)) continue;
-      pagas.push({ ...c, tipo_cobranca_fatura: f.tipo_cobranca });
+      pagas.push({ ...c, tipo_cobranca_fatura: f.tipo_cobranca, id_fatura: f.id_fatura });
     }
   }
   if (!pagas.length) return [];
@@ -418,6 +418,7 @@ async function buscarRecebimentos(idClienteServico, { dataInicio, dataFim } = {}
     const idVendedor = cob.cliente_servico?.id_usuario_vendedor;
     const baixa = quemDeuBaixa(cob.cobranca_historico);
     resultados.push({
+      id_fatura: c.id_fatura, id_cobranca: c.id_cobranca, descricao_cobranca: cob.descricao || null,
       codigo_cliente: codigoCliente, nome_cliente: nomeCliente,
       valor_pago: Number(cob.valor_pago ?? c.valor_pago ?? 0) || 0,
       forma_pagamento: c.tipo_cobranca_fatura || null,

@@ -78,7 +78,7 @@ async function calcularBase({ dataInicio, dataFim }) {
     if (/^pagamento realizado$/i.test(motivo)) {
       atual.os_pagamento += 1;
       const idClienteServico = o.dados_servico?.id_cliente_servico;
-      if (idClienteServico) osComPagamento.push({ colaboradorId: fechou.id, idClienteServico, dataExecucaoOS: o.data_termino_executado || null });
+      if (idClienteServico) osComPagamento.push({ colaboradorId: fechou.id, idClienteServico, dataExecucaoOS: o.data_termino_executado || null, idOrdemServico: o.id_ordem_servico || null });
     }
     porColaborador.set(fechou.id, atual);
   }
@@ -95,7 +95,7 @@ async function calcularBase({ dataInicio, dataFim }) {
   });
 
   const recebimentosDetalhados = []; // pra listar embaixo da Meta: código, valor, forma, vendedor, baixa
-  for (const { colaboradorId, idClienteServico, dataExecucaoOS } of osComPagamento) {
+  for (const { colaboradorId, idClienteServico, dataExecucaoOS, idOrdemServico } of osComPagamento) {
     const brutos = recebimentosPorServico.get(idClienteServico) || [];
     for (const r of brutos) {
       const extraido = extrairRecebimento(r.observacao);
@@ -105,10 +105,12 @@ async function calcularBase({ dataInicio, dataFim }) {
       atual.valor_recebido_confirmado = true;
       recebimentosDetalhados.push({
         colaboradorId,
+        id_fatura: r.id_fatura, id_cobranca: r.id_cobranca, descricao_cobranca: r.descricao_cobranca,
         codigo_cliente: r.codigo_cliente, nome_cliente: r.nome_cliente,
         valor_pago: extraido.valor, forma_pagamento: r.forma_pagamento,
         vendedor: r.vendedor, quem_deu_baixa: r.quem_deu_baixa,
-        data_pagamento: r.data_pagamento, data_baixa: r.data_baixa, data_execucao_os: dataExecucaoOS,
+        data_pagamento: r.data_pagamento, data_baixa: r.data_baixa,
+        data_execucao_os: dataExecucaoOS, id_ordem_servico: idOrdemServico,
       });
     }
   }
@@ -142,9 +144,30 @@ async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 })
 
   const idsCobradores = new Set(itens.map(i => i.id));
   const nomeDoId = new Map(itens.map(i => [i.id, i.nome]));
-  const recebimentos = recebimentosDetalhados
+  const cobrancas = recebimentosDetalhados
     .filter(r => idsCobradores.has(r.colaboradorId))
-    .map(r => ({ cobrador: nomeDoId.get(r.colaboradorId), ...r, colaboradorId: undefined }))
+    .map(r => ({ cobrador: nomeDoId.get(r.colaboradorId), ...r, colaboradorId: undefined }));
+
+  // Uma fatura pode ter várias cobranças compostas (ex.: internet + pacotes
+  // avulsos) — agrupa pra mostrar a fatura como linha principal, com as
+  // cobranças de dentro dela disponíveis pra expandir.
+  const porFatura = new Map();
+  for (const c of cobrancas) {
+    const chave = c.id_fatura || `sem-fatura-${c.id_cobranca}`;
+    const f = porFatura.get(chave) || {
+      id_fatura: c.id_fatura, cobrador: c.cobrador,
+      codigo_cliente: c.codigo_cliente, nome_cliente: c.nome_cliente,
+      forma_pagamento: c.forma_pagamento, vendedor: c.vendedor, quem_deu_baixa: c.quem_deu_baixa,
+      data_pagamento: c.data_pagamento, data_baixa: c.data_baixa, data_execucao_os: c.data_execucao_os,
+      id_ordem_servico: c.id_ordem_servico,
+      valor_total: 0, cobrancas: [],
+    };
+    f.valor_total += c.valor_pago;
+    f.cobrancas.push({ id_cobranca: c.id_cobranca, descricao: c.descricao_cobranca, valor_pago: c.valor_pago });
+    porFatura.set(chave, f);
+  }
+  const recebimentos = [...porFatura.values()]
+    .map(f => ({ ...f, valor_total: Math.round(f.valor_total * 100) / 100 }))
     .sort((a, b) => (b.data_pagamento || '').localeCompare(a.data_pagamento || ''));
 
   return {
