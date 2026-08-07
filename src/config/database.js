@@ -444,6 +444,22 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
 
+    -- Módulo dentro de uma trilha (treinamento): agrupa os sub-módulos (POPs).
+    -- colaborador_id: só usado quando a trilha é repassada DIVIDIDA por módulo
+    -- (cada módulo com uma pessoa diferente); em modo "completa", vale o
+    -- colaborador_id da trilha (treinamentos.colaborador_id) pra todos os módulos.
+    CREATE TABLE IF NOT EXISTS treinamento_modulos (
+      id TEXT PRIMARY KEY,
+      treinamento_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      ordem INTEGER DEFAULT 0,
+      colaborador_id TEXT
+    );
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS modulo_id TEXT;
+    -- 'completa' = uma pessoa treina a trilha inteira; 'dividido' = cada módulo
+    -- vai pra uma pessoa diferente (colaborador_id de cada treinamento_modulos).
+    ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS modo_repasse TEXT DEFAULT 'completa';
+
     CREATE TABLE IF NOT EXISTS feedbacks (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

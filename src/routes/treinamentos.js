@@ -63,17 +63,42 @@ router.get('/alertas-reciclagem', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Salva os módulos de uma trilha (e os pops/sub-módulos de cada um). Usado
+// tanto na criação quanto na edição — sempre substitui tudo do zero, é mais
+// simples e evita ordem/id dessincronizados entre módulos e pops.
+async function salvarModulos(treinamentoId, modulos) {
+  await run(`DELETE FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id IS NOT NULL`, [treinamentoId]);
+  await run(`DELETE FROM treinamento_modulos WHERE treinamento_id=$1`, [treinamentoId]);
+  if (!Array.isArray(modulos)) return;
+  for (const [mi, mod] of modulos.entries()) {
+    const moduloId = uuidv4();
+    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id) VALUES ($1,$2,$3,$4,$5)`,
+      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null]);
+    for (const [pi, item] of (mod.pops || []).entries()) {
+      await run(`INSERT INTO treinamento_pops
+        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9)
+        ON CONFLICT DO NOTHING
+      `, [uuidv4(), treinamentoId, item.pop_id, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId]);
+    }
+  }
+}
+
 router.post('/', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids } = req.body;
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(`INSERT INTO treinamentos
-      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado')
-    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null]);
+      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10)
+    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa']);
 
-    if (Array.isArray(pop_ids) && pop_ids.length) {
+    // Trilha com módulos (o formato novo) — pop_ids solto continua existindo
+    // pra treinamento "avulso" (sem estrutura de módulo, mais simples).
+    if (Array.isArray(modulos) && modulos.length) {
+      await salvarModulos(id, modulos);
+    } else if (Array.isArray(pop_ids) && pop_ids.length) {
       for (const [i, item] of pop_ids.entries()) {
         const pid = typeof item === 'object' ? item.pop_id : item;
         const instrutor = typeof item === 'object' ? item.instrutor_id : null;
@@ -115,20 +140,44 @@ router.get('/:id', async (req, res) => {
       WHERE ta.treinamento_id = $1 ORDER BY ta.created_at DESC
     `, [req.params.id]);
 
-    res.json({ ...t, pops, avaliacoes, anotacoes });
+    // Módulos da trilha, com o colaborador designado (modo dividido) e o tempo
+    // somado dos sub-módulos (pops) de cada um — pra saber quanto cada módulo
+    // leva, e não só a trilha inteira.
+    const modulosRaw = await all(`
+      SELECT m.*, u.nome AS colaborador_nome
+      FROM treinamento_modulos m
+      LEFT JOIN usuarios u ON u.id = m.colaborador_id
+      WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
+    `, [req.params.id]);
+    const modulos = modulosRaw.map(m => {
+      const popsDoModulo = pops.filter(p => p.modulo_id === m.id);
+      return {
+        ...m,
+        pops: popsDoModulo,
+        tempo_estimado: popsDoModulo.reduce((s, p) => s + (p.tempo_estimado || 0), 0),
+        tempo_realizado: popsDoModulo.reduce((s, p) => s + (p.tempo_realizado || 0), 0),
+        concluidos: popsDoModulo.filter(p => p.concluido).length,
+        total: popsDoModulo.length,
+      };
+    });
+    const popsSemModulo = pops.filter(p => !p.modulo_id); // treinamento avulso, sem módulo
+
+    res.json({ ...t, pops, popsSemModulo, modulos, avaliacoes, anotacoes });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
 router.put('/:id', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids } = req.body;
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos } = req.body;
     await run(`UPDATE treinamentos SET
-      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8
-      WHERE id=$9 AND empresa_id=$10
-    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', req.params.id, req.usuario.empresa_id]);
+      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8, modo_repasse=$9
+      WHERE id=$10 AND empresa_id=$11
+    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id]);
 
-    if (Array.isArray(pop_ids)) {
-      await run('DELETE FROM treinamento_pops WHERE treinamento_id=$1', [req.params.id]);
+    if (Array.isArray(modulos)) {
+      await salvarModulos(req.params.id, modulos);
+    } else if (Array.isArray(pop_ids)) {
+      await run('DELETE FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id IS NULL', [req.params.id]);
       for (const [i, item] of pop_ids.entries()) {
         const pid = typeof item === 'object' ? item.pop_id : item;
         const instrutor = typeof item === 'object' ? item.instrutor_id : null;
@@ -146,15 +195,22 @@ router.put('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Atualiza campos de um POP específico na trilha
+// Atualiza campos de um POP específico na trilha — só os campos que vierem no
+// corpo são alterados (COALESCE mantém o que já estava), pra registrar só o
+// tempo realizado, por exemplo, sem apagar instrutor/checklist/etc.
 router.put('/:id/pops/:pop_id', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { instrutor_id, tempo_estimado, tempo_realizado, topicos, data_prevista, status_pop } = req.body;
     await run(`UPDATE treinamento_pops SET
-      instrutor_id=$1, tempo_estimado=$2, tempo_realizado=$3, topicos=$4, data_prevista=$5, status_pop=$6
+      instrutor_id=COALESCE($1, instrutor_id),
+      tempo_estimado=COALESCE($2, tempo_estimado),
+      tempo_realizado=COALESCE($3, tempo_realizado),
+      topicos=COALESCE($4, topicos),
+      data_prevista=COALESCE($5, data_prevista),
+      status_pop=COALESCE($6, status_pop)
       WHERE treinamento_id=$7 AND pop_id=$8
-    `, [instrutor_id || null, tempo_estimado || 0, tempo_realizado || 0, topicos || null, data_prevista || null, status_pop || 'pendente', req.params.id, req.params.pop_id]);
+    `, [instrutor_id ?? null, tempo_estimado ?? null, tempo_realizado ?? null, topicos ?? null, data_prevista ?? null, status_pop ?? null, req.params.id, req.params.pop_id]);
     res.json({ mensagem: 'Atualizado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
