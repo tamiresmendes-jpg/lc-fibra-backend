@@ -165,6 +165,10 @@ async function exigirVerMetaComercial(req, res, next) {
   try {
     const u = req.usuario;
     if (u.perfil === 'admin') return next();
+    // Líder do setor ou e-mail liberado na lista extra (mesmo mecanismo do
+    // Financeiro/Call Center/Cobrança) também vê todo mundo, não só a própria linha.
+    const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+    if (await podeVerTudoNaMeta(u, 'comercial')) return next();
     let ownPerms = null;
     try {
       const row = await get('SELECT permissoes_modulos FROM usuarios WHERE id = $1', [u.id]);
