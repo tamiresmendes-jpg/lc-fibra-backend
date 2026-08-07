@@ -16,7 +16,7 @@
 //   demais nomes que aparecem fechando O.S. de remoção são TÉCNICOS de campo,
 //   não recebem bônus de cobrança — mas entram na Análise (todo mundo que
 //   participa da remoção/recebimento), só não na tabela de bônus.
-const { listarOrdensServico, buscarRecebimentos } = require('../services/hubsoft');
+const { listarOrdensServico, buscarRecebimentos, listarMovimentosEstoque } = require('../services/hubsoft');
 
 const REGEX_RECEBIMENTO = /cobran[çc]a recebida pelo cobrador\s+(.+?)\s+no valor de\s+r\$\s*([\d.,]+)/i;
 
@@ -185,37 +185,62 @@ async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 })
   };
 }
 
-// Análise da Cobrança: visão ampla do período, com TODOS os técnicos/cobradores
-// que fecharam O.S. de remoção ou pagamento (sem bônus — isso é só do painel de
-// Meta), o motivo de fechamento de toda O.S. do período, e o total recebido.
+// Análise da Cobrança: só O.S. cujo TIPO contém "Remoção" (ex.: REMOÇÃO/COBRANÇA,
+// REMOÇÃO/CANCELAMENTO, REMOÇÃO/EQUIPAMENTO ABANDONADO...) — confirmado com a
+// usuária em 08/08/2026 que a Análise não deve puxar TODOS os tipos de O.S.,
+// só as de remoção. Traz quem fechou, motivo, cidade e os equipamentos que
+// voltaram pro estoque nessas O.S. (a "remoção" de equipamento em si).
 async function montarAnaliseCobranca({ dataInicio, dataFim }) {
-  const { porColaborador, motivos, totalOs } = await calcularBase({ dataInicio, dataFim });
+  const todasOrdens = await listarOrdensServico({ dataInicio, dataFim, maxPaginas: 80, tipoData: 'data_termino_executado' });
+  const ordens = todasOrdens.filter(o => /remo[çc][ãa]o/i.test(o.tipo_ordem_servico?.descricao || ''));
 
-  const porPessoa = [...porColaborador.values()]
-    .filter(c => c.os_removido > 0 || c.os_pagamento > 0) // só quem participou de remoção/recebimento
-    .map(c => ({
-      id: c.id, nome: c.nome, cobrador: ehCobrador(c.nome),
-      total_os: c.total_os, os_removido: c.os_removido, os_pagamento: c.os_pagamento,
-      valor_recebido: Math.round(c.valor_recebido * 100) / 100,
-      valor_recebido_pendente: c.os_pagamento > 0 && !c.valor_recebido_confirmado,
-    }))
-    .sort((a, b) => (b.os_removido + b.os_pagamento) - (a.os_removido + a.os_pagamento));
+  const porPessoa = new Map();
+  const motivos = new Map();
+  const porCidade = new Map();
+  const idsOS = new Set();
+  for (const o of ordens) {
+    const fechou = o.usuario_fechamento;
+    if (!fechou?.id) continue;
+    idsOS.add(o.id_ordem_servico);
+    const motivo = (Array.isArray(o.motivo_fechamento) ? o.motivo_fechamento[0] : o.motivo_fechamento)?.descricao || 'Sem motivo';
+    motivos.set(motivo, (motivos.get(motivo) || 0) + 1);
+    const cidade = o.dados_endereco_instalacao?.cidade || 'Sem cidade';
+    porCidade.set(cidade, (porCidade.get(cidade) || 0) + 1);
 
-  const motivosOrdenados = [...motivos.entries()]
-    .map(([motivo, total]) => ({ motivo, total }))
-    .sort((a, b) => b.total - a.total);
+    const atual = porPessoa.get(fechou.id) || { id: fechou.id, nome: fechou.name, cobrador: ehCobrador(fechou.name), total_os: 0, concluidas: 0 };
+    atual.total_os += 1;
+    if (/^removido$/i.test(motivo)) atual.concluidas += 1;
+    porPessoa.set(fechou.id, atual);
+  }
+
+  // Equipamentos removidos: movimento de estoque de SAÍDA do serviço do cliente
+  // de volta pro estoque (tipo_vinculo_origem = servico_cliente), ligado a uma
+  // dessas O.S. de remoção pelo id_ordem_servico.
+  const movimentos = await listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoOrigem: 'servico_cliente', maxPaginas: 300 }).catch(() => []);
+  const equipamentos = new Map(); // produto -> quantidade
+  for (const m of movimentos) {
+    if (!idsOS.has(m.id_ordem_servico)) continue;
+    for (const p of (m.produtos || [])) {
+      equipamentos.set(p.produto, (equipamentos.get(p.produto) || 0) + (Number(p.quantidade) || 0));
+    }
+  }
+
+  const pessoas = [...porPessoa.values()].sort((a, b) => b.total_os - a.total_os);
+  const motivosOrdenados = [...motivos.entries()].map(([motivo, total]) => ({ motivo, total })).sort((a, b) => b.total - a.total);
+  const cidadesOrdenadas = [...porCidade.entries()].map(([cidade, total]) => ({ cidade, total })).sort((a, b) => b.total - a.total);
+  const equipamentosOrdenados = [...equipamentos.entries()].map(([produto, quantidade]) => ({ produto, quantidade })).sort((a, b) => b.quantidade - a.quantidade);
 
   return {
     resumo: {
-      total_os: totalOs,
-      total_removidas: porPessoa.reduce((s, p) => s + p.os_removido, 0),
-      total_pagamentos: porPessoa.reduce((s, p) => s + p.os_pagamento, 0),
-      valor_recebido_total: Math.round(porPessoa.reduce((s, p) => s + p.valor_recebido, 0) * 100) / 100,
-      pessoas_envolvidas: porPessoa.length,
-      valor_pendente_confirmar: porPessoa.some(p => p.valor_recebido_pendente),
+      total_os_remocao: ordens.length,
+      pessoas_envolvidas: pessoas.length,
+      cidades_envolvidas: cidadesOrdenadas.length,
+      equipamentos_removidos: equipamentosOrdenados.reduce((s, e) => s + e.quantidade, 0),
     },
     motivos: motivosOrdenados,
-    por_pessoa: porPessoa,
+    por_pessoa: pessoas,
+    por_cidade: cidadesOrdenadas,
+    equipamentos: equipamentosOrdenados,
   };
 }
 

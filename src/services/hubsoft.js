@@ -306,13 +306,16 @@ async function listarAtendimentos({ dataInicio, dataFim } = {}) {
 
 // Movimentos de estoque (entradas/saídas) num intervalo. itens_por_pagina máx 500.
 // tipoVinculoDestino: filtra no servidor (ex: 'servico_cliente' = só saídas p/ cliente)
-async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, maxPaginas = 300, deveCancelar } = {}) {
+// tipoVinculoOrigem: filtra pelo vínculo de ORIGEM (ex: 'servico_cliente' = o
+// equipamento SAIU do serviço do cliente de volta pro estoque — é a remoção).
+async function listarMovimentosEstoque({ dataInicio, dataFim, tipoVinculoDestino, tipoVinculoOrigem, maxPaginas = 300, deveCancelar } = {}) {
   return buscarTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/estoque/movimento_estoque', {
       pagina, itens_por_pagina: 500,
       data_inicio: dataInicio, data_fim: dataFim,
       tipo_data: 'movimento',
       ...(tipoVinculoDestino ? { tipo_vinculo_destino: tipoVinculoDestino } : {}),
+      ...(tipoVinculoOrigem ? { tipo_vinculo_origem: tipoVinculoOrigem } : {}),
     }),
     { extrair: d => d.movimentos_estoque || d.data || [], maxPaginas, deveCancelar }
   );
