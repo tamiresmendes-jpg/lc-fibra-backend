@@ -232,11 +232,16 @@ async function listarProdutos() {
 
 // Lista ordens de serviço com a agenda (equipe/técnico) num intervalo de datas.
 // GET /api/v1/integracao/ordem_servico/todos?relacoes=agenda_ordem_servico
-async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 60 } = {}) {
+// tipoData: por padrão a API filtra por data_inicio_programado (agendamento), que
+// NÃO é o que a Meta de Cobrança quer — ela precisa de quem fechou HOJE e por qual
+// motivo, então passa tipo_data: 'data_termino_executado' (conferido em 07/08/2026:
+// os dois filtros trazem conjuntos bem diferentes de O.S. no mesmo dia).
+async function listarOrdensServico({ dataInicio, dataFim, maxPaginas = 60, tipoData } = {}) {
   return buscarTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/ordem_servico/todos', {
       pagina, itens_por_pagina: 100,
       data_inicio: dataInicio, data_fim: dataFim,
+      ...(tipoData ? { tipo_data: tipoData } : {}),
       relacoes: 'agenda_ordem_servico,tecnicos',
     }),
     { extrair: d => d.ordens_servico || d.data || [], maxPaginas }

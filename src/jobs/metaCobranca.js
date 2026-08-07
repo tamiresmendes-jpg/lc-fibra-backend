@@ -44,7 +44,9 @@ async function comConcorrenciaLimitada(itens, limite, tarefa) {
 // Monta a Meta de Cobrança de um mês: uma linha por colaborador (quem fechou
 // as O.S.), com total, remoções, pagamentos, efetividade e bônus.
 async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 }) {
-  const ordens = await listarOrdensServico({ dataInicio, dataFim, maxPaginas: 80 });
+  // tipo_data=data_termino_executado: o que importa aqui é quando a O.S. foi
+  // FECHADA (e por qual motivo), não a data em que foi agendada.
+  const ordens = await listarOrdensServico({ dataInicio, dataFim, maxPaginas: 80, tipoData: 'data_termino_executado' });
 
   const porColaborador = new Map();
   const osComPagamento = []; // { colaboradorId, idClienteServico }
