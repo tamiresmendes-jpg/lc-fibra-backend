@@ -473,6 +473,21 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Análise da Cobrança: visão ampla (todos os técnicos/cobradores, motivos de
+// fechamento, valores recebidos) — igual em espírito à Análise do Comercial.
+router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
+    const [ano, mes] = mesRef.split('-').map(Number);
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const { montarAnaliseCobranca } = require('../jobs/metaCobranca');
+    const dados = await montarAnaliseCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
+    res.json({ mes: mesRef, ...dados });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async (req, res) => {
   try {
     const eid = req.usuario.empresa_id;
