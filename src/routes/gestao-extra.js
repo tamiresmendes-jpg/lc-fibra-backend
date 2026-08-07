@@ -486,7 +486,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
        AND LOWER(vendedor_email) = ANY($3)`;
     const p = [eid, mes, emails.length ? emails : ['']];
 
-    const [porDia, porServico, porTipo, porTecnologia, porStatus, receita] = await Promise.all([
+    const [porDia, porServico, porTipo, porTecnologia, porStatus, porGenero, receita] = await Promise.all([
       all(`SELECT TO_CHAR(data_venda,'DD') AS dia, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 1`, p),
       all(`SELECT COALESCE(NULLIF(nome_servico,''),'Sem plano') AS servico, COUNT(*)::int AS qtd
@@ -500,6 +500,10 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       // Status do serviço vem do próprio cadastro do serviço (não da ordem de serviço)
       all(`SELECT INITCAP(REPLACE(COALESCE(NULLIF(status_prefixo,''),'nao_informado'),'_',' ')) AS status,
                   COUNT(*)::int AS qtd
+           FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
+      // Gênero: o HubSoft ADIVINHA pelo primeiro nome do cliente, não é dado real
+      // informado por ele — pode vir errado às vezes (avisado na tela).
+      all(`SELECT INITCAP(COALESCE(NULLIF(genero,''),'não informado')) AS genero, COUNT(*)::int AS qtd
            FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1 ORDER BY 2 DESC`, p),
       get(`SELECT COALESCE(SUM(valor),0)::float AS total, COALESCE(AVG(valor),0)::float AS ticket
            FROM meta_comercial_venda_sync WHERE ${filtroVendas}`, p),
@@ -591,6 +595,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       por_dia: porDia.map(d => ({ dia: parseInt(d.dia, 10), qtd: d.qtd })),
       por_servico: porServico,
       por_tipo: porTipo,
+      por_genero: porGenero,
       por_tecnologia: porTecnologia,
       ultima_sincronizacao: (await get(
         'SELECT ultima_sync FROM meta_comercial_sync_status WHERE empresa_id=$1', [eid]

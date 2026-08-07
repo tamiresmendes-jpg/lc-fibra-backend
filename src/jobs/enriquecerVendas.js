@@ -59,11 +59,11 @@ async function enriquecerMes(empresa_id, mesRef) {
       const res = await run(
         `UPDATE meta_comercial_venda_sync
             SET cidade = COALESCE($3, cidade), bairro = $4, origem = $5, servico_status = $6,
-                pacotes = $7, valor_pacotes = $8
+                pacotes = $7, valor_pacotes = $8, genero = $9
           WHERE empresa_id = $1 AND id_cliente_servico = $2`,
         [empresa_id, id, s.cidade || null, s.bairro || null,
          (s.origem || '').toLowerCase() || null, s.servico_status || null,
-         s.pacotes || null, paraNumero(s.valor_pacotes)]
+         s.pacotes || null, paraNumero(s.valor_pacotes), s.genero || null]
       );
       if (res?.rowCount) atualizados += res.rowCount;
       idsParaContrato.push(id);
