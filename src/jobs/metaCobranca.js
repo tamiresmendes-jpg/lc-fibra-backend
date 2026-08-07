@@ -16,7 +16,7 @@
 //   demais nomes que aparecem fechando O.S. de remoção são TÉCNICOS de campo,
 //   não recebem bônus de cobrança — mas entram na Análise (todo mundo que
 //   participa da remoção/recebimento), só não na tabela de bônus.
-const { listarOrdensServico, buscarObservacoesRecebimento } = require('../services/hubsoft');
+const { listarOrdensServico, buscarRecebimentos } = require('../services/hubsoft');
 
 const REGEX_RECEBIMENTO = /cobran[çc]a recebida pelo cobrador\s+(.+?)\s+no valor de\s+r\$\s*([\d.,]+)/i;
 
@@ -78,37 +78,48 @@ async function calcularBase({ dataInicio, dataFim }) {
     if (/^pagamento realizado$/i.test(motivo)) {
       atual.os_pagamento += 1;
       const idClienteServico = o.dados_servico?.id_cliente_servico;
-      if (idClienteServico) osComPagamento.push({ colaboradorId: fechou.id, idClienteServico });
+      if (idClienteServico) osComPagamento.push({ colaboradorId: fechou.id, idClienteServico, dataExecucaoOS: o.data_termino_executado || null });
     }
     porColaborador.set(fechou.id, atual);
   }
 
-  // Busca as observações de TODAS as cobranças pagas no período pra cada
-  // serviço com pagamento realizado (uma chamada por id_cliente_servico único,
-  // concorrência baixa) — um cliente pode ter mais de uma cobrança baixada no
-  // mesmo dia, cada uma com seu valor.
+  // Busca TODAS as cobranças pagas no período pra cada serviço com pagamento
+  // realizado (uma chamada por id_cliente_servico único, concorrência baixa) —
+  // um cliente pode ter mais de uma cobrança baixada no mesmo dia, cada uma
+  // com seu valor, forma de pagamento, vendedor e quem deu a baixa.
   const idsUnicos = [...new Set(osComPagamento.map(x => x.idClienteServico))];
-  const observacoesPorServico = new Map();
+  const recebimentosPorServico = new Map();
   await comConcorrenciaLimitada(idsUnicos, 4, async (idServico) => {
-    const obs = await buscarObservacoesRecebimento(idServico, { dataInicio, dataFim }).catch(() => []);
-    observacoesPorServico.set(idServico, obs);
+    const r = await buscarRecebimentos(idServico, { dataInicio, dataFim }).catch(() => []);
+    recebimentosPorServico.set(idServico, r);
   });
-  for (const { colaboradorId, idClienteServico } of osComPagamento) {
-    const observacoes = observacoesPorServico.get(idClienteServico) || [];
-    const recebimentos = observacoes.map(extrairRecebimento).filter(r => r?.valor);
-    if (!recebimentos.length) continue; // sem observação no formato esperado: fica "a confirmar"
-    const atual = porColaborador.get(colaboradorId);
-    atual.valor_recebido += recebimentos.reduce((s, r) => s + r.valor, 0);
-    atual.valor_recebido_confirmado = true;
+
+  const recebimentosDetalhados = []; // pra listar embaixo da Meta: código, valor, forma, vendedor, baixa
+  for (const { colaboradorId, idClienteServico, dataExecucaoOS } of osComPagamento) {
+    const brutos = recebimentosPorServico.get(idClienteServico) || [];
+    for (const r of brutos) {
+      const extraido = extrairRecebimento(r.observacao);
+      if (!extraido?.valor) continue; // sem observação no formato esperado: fica "a confirmar"
+      const atual = porColaborador.get(colaboradorId);
+      atual.valor_recebido += extraido.valor;
+      atual.valor_recebido_confirmado = true;
+      recebimentosDetalhados.push({
+        colaboradorId,
+        codigo_cliente: r.codigo_cliente, nome_cliente: r.nome_cliente,
+        valor_pago: extraido.valor, forma_pagamento: r.forma_pagamento,
+        vendedor: r.vendedor, quem_deu_baixa: r.quem_deu_baixa,
+        data_pagamento: r.data_pagamento, data_baixa: r.data_baixa, data_execucao_os: dataExecucaoOS,
+      });
+    }
   }
 
-  return { porColaborador, motivos, totalOs: ordens.length };
+  return { porColaborador, motivos, totalOs: ordens.length, recebimentosDetalhados };
 }
 
 // Monta a Meta de Cobrança de um mês: só Jhonaldo e Ronald Rego (únicos
 // cobradores reais), com total, remoções, pagamentos, efetividade e bônus.
 async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 }) {
-  const { porColaborador } = await calcularBase({ dataInicio, dataFim });
+  const { porColaborador, recebimentosDetalhados } = await calcularBase({ dataInicio, dataFim });
 
   const itens = [...porColaborador.values()]
     .filter(c => ehCobrador(c.nome))
@@ -129,9 +140,17 @@ async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 })
       };
     }).sort((a, b) => b.bonus_total - a.bonus_total);
 
+  const idsCobradores = new Set(itens.map(i => i.id));
+  const nomeDoId = new Map(itens.map(i => [i.id, i.nome]));
+  const recebimentos = recebimentosDetalhados
+    .filter(r => idsCobradores.has(r.colaboradorId))
+    .map(r => ({ cobrador: nomeDoId.get(r.colaboradorId), ...r, colaboradorId: undefined }))
+    .sort((a, b) => (b.data_pagamento || '').localeCompare(a.data_pagamento || ''));
+
   return {
     meta_efetividade: metaEfetividade,
     itens,
+    recebimentos,
     resumo: {
       colaboradores: itens.length,
       total_os: itens.reduce((s, i) => s + i.total_os, 0),

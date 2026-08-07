@@ -363,29 +363,72 @@ async function buscarTiposOSPorId(ids = [], deveCancelar) {
 // Dois passos porque são IDs em namespaces diferentes: primeiro acha o id_cobranca
 // dentro do detalhamento da fatura, depois consulta a cobrança em si (só ali
 // existe o campo `observacao` — a fatura e o financeiro/cliente não têm esse campo).
-async function buscarObservacoesRecebimento(idClienteServico, { dataInicio, dataFim } = {}) {
+// Nomes dos vendedores cadastrados no HubSoft (id -> nome). Cacheado — é uma
+// lista de cadastro que quase nunca muda, não precisa buscar em toda chamada.
+let _vendedoresCache = null, _vendedoresExpira = 0;
+async function mapaVendedores() {
+  if (_vendedoresCache && Date.now() < _vendedoresExpira) return _vendedoresCache;
+  const v = await apiGet('/api/v1/integracao/configuracao/vendedor').catch(() => null);
+  const mapa = new Map((v?.vendedores || []).map(x => [x.id, x.name]));
+  _vendedoresCache = mapa; _vendedoresExpira = Date.now() + 30 * 60 * 1000; // 30min
+  return mapa;
+}
+
+// "Quem deu baixa": no histórico da cobrança, a entrada de fato do recebimento
+// tem o texto "recebida no caixa ..." — pode ser um usuário real ou o próprio
+// HubSoft (baixa automática via boleto/PIX). As demais entradas do histórico
+// são criação da cobrança ou edição da observação, não a baixa em si.
+function quemDeuBaixa(historico) {
+  const entrada = (historico || []).find(h => /recebida no caixa/i.test(h.historico || ''));
+  return { nome: entrada?.usuario?.name || null, data: entrada?.data_cadastro || null };
+}
+
+// Busca TODAS as cobranças de um serviço pagas dentro do período, com os dados
+// completos pra Meta de Cobrança: observação (extrai valor/cobrador), valor
+// pago, forma de pagamento, vendedor do serviço e quem deu a baixa no sistema.
+// Um cliente pode ter várias cobranças baixadas no mesmo dia (ex.: internet +
+// pacotes avulsos cobrados juntos) — por isso retorna todas, não só a última.
+async function buscarRecebimentos(idClienteServico, { dataInicio, dataFim } = {}) {
   const fin = await apiGet('/api/v1/integracao/cliente/financeiro', {
     busca: 'id_cliente_servico', termo_busca: idClienteServico,
     apenas_pendente: 'nao', cobrancas_agrupadas: 'sim', retornar_composicao_cobranca: 'sim',
     order_by: 'data_vencimento', order_type: 'desc', limit: 30,
   }).catch(() => null);
   const faturas = fin?.faturas || [];
-  const cobrancas = faturas.flatMap(f => f.detalhamento || []);
-  // Só as pagas dentro do período pedido (mesma data de referência do relatório) —
-  // sem isso, uma cobrança paga meses atrás entraria de novo em todo mês seguinte.
-  const pagas = cobrancas.filter(c => {
-    if (!c.data_pagamento) return false;
-    const dia = String(c.data_pagamento).slice(0, 10);
-    return (!dataInicio || dia >= dataInicio) && (!dataFim || dia <= dataFim);
-  });
+  const codigoCliente = fin?.faturas?.[0]?.cliente?.codigo_cliente || null;
+  const nomeCliente = fin?.faturas?.[0]?.cliente?.nome_razaosocial || null;
+
+  const pagas = [];
+  for (const f of faturas) {
+    for (const c of (f.detalhamento || [])) {
+      if (!c.data_pagamento) continue;
+      const dia = String(c.data_pagamento).slice(0, 10);
+      if ((dataInicio && dia < dataInicio) || (dataFim && dia > dataFim)) continue;
+      pagas.push({ ...c, tipo_cobranca_fatura: f.tipo_cobranca });
+    }
+  }
   if (!pagas.length) return [];
 
-  const observacoes = [];
+  const vendedores = await mapaVendedores();
+  const resultados = [];
   for (const c of pagas) {
     const det = await apiGet(`/api/v1/cliente/financeiro/cobranca/${c.id_cobranca}`).catch(() => null);
-    if (det?.cobranca?.observacao) observacoes.push(det.cobranca.observacao);
+    const cob = det?.cobranca;
+    if (!cob) continue;
+    const idVendedor = cob.cliente_servico?.id_usuario_vendedor;
+    const baixa = quemDeuBaixa(cob.cobranca_historico);
+    resultados.push({
+      codigo_cliente: codigoCliente, nome_cliente: nomeCliente,
+      valor_pago: Number(cob.valor_pago ?? c.valor_pago ?? 0) || 0,
+      forma_pagamento: c.tipo_cobranca_fatura || null,
+      vendedor: idVendedor ? (vendedores.get(idVendedor) || null) : null,
+      quem_deu_baixa: baixa.nome,
+      data_baixa: baixa.data,
+      observacao: cob.observacao || null,
+      data_pagamento: cob.data_pagamento,
+    });
   }
-  return observacoes;
+  return resultados;
 }
 
 // Clientes (com busca opcional por nome/CPF/código)
@@ -442,5 +485,5 @@ module.exports = {
   relatorioServicos, autenticarPainel, statusContrato,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
-  buscarObservacoesRecebimento,
+  buscarRecebimentos,
 };
