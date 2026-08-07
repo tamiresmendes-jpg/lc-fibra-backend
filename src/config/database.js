@@ -1131,6 +1131,20 @@ async function initSchema() {
     -- Quem, além de admin/gestor/líder, pode ver TODOS os colaboradores de uma
     -- meta por departamento (em vez de só a própria linha). Um e-mail por linha,
     -- por departamento ('comercial' | 'financeiro' | 'callcenter' | 'cobranca').
+    -- Cache da Meta de Cobrança: ela busca tudo em tempo real no HubSoft (O.S.
+    -- do mês + 2 chamadas por cliente com pagamento), o que é lento pra abrir na
+    -- hora. Um job em segundo plano recalcula a cada poucos minutos e guarda
+    -- aqui — a tela lê daqui (rápido) em vez de recalcular a cada abertura.
+    CREATE TABLE IF NOT EXISTS meta_cobranca_cache (
+      mes TEXT PRIMARY KEY,
+      dados JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS meta_cobranca_analise_cache (
+      mes TEXT PRIMARY KEY,
+      dados JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
     CREATE TABLE IF NOT EXISTS meta_visibilidade_extra (
       empresa_id TEXT NOT NULL,
       departamento TEXT NOT NULL,

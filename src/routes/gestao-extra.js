@@ -557,6 +557,26 @@ async function emailDoNomeHubsoft(empresaId, nomeHubsoft) {
   return achados.length === 1 ? achados[0].email : null;
 }
 
+// A Meta de Cobrança busca tudo em tempo real no HubSoft, o que é lento — um
+// job em segundo plano (syncMetaCobranca) recalcula a cada poucos minutos e
+// guarda em cache. Lê daqui primeiro; só recalcula na hora se o cache ainda
+// não existir (ex.: mês muito antigo, ou logo depois do servidor subir) ou
+// estiver velho demais (job parado por algum motivo).
+async function metaCobrancaCacheada(mesRef, dataInicio, dataFim) {
+  const row = await get('SELECT dados, atualizado_em FROM meta_cobranca_cache WHERE mes=$1', [mesRef]);
+  const idadeMin = row ? (Date.now() - new Date(row.atualizado_em).getTime()) / 60000 : Infinity;
+  if (row && idadeMin < 15) return row.dados;
+  const { montarMetaCobranca } = require('../jobs/metaCobranca');
+  return montarMetaCobranca({ dataInicio, dataFim });
+}
+async function analiseCobrancaCacheada(mesRef, dataInicio, dataFim) {
+  const row = await get('SELECT dados, atualizado_em FROM meta_cobranca_analise_cache WHERE mes=$1', [mesRef]);
+  const idadeMin = row ? (Date.now() - new Date(row.atualizado_em).getTime()) / 60000 : Infinity;
+  if (row && idadeMin < 15) return row.dados;
+  const { montarAnaliseCobranca } = require('../jobs/metaCobranca');
+  return montarAnaliseCobranca({ dataInicio, dataFim });
+}
+
 router.get('/meta-cobranca', autenticar, async (req, res) => {
   try {
     const { podeVerTudoNaMeta, mesmoEmail } = require('../utils/visibilidadeMeta');
@@ -568,8 +588,7 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const { montarMetaCobranca } = require('../jobs/metaCobranca');
-    const dados = await montarMetaCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
+    const dados = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
 
     if (vTudo) return res.json({ mes: mesRef, ...dados });
 
@@ -607,8 +626,7 @@ router.get('/meta-cobranca/pdf', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const { montarMetaCobranca } = require('../jobs/metaCobranca');
-    const dados = await montarMetaCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
+    const dados = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
 
     let payload = { mes: mesRef, ...dados };
     if (!vTudo) {
@@ -634,8 +652,7 @@ router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const { montarAnaliseCobranca } = require('../jobs/metaCobranca');
-    const dados = await montarAnaliseCobranca({ dataInicio: iso(1), dataFim: iso(ultimoDia) });
+    const dados = await analiseCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
     res.json({ mes: mesRef, ...dados });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
