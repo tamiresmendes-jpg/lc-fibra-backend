@@ -239,9 +239,13 @@ async function passoMensagem(empresaId, token, desde) {
   }
   // Classifica a satisfação: pesquisa enviada + resposta(s) do cliente depois dela,
   // batendo nas tags configuradas (satisfeito/insatisfeito). Se respondeu e não bate → inválida.
+  // A pesquisa fica ATIVA só por 60 minutos — depois disso o Chatmix a desativa, então uma
+  // mensagem do cliente chegando depois da janela não é resposta da pesquisa (é só uma
+  // mensagem qualquer) e não deve contar nem como satisfeito/insatisfeito nem como inválida.
+  const JANELA_PESQUISA_SEG = 60 * 60;
   let satisfacao = null;
   if (surveyTs) {
-    const posSurvey = respostas.filter(r => r.ts >= surveyTs - 5); // margem de 5s
+    const posSurvey = respostas.filter(r => r.ts >= surveyTs - 5 && r.ts <= surveyTs + JANELA_PESQUISA_SEG); // margem de 5s + janela de 60min
     for (const r of posSurvey) {
       const c = classificaResposta(r.txt);
       if (c === 'insatisfeito') { satisfacao = 'insatisfeito'; break; }
