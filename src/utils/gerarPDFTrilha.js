@@ -18,8 +18,18 @@ function parseLista(v) {
 const emissao = () => new Date().toLocaleString('pt-BR', {
   timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit',
 });
+// Texto puro (sem HTML) de um campo de POP — usado no modo completo, que
+// mostra o conteúdo inteiro de cada POP dentro do PDF da trilha.
+function textoSimples(html) {
+  return String(html || '').replace(/<li[^>]*>/gi, '\n• ').replace(/<[^>]+>/g, '').replace(/&nbsp;/gi, ' ').trim();
+}
+function secaoCompleta(titulo, conteudo) {
+  const texto = textoSimples(conteudo);
+  if (!texto) return '';
+  return `<div class="pop-secao"><b>${esc(titulo)}:</b><div class="pop-secao-corpo">${texto.split('\n').map(l => esc(l.trim())).filter(Boolean).map(l => `<p>${l}</p>`).join('')}</div></div>`;
+}
 
-function montarHtmlTrilha(dados) {
+function montarHtmlTrilha(dados, completo = false) {
   const modulos = dados.modulos?.length ? dados.modulos : [{ nome: null, pops: dados.popsSemModulo || dados.pops || [] }];
 
   const blocosModulo = modulos.map((m, mi) => {
@@ -38,6 +48,14 @@ function montarHtmlTrilha(dados) {
             ${p.tempo_realizado ? `<span><b>Tempo realizado:</b> ${p.tempo_realizado} min</span>` : ''}
           </div>
           ${topicos.length ? `<ul class="checklist">${topicos.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+          ${completo ? `<div class="pop-completo">
+            ${secaoCompleta('Objetivo', p.objetivo)}
+            ${secaoCompleta('Campo de Aplicação', p.campo_aplicacao)}
+            ${secaoCompleta('Procedimento Detalhado', p.procedimento)}
+            ${secaoCompleta('Documentos e Ferramentas', p.documentos)}
+            ${secaoCompleta('Segurança e Conduta', p.seguranca)}
+            ${secaoCompleta('Penalidades', p.penalidade)}
+          </div>` : ''}
         </div>`;
     }).join('');
     return `
@@ -72,11 +90,15 @@ function montarHtmlTrilha(dados) {
     .checklist{margin:4px 0 0 34px;font-size:10.5px;color:#334155}
     .checklist li{margin-bottom:2px}
     .vazio{color:#94a3b8;font-style:italic;margin-left:8px}
+    .pop-completo{margin-top:8px;padding-top:8px;border-top:1px dashed #e2e8f0}
+    .pop-secao{margin-bottom:6px}
+    .pop-secao b{color:#0b2b6b;font-size:10px}
+    .pop-secao-corpo p{font-size:10px;color:#334155;line-height:1.5;margin:2px 0}
     .rodape{margin-top:20px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:9px;color:#94a3b8;text-align:center}
   </style></head><body>
     <div class="cabecalho">
       <h1>🎓 ${esc(dados.titulo)}</h1>
-      <div class="sub">Trilha de treinamento · Emitido em ${emissao()}</div>
+      <div class="sub">Trilha de treinamento ${completo ? '· Versão completa (com o conteúdo de cada POP)' : '· Resumo (módulos e checklists)'} · Emitido em ${emissao()}</div>
     </div>
     <div class="info">
       <div><b>Colaborador (treinando):</b> ${esc(dados.colaborador_nome) || '—'}</div>
@@ -91,8 +113,8 @@ function montarHtmlTrilha(dados) {
   </body></html>`;
 }
 
-async function gerarPDFTrilha(dados) {
-  return htmlParaPdf(montarHtmlTrilha(dados));
+async function gerarPDFTrilha(dados, completo = false) {
+  return htmlParaPdf(montarHtmlTrilha(dados, completo));
 }
 
 module.exports = { gerarPDFTrilha, montarHtmlTrilha };

@@ -401,8 +401,14 @@ router.get('/:id/pdf', async (req, res) => {
   try {
     const t = await get(`${SELECT_TREINAMENTO} WHERE t.id = $1 AND t.empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!t) return res.status(404).json({ erro: 'Não encontrado' });
+    // completo=1 traz o conteúdo inteiro de cada POP (objetivo, procedimento,
+    // documentos, segurança, penalidades) — não só título e checklist.
+    const completo = req.query.completo === '1';
+    const camposPop = completo
+      ? 'p.titulo, p.codigo, p.objetivo, p.campo_aplicacao, p.procedimento, p.documentos, p.seguranca, p.penalidade'
+      : 'p.titulo, p.codigo';
     const pops = await all(`
-      SELECT tp.*, p.titulo, p.codigo, u.nome AS instrutor_nome
+      SELECT tp.*, ${camposPop}, u.nome AS instrutor_nome
       FROM treinamento_pops tp JOIN pops p ON p.id = tp.pop_id
       LEFT JOIN usuarios u ON u.id = tp.instrutor_id
       WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
@@ -416,9 +422,9 @@ router.get('/:id/pdf', async (req, res) => {
     const popsSemModulo = pops.filter(p => !p.modulo_id);
 
     const { gerarPDFTrilha } = require('../utils/gerarPDFTrilha');
-    const pdfBuffer = await gerarPDFTrilha({ ...t, pops, popsSemModulo, modulos });
+    const pdfBuffer = await gerarPDFTrilha({ ...t, pops, popsSemModulo, modulos }, completo);
     res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `inline; filename="trilha-${(t.titulo || 'treinamento').replace(/[^a-zA-Z0-9]/g, '-')}.pdf"`);
+    res.setHeader('Content-Disposition', `inline; filename="trilha-${(t.titulo || 'treinamento').replace(/[^a-zA-Z0-9]/g, '-')}${completo ? '-completa' : ''}.pdf"`);
     res.send(pdfBuffer);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
