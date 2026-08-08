@@ -85,17 +85,22 @@ router.delete('/trilhas-principais/:id', async (req, res) => {
 router.get('/meus', async (req, res) => {
   try {
     const isAdmin = req.usuario.perfil === 'admin';
-    // Além de colaborador (quem é treinado) e responsável geral, também entra aqui
-    // quem foi marcado como INSTRUTOR de algum tópico, ou como responsável de algum
-    // MÓDULO (modo dividido) — senão a pessoa marcada como instrutor nunca via a
-    // trilha em "Meus Treinamentos".
-    const itens = await all(`${SELECT_TREINAMENTO}
-      WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND (
-        $2 = 1 OR t.colaborador_id = $3 OR t.responsavel_id = $3
-        OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.instrutor_id = $3)
-        OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = t.id AND tm.colaborador_id = $3)
-      )
-      ORDER BY t.data_hora ASC
+    // colaborador_id (t ou do módulo, no modo dividido) = quem VAI SER TREINADO.
+    // instrutor_id de um tópico ou responsavel_id da trilha = quem VAI TREINAR.
+    // Manda os dois flags pro front decidir em qual seção mostrar — sem eles, dava
+    // pra confundir "seu módulo pra ser treinado" com "você é o instrutor".
+    const itens = await all(`
+      SELECT z.*,
+        (z.colaborador_id = $3 OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.colaborador_id = $3)) AS sou_treinando,
+        (z.responsavel_id = $3 OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = z.id AND tp.instrutor_id = $3)) AS sou_instrutor
+      FROM (${SELECT_TREINAMENTO}
+        WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND (
+          $2 = 1 OR t.colaborador_id = $3 OR t.responsavel_id = $3
+          OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.instrutor_id = $3)
+          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = t.id AND tm.colaborador_id = $3)
+        )
+      ) z
+      ORDER BY z.data_hora ASC
     `, [req.usuario.empresa_id, isAdmin ? 1 : 0, req.usuario.id]);
     res.json(itens);
   } catch(e) { res.status(500).json({ erro: e.message }); }
