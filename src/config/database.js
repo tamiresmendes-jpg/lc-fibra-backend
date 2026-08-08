@@ -421,6 +421,10 @@ async function initSchema() {
       ordem INTEGER DEFAULT 0,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    -- Avaliação pode ser da trilha inteira (pop_id e modulo_id nulos), de um
+    -- sub-módulo específico (pop_id) OU de um módulo inteiro (modulo_id) —
+    -- pra avaliar o conjunto de sub-módulos daquele módulo de uma vez.
+    ALTER TABLE treinamento_avaliacoes ADD COLUMN IF NOT EXISTS modulo_id TEXT;
 
     CREATE TABLE IF NOT EXISTS treinamento_respostas (
       id TEXT PRIMARY KEY,

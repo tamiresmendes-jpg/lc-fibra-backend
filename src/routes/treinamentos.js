@@ -195,6 +195,43 @@ router.put('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Adiciona POPs a um módulo já existente de uma trilha, SEM apagar o que já
+// tem (diferente do PUT /:id, que substitui tudo do zero) — usado pela tela de
+// POPs, pra selecionar vários POPs de uma vez e jogar direto num módulo.
+// modulo_id = "__novo__" cria um módulo novo com o nome vindo em `novo_modulo_nome`.
+router.post('/:id/modulos/:modulo_id/pops', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const { pop_ids, novo_modulo_nome } = req.body;
+    if (!Array.isArray(pop_ids) || !pop_ids.length) return res.status(400).json({ erro: 'Selecione ao menos um POP' });
+
+    let moduloId = req.params.modulo_id;
+    if (moduloId === '__novo__') {
+      moduloId = uuidv4();
+      const maxOrdem = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_modulos WHERE treinamento_id=$1', [req.params.id]);
+      await run('INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem) VALUES ($1,$2,$3,$4)',
+        [moduloId, req.params.id, novo_modulo_nome || 'Novo módulo', (maxOrdem?.m ?? -1) + 1]);
+    } else {
+      const modulo = await get('SELECT id FROM treinamento_modulos WHERE id=$1 AND treinamento_id=$2', [moduloId, req.params.id]);
+      if (!modulo) return res.status(404).json({ erro: 'Módulo não encontrado' });
+    }
+
+    const jaTem = await all('SELECT pop_id FROM treinamento_pops WHERE treinamento_id=$1', [req.params.id]);
+    const idsJaNaTrilha = new Set(jaTem.map(p => p.pop_id));
+    const maxOrdemPop = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id=$2', [req.params.id, moduloId]);
+    let ordem = (maxOrdemPop?.m ?? -1) + 1;
+    let adicionados = 0;
+    for (const popId of pop_ids) {
+      if (idsJaNaTrilha.has(popId)) continue; // já está na trilha (em qualquer módulo) — não duplica
+      await run(`INSERT INTO treinamento_pops (id, treinamento_id, pop_id, ordem, versao_pop, modulo_id)
+        VALUES ($1,$2,$3,$4,(SELECT versao FROM pops WHERE id=$3),$5)`,
+        [uuidv4(), req.params.id, popId, ordem++, moduloId]);
+      adicionados++;
+    }
+    res.json({ mensagem: 'Adicionado', modulo_id: moduloId, adicionados, ignorados: pop_ids.length - adicionados });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Atualiza campos de um POP específico na trilha — só os campos que vierem no
 // corpo são alterados (COALESCE mantém o que já estava), pra registrar só o
 // tempo realizado, por exemplo, sem apagar instrutor/checklist/etc.
@@ -246,12 +283,12 @@ router.put('/:id/pops/:pop_id/concluir', async (req, res) => {
 router.post('/:id/avaliacoes', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
-    const { titulo, tipo, perguntas, pop_id, obrigatorio, ordem } = req.body;
+    const { titulo, tipo, perguntas, pop_id, modulo_id, obrigatorio, ordem } = req.body;
     if (!titulo || !tipo || !perguntas) return res.status(400).json({ erro: 'Título, tipo e perguntas obrigatórios' });
     const id = uuidv4();
-    await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, titulo, tipo, perguntas, obrigatorio, ordem)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-    `, [id, req.params.id, pop_id || null, titulo, tipo, JSON.stringify(perguntas), obrigatorio !== false ? 1 : 0, ordem || 0]);
+    await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+    `, [id, req.params.id, pop_id || null, modulo_id || null, titulo, tipo, JSON.stringify(perguntas), obrigatorio !== false ? 1 : 0, ordem || 0]);
     res.status(201).json({ id });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -356,6 +393,86 @@ router.delete('/:id', async (req, res) => {
       [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
     );
     res.json({ mensagem: 'Removido', titulo: tr.titulo });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── PDF DA TRILHA COMPLETA ──────────────────────────────────────────────────
+router.get('/:id/pdf', async (req, res) => {
+  try {
+    const t = await get(`${SELECT_TREINAMENTO} WHERE t.id = $1 AND t.empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
+    if (!t) return res.status(404).json({ erro: 'Não encontrado' });
+    const pops = await all(`
+      SELECT tp.*, p.titulo, p.codigo, u.nome AS instrutor_nome
+      FROM treinamento_pops tp JOIN pops p ON p.id = tp.pop_id
+      LEFT JOIN usuarios u ON u.id = tp.instrutor_id
+      WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
+    `, [req.params.id]);
+    const modulosRaw = await all(`
+      SELECT m.*, u.nome AS colaborador_nome FROM treinamento_modulos m
+      LEFT JOIN usuarios u ON u.id = m.colaborador_id
+      WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
+    `, [req.params.id]);
+    const modulos = modulosRaw.map(m => ({ ...m, pops: pops.filter(p => p.modulo_id === m.id) }));
+    const popsSemModulo = pops.filter(p => !p.modulo_id);
+
+    const { gerarPDFTrilha } = require('../utils/gerarPDFTrilha');
+    const pdfBuffer = await gerarPDFTrilha({ ...t, pops, popsSemModulo, modulos });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="trilha-${(t.titulo || 'treinamento').replace(/[^a-zA-Z0-9]/g, '-')}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── DUPLICAR ──────────────────────────────────────────────────────────────────
+// Copia a trilha inteira (módulos, sub-módulos/POPs, checklist, instrutor,
+// avaliações) pra treinar outra pessoa com o mesmo conteúdo — sem duplicar o
+// progresso nem as anotações, que são específicas de quem foi treinado antes.
+router.post('/:id/duplicar', async (req, res) => {
+  try {
+    const original = await get('SELECT * FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!original) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const { colaborador_id, data_hora, titulo } = req.body;
+
+    const novoId = uuidv4();
+    await run(`INSERT INTO treinamentos
+      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10)
+    `, [novoId, req.usuario.empresa_id, titulo || `${original.titulo} (cópia)`, original.tipo_trilha,
+        original.departamento_id, original.responsavel_id, colaborador_id || null, data_hora || null,
+        original.observacoes, original.modo_repasse]);
+
+    const modulos = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);
+    const mapaModulo = new Map();
+    for (const m of modulos) {
+      const novoModuloId = uuidv4();
+      mapaModulo.set(m.id, novoModuloId);
+      // modo "completa": não copia o colaborador do módulo antigo (o novo treinamento
+      // já tem o colaborador dele); modo "dividido" mantém quem estava em cada módulo,
+      // já que a divisão por módulo é independente de quem faz a trilha toda.
+      await run('INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id) VALUES ($1,$2,$3,$4,$5)',
+        [novoModuloId, novoId, m.nome, m.ordem, original.modo_repasse === 'dividido' ? m.colaborador_id : null]);
+    }
+
+    const pops = await all('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);
+    const mapaPop = new Map(); // pop_id antigo -> novo id de treinamento_pops (pra avaliações)
+    for (const p of pops) {
+      const novoPopRowId = uuidv4();
+      mapaPop.set(p.pop_id, novoPopRowId);
+      await run(`INSERT INTO treinamento_pops
+        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+      `, [novoPopRowId, novoId, p.pop_id, p.ordem, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
+          p.data_prevista, p.modulo_id ? mapaModulo.get(p.modulo_id) : null]);
+    }
+
+    const avaliacoes = await all('SELECT * FROM treinamento_avaliacoes WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);
+    for (const av of avaliacoes) {
+      await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [uuidv4(), novoId, av.pop_id, av.modulo_id ? mapaModulo.get(av.modulo_id) : null, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
+    }
+
+    res.status(201).json({ id: novoId, mensagem: 'Trilha duplicada' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

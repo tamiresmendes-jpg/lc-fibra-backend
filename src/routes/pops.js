@@ -83,6 +83,41 @@ router.post('/bulk/departamentos', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Manda os POPs selecionados pros líderes (notificação interna, no sininho) —
+// avisa quem tem perfil "líder" pra revisar/tomar ciência desses POPs.
+router.post('/bulk/enviar-lideres', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body.ids) ? req.body.ids.filter(Boolean) : [];
+    if (!ids.length) return res.status(400).json({ erro: 'Nenhum POP selecionado' });
+    const pops = await all('SELECT id, titulo, codigo FROM pops WHERE id = ANY($1) AND empresa_id=$2', [ids, req.usuario.empresa_id]);
+    if (!pops.length) return res.status(404).json({ erro: 'POPs não encontrados' });
+
+    const lideres = await all(`SELECT id FROM usuarios WHERE empresa_id=$1 AND ativo=1 AND perfil='lider'`, [req.usuario.empresa_id]);
+    if (!lideres.length) return res.status(404).json({ erro: 'Nenhum líder cadastrado nesta empresa' });
+
+    const titulo = pops.length === 1
+      ? `Novo POP para revisão: ${pops[0].titulo}`
+      : `${pops.length} POPs para revisão`;
+    const texto = pops.map(p => `${p.codigo ? `[${p.codigo}] ` : ''}${p.titulo}`).join('\n');
+    for (const l of lideres) {
+      await run(
+        `INSERT INTO notificacoes (id, empresa_id, usuario_id, tipo, titulo, texto, link)
+         VALUES ($1,$2,$3,'pop',$4,$5,$6)`,
+        [uuidv4(), req.usuario.empresa_id, l.id, titulo, texto, pops.length === 1 ? `/pops/${pops[0].id}` : '/pops']
+      );
+    }
+    res.json({ ok: true, lideres: lideres.length, pops: pops.length });
+    notificarDiscord(req.usuario.empresa_id, 'pop', {
+      title: `📤 ${titulo}`,
+      description: `Enviado por ${req.usuario.nome || '—'} para ${lideres.length} líder(es) revisarem.`,
+      color: DISCORD_COR.roxo,
+      linkPath: `/pops`,
+      footer: { text: 'Kronos — POPs' },
+      timestamp: new Date().toISOString(),
+    }).catch(() => {});
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Dashboard de POPs
 router.get('/dashboard', async (req, res) => {
   try {
