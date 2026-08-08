@@ -1162,6 +1162,46 @@ router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Análise e Acompanhamento: lista atendimento por atendimento (cliente, protocolo,
+// nota satisfeito/insatisfeito e a tag com que foi encerrado) — pra conferir CASO A
+// CASO em vez de só o número agregado da meta. Mesma permissão/restrição da Meta.
+router.get('/analise-atendimentos', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const { di, df } = periodoMeta(req);
+    const deps = listaParam(req.query.departamento);
+    const params = [emp, di, df];
+    let extra = '';
+    if (deps.length) { params.push(deps); extra += ` AND (${DEPT_SQL}) = ANY($${params.length})`; }
+    let rows = await all(
+      `SELECT protocol, cliente_nome, atendente_nome, closed_at, tag_finalizacao, nota, satisfacao_msg
+       FROM chatmix_atendimentos
+       WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
+         AND (${DEPT_SQL}) IN ('Financeiro','Suporte')${extra}
+       ORDER BY closed_at DESC LIMIT 500`, params);
+
+    // Sem acesso geral do setor: corta pra só os atendimentos do PRÓPRIO atendente,
+    // mesma regra da Meta (casa o nome do atendente com o e-mail de quem pediu).
+    const depChave = deps[0] === 'Suporte' ? 'callcenter' : deps[0] === 'Financeiro' ? 'financeiro' : null;
+    if (depChave) {
+      const { podeVerTudoNaMeta, mesmoEmail } = require('../utils/visibilidadeMeta');
+      if (!(await podeVerTudoNaMeta(req.usuario, depChave))) {
+        const candidatosNomes = await candidatosDeNomes(emp).catch(() => []);
+        rows = rows.filter(r => mesmoEmail(emailDoAtendente(candidatosNomes, r.atendente_nome), req.usuario.email));
+      }
+    }
+    const itens = rows.map(r => ({
+      protocolo: r.protocol,
+      cliente: r.cliente_nome || '—',
+      atendente: r.atendente_nome,
+      encerrado_em: r.closed_at,
+      tag_finalizacao: r.tag_finalizacao || '—',
+      satisfacao: r.satisfacao_msg || (r.nota != null ? 'pendente' : null),
+    }));
+    res.json({ periodo: { di, df }, itens, truncado: itens.length >= 500 });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Semanas cheias (domingo→sábado) de um mês, até a semana de hoje — não lista
 // semana futura. A semana que contém o dia 1º só entra se o domingo dela cair
 // dentro do próprio mês (senão pertence ao mês anterior).

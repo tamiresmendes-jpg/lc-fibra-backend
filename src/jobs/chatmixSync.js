@@ -70,6 +70,8 @@ async function garantirTabelas() {
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_internas INTEGER`);   // notas internas (não cobram)
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS msgs_sync_em TIMESTAMP`);  // null = mensagens ainda não contadas
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS satisfacao_msg TEXT`);    // satisfeito|insatisfeito|invalida|null (deduzido das mensagens)
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS cliente_nome TEXT`);      // nome do cliente (a.client.name) — pra tela de Análise e Acompanhamento
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS tag_finalizacao TEXT`);   // classificação/tag com que o atendimento foi encerrado (a.classifications)
   await run(`CREATE INDEX IF NOT EXISTS idx_cxatend_msgsync ON chatmix_atendimentos (empresa_id, closed_at) WHERE msgs_sync_em IS NULL`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_departamentos (
     empresa_id TEXT NOT NULL, dep_id BIGINT NOT NULL, nome TEXT,
@@ -129,18 +131,24 @@ async function salvarAtendimento(empresaId, a) {
   const surveys = a.satisfaction_surveys || [];
   const survey = surveys.find(s => s.satisfaction != null);
   const nota = survey ? Number(survey.satisfaction) : null;
+  const clienteNome = a.client?.name || null;
+  // "Tag de finalização" = classificação(ões) com que o atendimento foi encerrado no Chatmix
+  // (ex.: "SUPORTE - Pós-venda"). Junta os nomes se tiver mais de uma.
+  const tagFinalizacao = Array.isArray(a.classifications) && a.classifications.length
+    ? a.classifications.map(c => c.name).filter(Boolean).join(', ') : null;
   await run(
     `INSERT INTO chatmix_atendimentos
-      (empresa_id, atendimento_id, protocol, created_at, closed_at, atendente_id, atendente_nome, departamento, canal, nota, respondida, atualizado_em)
-     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11, NOW())
+      (empresa_id, atendimento_id, protocol, created_at, closed_at, atendente_id, atendente_nome, departamento, canal, nota, respondida, cliente_nome, tag_finalizacao, atualizado_em)
+     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13, NOW())
      ON CONFLICT (empresa_id, atendimento_id) DO UPDATE SET
        protocol=EXCLUDED.protocol, created_at=EXCLUDED.created_at, closed_at=EXCLUDED.closed_at,
        atendente_id=EXCLUDED.atendente_id, atendente_nome=EXCLUDED.atendente_nome,
        departamento=EXCLUDED.departamento, canal=EXCLUDED.canal, nota=EXCLUDED.nota,
-       respondida=EXCLUDED.respondida, atualizado_em=NOW()`,
+       respondida=EXCLUDED.respondida, cliente_nome=EXCLUDED.cliente_nome, tag_finalizacao=EXCLUDED.tag_finalizacao,
+       atualizado_em=NOW()`,
     [empresaId, a.id, a.protocol || null, normalizaData(a.created_at), normalizaData(a.closed_at),
      a.user?.id || null, atendenteNome, a.department?.title || a.department?.name || null,
-     a.channel?.name || null, nota, !!nota]
+     a.channel?.name || null, nota, !!nota, clienteNome, tagFinalizacao]
   );
 }
 
