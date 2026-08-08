@@ -134,8 +134,8 @@ async function salvarModulos(treinamentoId, modulos) {
   if (!Array.isArray(modulos)) return;
   for (const [mi, mod] of modulos.entries()) {
     const moduloId = uuidv4();
-    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id) VALUES ($1,$2,$3,$4,$5,$6)`,
-      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null]);
+    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id, data_prevista) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null]);
     for (const [pi, item] of (mod.pops || []).entries()) {
       // Sub-módulo pode ser só um tópico em texto (sem POP) — titulo/descricao
       // valem nesse caso; com POP, o título vem do próprio POP, mas a
@@ -512,8 +512,9 @@ router.get('/:id/pdf', async (req, res) => {
       WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
     `, [req.params.id]);
     const modulosRaw = await all(`
-      SELECT m.*, u.nome AS colaborador_nome FROM treinamento_modulos m
+      SELECT m.*, u.nome AS colaborador_nome, ui.nome AS instrutor_nome FROM treinamento_modulos m
       LEFT JOIN usuarios u ON u.id = m.colaborador_id
+      LEFT JOIN usuarios ui ON ui.id = m.instrutor_id
       WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
     `, [req.params.id]);
     const modulos = modulosRaw.map(m => ({ ...m, pops: pops.filter(p => p.modulo_id === m.id) }));
@@ -543,13 +544,16 @@ router.get('/trilhas-principais/:id/pdf', async (req, res) => {
     const trilhas = [];
     for (const t of trilhasBase) {
       const pops = await all(`
-        SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.modulo_id, COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo
+        SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.modulo_id, tp.data_prevista,
+               COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo, u.nome AS instrutor_nome
         FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
+        LEFT JOIN usuarios u ON u.id = tp.instrutor_id
         WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
       `, [t.id]);
       const modulosRaw = await all(`
-        SELECT m.*, u.nome AS colaborador_nome FROM treinamento_modulos m
+        SELECT m.*, u.nome AS colaborador_nome, ui.nome AS instrutor_nome FROM treinamento_modulos m
         LEFT JOIN usuarios u ON u.id = m.colaborador_id
+        LEFT JOIN usuarios ui ON ui.id = m.instrutor_id
         WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
       `, [t.id]);
       const modulos = modulosRaw.map(m => ({ ...m, pops: pops.filter(p => p.modulo_id === m.id) }));

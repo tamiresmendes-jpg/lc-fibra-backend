@@ -480,6 +480,7 @@ async function initSchema() {
     -- tópico específico. Um módulo pode ter os dois: um instrutor geral do módulo
     -- e, num tópico específico, um instrutor diferente (substitui só ali).
     ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS instrutor_id TEXT;
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS data_prevista TEXT; -- data/hora prevista do módulo inteiro (cada tópico já tem a própria)
     -- 'completa' = uma pessoa treina a trilha inteira; 'dividido' = cada módulo
     -- vai pra uma pessoa diferente (colaborador_id de cada treinamento_modulos).
     ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS modo_repasse TEXT DEFAULT 'completa';

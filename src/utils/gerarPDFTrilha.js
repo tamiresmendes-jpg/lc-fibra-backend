@@ -64,7 +64,11 @@ function montarHtmlTrilha(dados, completo = false) {
       <div class="modulo">
         ${m.nome ? `<div class="modulo-header">
           <span class="modulo-nome">Módulo ${mi + 1} — ${esc(m.nome)}</span>
-          ${m.colaborador_nome ? `<span class="modulo-colab">Responsável: ${esc(m.colaborador_nome)}</span>` : ''}
+          <span class="modulo-extras">
+            ${m.colaborador_nome ? `<span class="modulo-colab">Treinando: ${esc(m.colaborador_nome)}</span>` : ''}
+            ${m.instrutor_nome ? `<span class="modulo-colab">Instrutor: ${esc(m.instrutor_nome)}</span>` : ''}
+            ${m.data_prevista ? `<span class="modulo-colab">Previsto: ${fmtDataHora(m.data_prevista)}</span>` : ''}
+          </span>
         </div>` : ''}
         ${linhasPop || '<p class="vazio">Nenhum sub-módulo cadastrado.</p>'}
       </div>`;
@@ -79,7 +83,8 @@ function montarHtmlTrilha(dados, completo = false) {
     .info{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:18px;font-size:11px}
     .info b{color:#0b2b6b}
     .modulo{margin-bottom:18px;page-break-inside:avoid}
-    .modulo-header{background:#eef2ff;border-radius:6px;padding:7px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center}
+    .modulo-header{background:#eef2ff;border-radius:6px;padding:7px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px}
+    .modulo-extras{display:flex;gap:12px;flex-wrap:wrap}
     .modulo-nome{font-weight:800;color:#0b2b6b;font-size:12.5px}
     .modulo-colab{font-size:10.5px;color:#64748b}
     .pop-item{border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:8px;margin-left:8px}
@@ -128,11 +133,18 @@ function montarHtmlTrilhaPrincipal(principal, trilhas) {
     const modulos = t.modulos?.length ? t.modulos : [{ nome: null, pops: t.popsSemModulo || t.pops || [] }];
     const blocosModulo = modulos.map((m, mi) => {
       const linhas = (m.pops || []).map((p, pi) => `
-        <li><span class="tp-num">${mi + 1}.${pi + 1}</span> ${esc(p.titulo)}${p.concluido ? ' <span class="tp-ok">✓</span>' : ''}</li>
+        <li><span class="tp-num">${mi + 1}.${pi + 1}</span> ${esc(p.titulo)}${p.concluido ? ' <span class="tp-ok">✓</span>' : ''}
+          ${p.instrutor_nome || p.data_prevista ? `<span class="tp-extra">${p.instrutor_nome ? `Instrutor: ${esc(p.instrutor_nome)}` : ''}${p.instrutor_nome && p.data_prevista ? ' · ' : ''}${p.data_prevista ? fmtDataHora(p.data_prevista) : ''}</span>` : ''}
+        </li>
       `).join('');
+      const extrasModulo = [
+        m.colaborador_nome ? `Treinando: ${esc(m.colaborador_nome)}` : '',
+        m.instrutor_nome ? `Instrutor: ${esc(m.instrutor_nome)}` : '',
+        m.data_prevista ? `Previsto: ${fmtDataHora(m.data_prevista)}` : '',
+      ].filter(Boolean).join(' · ');
       return `
         <div class="modulo-mini">
-          ${m.nome ? `<div class="modulo-mini-nome">Módulo ${mi + 1} — ${esc(m.nome)}${m.colaborador_nome ? ` <span class="modulo-mini-resp">(${esc(m.colaborador_nome)})</span>` : ''}</div>` : ''}
+          ${m.nome ? `<div class="modulo-mini-nome">Módulo ${mi + 1} — ${esc(m.nome)}${extrasModulo ? ` <span class="modulo-mini-resp">(${extrasModulo})</span>` : ''}</div>` : ''}
           <ul class="topicos-mini">${linhas || '<li class="vazio">Nenhum tópico.</li>'}</ul>
         </div>`;
     }).join('');
@@ -171,6 +183,7 @@ function montarHtmlTrilhaPrincipal(principal, trilhas) {
     .topicos-mini{list-style:none;margin:0;padding:0}
     .topicos-mini li{font-size:10.5px;color:#334155;margin-bottom:2px}
     .tp-num{color:#7B55F1;font-weight:700;margin-right:4px}
+    .tp-extra{color:#94a3b8;font-size:9.5px;margin-left:6px}
     .tp-ok{color:#16a34a;font-weight:700}
     .vazio{color:#94a3b8;font-style:italic}
     .rodape{margin-top:20px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:9px;color:#94a3b8;text-align:center}
