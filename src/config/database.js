@@ -475,6 +475,11 @@ async function initSchema() {
       colaborador_id TEXT
     );
     ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS modulo_id TEXT;
+    -- Instrutor do MÓDULO inteiro (repassa todos os tópicos dele) — diferente do
+    -- instrutor por tópico (treinamento_pops.instrutor_id), que cobre só aquele
+    -- tópico específico. Um módulo pode ter os dois: um instrutor geral do módulo
+    -- e, num tópico específico, um instrutor diferente (substitui só ali).
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS instrutor_id TEXT;
     -- 'completa' = uma pessoa treina a trilha inteira; 'dividido' = cada módulo
     -- vai pra uma pessoa diferente (colaborador_id de cada treinamento_modulos).
     ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS modo_repasse TEXT DEFAULT 'completa';

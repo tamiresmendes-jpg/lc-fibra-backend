@@ -92,12 +92,15 @@ router.get('/meus', async (req, res) => {
     const itens = await all(`
       SELECT z.*,
         (z.colaborador_id = $3 OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.colaborador_id = $3)) AS sou_treinando,
-        (z.responsavel_id = $3 OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = z.id AND tp.instrutor_id = $3)) AS sou_instrutor
+        (z.responsavel_id = $3
+          OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = z.id AND tp.instrutor_id = $3)
+          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.instrutor_id = $3)
+        ) AS sou_instrutor
       FROM (${SELECT_TREINAMENTO}
         WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND (
           $2 = 1 OR t.colaborador_id = $3 OR t.responsavel_id = $3
           OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.instrutor_id = $3)
-          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = t.id AND tm.colaborador_id = $3)
+          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = t.id AND (tm.colaborador_id = $3 OR tm.instrutor_id = $3))
         )
       ) z
       ORDER BY z.data_hora ASC
@@ -131,8 +134,8 @@ async function salvarModulos(treinamentoId, modulos) {
   if (!Array.isArray(modulos)) return;
   for (const [mi, mod] of modulos.entries()) {
     const moduloId = uuidv4();
-    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id) VALUES ($1,$2,$3,$4,$5)`,
-      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null]);
+    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id) VALUES ($1,$2,$3,$4,$5,$6)`,
+      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null]);
     for (const [pi, item] of (mod.pops || []).entries()) {
       // Sub-módulo pode ser só um tópico em texto (sem POP) — titulo/descricao
       // valem nesse caso; com POP, o título vem do próprio POP, mas a
@@ -213,9 +216,10 @@ router.get('/:id', async (req, res) => {
     // somado dos sub-módulos (pops) de cada um — pra saber quanto cada módulo
     // leva, e não só a trilha inteira.
     const modulosRaw = await all(`
-      SELECT m.*, u.nome AS colaborador_nome
+      SELECT m.*, u.nome AS colaborador_nome, ui.nome AS instrutor_nome
       FROM treinamento_modulos m
       LEFT JOIN usuarios u ON u.id = m.colaborador_id
+      LEFT JOIN usuarios ui ON ui.id = m.instrutor_id
       WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
     `, [req.params.id]);
     const modulos = modulosRaw.map(m => {
@@ -519,6 +523,44 @@ router.get('/:id/pdf', async (req, res) => {
     const pdfBuffer = await gerarPDFTrilha({ ...t, pops, popsSemModulo, modulos }, completo);
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `inline; filename="trilha-${(t.titulo || 'treinamento').replace(/[^a-zA-Z0-9]/g, '-')}${completo ? '-completa' : ''}.pdf"`);
+    res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// PDF resumo de uma TRILHA PRINCIPAL inteira (ex.: CALL CENTER) — uma seção por
+// trilha do dia que tem dentro, com módulos e títulos dos tópicos.
+router.get('/trilhas-principais/:id/pdf', async (req, res) => {
+  try {
+    const principal = await get(`
+      SELECT tpz.*, d.nome AS departamento_nome
+      FROM treinamento_trilhas_principais tpz
+      LEFT JOIN departamentos d ON d.id = tpz.departamento_id
+      WHERE tpz.id = $1 AND tpz.empresa_id = $2
+    `, [req.params.id, req.usuario.empresa_id]);
+    if (!principal) return res.status(404).json({ erro: 'Não encontrada' });
+
+    const trilhasBase = await all(`${SELECT_TREINAMENTO} WHERE t.trilha_principal_id = $1 AND t.excluido_em IS NULL ORDER BY t.data_hora ASC`, [req.params.id]);
+    const trilhas = [];
+    for (const t of trilhasBase) {
+      const pops = await all(`
+        SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.modulo_id, COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo
+        FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
+        WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
+      `, [t.id]);
+      const modulosRaw = await all(`
+        SELECT m.*, u.nome AS colaborador_nome FROM treinamento_modulos m
+        LEFT JOIN usuarios u ON u.id = m.colaborador_id
+        WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
+      `, [t.id]);
+      const modulos = modulosRaw.map(m => ({ ...m, pops: pops.filter(p => p.modulo_id === m.id) }));
+      const popsSemModulo = pops.filter(p => !p.modulo_id);
+      trilhas.push({ ...t, pops, popsSemModulo, modulos });
+    }
+
+    const { gerarPDFTrilhaPrincipal } = require('../utils/gerarPDFTrilha');
+    const pdfBuffer = await gerarPDFTrilhaPrincipal(principal, trilhas);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `inline; filename="trilha-principal-${(principal.nome || 'resumo').replace(/[^a-zA-Z0-9]/g, '-')}.pdf"`);
     res.send(pdfBuffer);
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

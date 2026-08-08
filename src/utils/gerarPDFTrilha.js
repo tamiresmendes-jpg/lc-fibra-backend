@@ -120,4 +120,72 @@ async function gerarPDFTrilha(dados, completo = false) {
   return htmlParaPdf(montarHtmlTrilha(dados, completo));
 }
 
-module.exports = { gerarPDFTrilha, montarHtmlTrilha };
+// Resumo de uma TRILHA PRINCIPAL (o "guarda-chuva" que agrupa várias trilhas do
+// dia, ex.: CALL CENTER) — uma seção por trilha, com módulos/tópicos em título
+// (sem o conteúdo do POP, isso já tem no PDF de cada trilha individual).
+function montarHtmlTrilhaPrincipal(principal, trilhas) {
+  const blocosTrilha = trilhas.map((t, ti) => {
+    const modulos = t.modulos?.length ? t.modulos : [{ nome: null, pops: t.popsSemModulo || t.pops || [] }];
+    const blocosModulo = modulos.map((m, mi) => {
+      const linhas = (m.pops || []).map((p, pi) => `
+        <li><span class="tp-num">${mi + 1}.${pi + 1}</span> ${esc(p.titulo)}${p.concluido ? ' <span class="tp-ok">✓</span>' : ''}</li>
+      `).join('');
+      return `
+        <div class="modulo-mini">
+          ${m.nome ? `<div class="modulo-mini-nome">Módulo ${mi + 1} — ${esc(m.nome)}${m.colaborador_nome ? ` <span class="modulo-mini-resp">(${esc(m.colaborador_nome)})</span>` : ''}</div>` : ''}
+          <ul class="topicos-mini">${linhas || '<li class="vazio">Nenhum tópico.</li>'}</ul>
+        </div>`;
+    }).join('');
+    const pct = t.total_pops > 0 ? Math.round((t.pops_concluidos / t.total_pops) * 100) : 0;
+    return `
+      <div class="trilha-bloco">
+        <div class="trilha-bloco-topo">
+          <span class="trilha-num">${ti + 1}</span>
+          <div>
+            <div class="trilha-titulo">${esc(t.titulo)}</div>
+            <div class="trilha-meta">
+              ${t.colaborador_nome ? `Treinando: <b>${esc(t.colaborador_nome)}</b> · ` : ''}
+              ${t.responsavel_nome ? `Responsável: <b>${esc(t.responsavel_nome)}</b> · ` : ''}
+              ${fmtDataHora(t.data_hora)} · ${t.pops_concluidos ?? 0}/${t.total_pops ?? 0} tópicos (${pct}%)
+            </div>
+          </div>
+        </div>
+        ${blocosModulo}
+      </div>`;
+  }).join('');
+
+  return `<!doctype html><html><head><meta charset="utf-8"><style>
+    *{box-sizing:border-box;margin:0;padding:0}
+    body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;font-size:11px}
+    .cabecalho{background:#7B55F1;color:#fff;padding:18px 22px;margin-bottom:16px}
+    .cabecalho h1{font-size:19px;margin-bottom:4px}
+    .cabecalho .sub{font-size:11px;opacity:.9}
+    .trilha-bloco{border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;page-break-inside:avoid}
+    .trilha-bloco-topo{display:flex;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #f1f5f9}
+    .trilha-num{background:#7B55F1;color:#fff;border-radius:50%;width:22px;height:22px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
+    .trilha-titulo{font-weight:800;color:#0b2b6b;font-size:13px}
+    .trilha-meta{font-size:10.5px;color:#64748b;margin-top:2px}
+    .modulo-mini{margin:6px 0 6px 30px}
+    .modulo-mini-nome{font-weight:700;color:#0b2b6b;font-size:11px;margin-bottom:3px}
+    .modulo-mini-resp{font-weight:400;color:#94a3b8}
+    .topicos-mini{list-style:none;margin:0;padding:0}
+    .topicos-mini li{font-size:10.5px;color:#334155;margin-bottom:2px}
+    .tp-num{color:#7B55F1;font-weight:700;margin-right:4px}
+    .tp-ok{color:#16a34a;font-weight:700}
+    .vazio{color:#94a3b8;font-style:italic}
+    .rodape{margin-top:20px;border-top:1px solid #e2e8f0;padding-top:8px;font-size:9px;color:#94a3b8;text-align:center}
+  </style></head><body>
+    <div class="cabecalho">
+      <h1>🗂️ ${esc(principal.nome)}</h1>
+      <div class="sub">Trilha Principal · ${trilhas.length} trilha(s) · ${esc(principal.departamento_nome) || 'Sem departamento'} · Emitido em ${emissao()}</div>
+    </div>
+    ${blocosTrilha || '<p class="vazio">Nenhuma trilha cadastrada aqui ainda.</p>'}
+    <div class="rodape">Kronos — Resumo da Trilha Principal — Gerado em ${emissao()}</div>
+  </body></html>`;
+}
+
+async function gerarPDFTrilhaPrincipal(principal, trilhas) {
+  return htmlParaPdf(montarHtmlTrilhaPrincipal(principal, trilhas));
+}
+
+module.exports = { gerarPDFTrilha, montarHtmlTrilha, gerarPDFTrilhaPrincipal, montarHtmlTrilhaPrincipal };
