@@ -470,8 +470,12 @@ router.delete('/:id', async (req, res) => {
 });
 
 // ── EXPORTAR TODOS — PDF (ZIP) ────────────────────────────────────────────────
+// ids: opcional, lista de IDs separados por vírgula — quando vem, exporta só
+// esses POPs (usado pelo "Exportar selecionados" da tela); sem isso, exporta
+// todos, igual sempre foi.
 router.get('/exportar-todos/pdf', async (req, res) => {
   try {
+    const ids = (req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
     const popsAll = await all(`
       SELECT p.*, d.nome as departamento_nome, u.nome as criado_por_nome,
              uc.nome as cargo_nome, e.nome as empresa_nome
@@ -480,9 +484,9 @@ router.get('/exportar-todos/pdf', async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN cargos uc ON uc.id = u.cargo_id
       LEFT JOIN empresas e ON e.id = p.empresa_id
-      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL
+      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL ${ids.length ? 'AND p.id = ANY($2)' : ''}
       ORDER BY p.codigo
-    `, [req.usuario.empresa_id]);
+    `, ids.length ? [req.usuario.empresa_id, ids] : [req.usuario.empresa_id]);
 
     if (popsAll.length === 0) return res.status(404).json({ erro: 'Nenhum POP encontrado' });
 
@@ -529,6 +533,7 @@ router.get('/exportar-todos/pdf', async (req, res) => {
 // ── EXPORTAR TODOS — WORD (ZIP) ───────────────────────────────────────────────
 router.get('/exportar-todos/word', async (req, res) => {
   try {
+    const ids = (req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
     const popsAll = await all(`
       SELECT p.*, d.nome as departamento_nome, u.nome as criado_por_nome,
              uc.nome as cargo_nome, e.nome as empresa_nome
@@ -537,9 +542,9 @@ router.get('/exportar-todos/word', async (req, res) => {
       LEFT JOIN usuarios u ON u.id = p.criado_por
       LEFT JOIN cargos uc ON uc.id = u.cargo_id
       LEFT JOIN empresas e ON e.id = p.empresa_id
-      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL
+      WHERE p.empresa_id = $1 AND p.excluido_em IS NULL ${ids.length ? 'AND p.id = ANY($2)' : ''}
       ORDER BY p.codigo
-    `, [req.usuario.empresa_id]);
+    `, ids.length ? [req.usuario.empresa_id, ids] : [req.usuario.empresa_id]);
 
     if (popsAll.length === 0) return res.status(404).json({ erro: 'Nenhum POP encontrado' });
 
