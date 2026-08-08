@@ -75,11 +75,14 @@ async function salvarModulos(treinamentoId, modulos) {
     await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id) VALUES ($1,$2,$3,$4,$5)`,
       [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null]);
     for (const [pi, item] of (mod.pops || []).entries()) {
+      // Sub-módulo pode ser só um tópico em texto (sem POP) — titulo/descricao
+      // valem nesse caso; com POP, o título vem do próprio POP, mas a
+      // descrição (texto explicando o tópico) continua podendo ser usada.
       await run(`INSERT INTO treinamento_pops
-        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9)
+        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9,$10,$11)
         ON CONFLICT DO NOTHING
-      `, [uuidv4(), treinamentoId, item.pop_id, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId]);
+      `, [uuidv4(), treinamentoId, item.pop_id || null, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId, item.titulo || null, item.descricao || null]);
     }
   }
 }
@@ -121,12 +124,19 @@ router.get('/:id', async (req, res) => {
     const t = await get(`${SELECT_TREINAMENTO} WHERE t.id = $1 AND t.empresa_id = $2`, [req.params.id, req.usuario.empresa_id]);
     if (!t) return res.status(404).json({ erro: 'Não encontrado' });
 
+    // pop_id é opcional agora (sub-módulo pode ser só um tópico em texto) — por
+    // isso LEFT JOIN, e o título exibido usa o do POP quando tem, senão o
+    // título digitado à mão (tp.titulo). A descrição (texto explicando o
+    // tópico) é sempre a de tp.descricao, tenha POP ou não.
     const pops = await all(`
-      SELECT tp.*, p.titulo, p.codigo, p.versao AS versao_atual,
+      SELECT tp.id, tp.treinamento_id, tp.pop_id, tp.concluido, tp.ordem, tp.instrutor_id,
+             tp.tempo_estimado, tp.tempo_realizado, tp.topicos, tp.versao_pop, tp.data_prevista,
+             tp.status_pop, tp.modulo_id, tp.descricao,
+             COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo, p.versao AS versao_atual,
              u.nome AS instrutor_nome,
-             CASE WHEN tp.versao_pop IS NOT NULL AND tp.versao_pop != p.versao THEN 1 ELSE 0 END AS precisa_reciclagem
+             CASE WHEN tp.pop_id IS NOT NULL AND tp.versao_pop IS NOT NULL AND tp.versao_pop != p.versao THEN 1 ELSE 0 END AS precisa_reciclagem
       FROM treinamento_pops tp
-      JOIN pops p ON p.id = tp.pop_id
+      LEFT JOIN pops p ON p.id = tp.pop_id
       LEFT JOIN usuarios u ON u.id = tp.instrutor_id
       WHERE tp.treinamento_id = $1
       ORDER BY tp.ordem ASC
@@ -235,6 +245,8 @@ router.post('/:id/modulos/:modulo_id/pops', async (req, res) => {
 // Atualiza campos de um POP específico na trilha — só os campos que vierem no
 // corpo são alterados (COALESCE mantém o que já estava), pra registrar só o
 // tempo realizado, por exemplo, sem apagar instrutor/checklist/etc.
+// :pop_id aceita tanto o id do POP quanto o id da própria linha (treinamento_pops)
+// — necessário pra tópicos sem POP, onde não existe um pop_id de verdade.
 router.put('/:id/pops/:pop_id', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
@@ -246,7 +258,7 @@ router.put('/:id/pops/:pop_id', async (req, res) => {
       topicos=COALESCE($4, topicos),
       data_prevista=COALESCE($5, data_prevista),
       status_pop=COALESCE($6, status_pop)
-      WHERE treinamento_id=$7 AND pop_id=$8
+      WHERE treinamento_id=$7 AND (pop_id=$8 OR id=$8)
     `, [instrutor_id ?? null, tempo_estimado ?? null, tempo_realizado ?? null, topicos ?? null, data_prevista ?? null, status_pop ?? null, req.params.id, req.params.pop_id]);
     res.json({ mensagem: 'Atualizado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
@@ -265,15 +277,32 @@ router.put('/:id/pops/reordenar', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Toggle conclusão de um POP
+// Toggle conclusão de um sub-módulo — SEQUENCIAL: só marca concluído se todos
+// os sub-módulos ANTERIORES da trilha (por módulo, depois por ordem dentro do
+// módulo) já estiverem concluídos. O colaborador não pode pular pro próximo
+// tópico sem ter passado pelo anterior. Desmarcar (voltar pra pendente) é
+// sempre permitido, sem essa checagem.
 router.put('/:id/pops/:pop_id/concluir', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
-    const tp = await get('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 AND pop_id=$2', [req.params.id, req.params.pop_id]);
+    const tp = await get('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 AND (pop_id=$2 OR id=$2)', [req.params.id, req.params.pop_id]);
     if (!tp) return res.status(404).json({ erro: 'Não encontrado' });
     const novoConcluido = tp.concluido ? 0 : 1;
+
+    if (novoConcluido) {
+      const todos = await all(`
+        SELECT tp.id, tp.concluido, tp.ordem, COALESCE(m.ordem, -1) AS modulo_ordem
+        FROM treinamento_pops tp LEFT JOIN treinamento_modulos m ON m.id = tp.modulo_id
+        WHERE tp.treinamento_id = $1
+        ORDER BY modulo_ordem ASC, tp.ordem ASC
+      `, [req.params.id]);
+      const posAtual = todos.findIndex(x => x.id === tp.id);
+      const anteriorPendente = todos.slice(0, posAtual).some(x => !x.concluido);
+      if (anteriorPendente) return res.status(400).json({ erro: 'Conclua os tópicos anteriores antes de avançar.' });
+    }
+
     const novoStatus = novoConcluido ? 'concluido' : 'pendente';
-    await run('UPDATE treinamento_pops SET concluido=$1, status_pop=$2 WHERE treinamento_id=$3 AND pop_id=$4', [novoConcluido, novoStatus, req.params.id, req.params.pop_id]);
+    await run('UPDATE treinamento_pops SET concluido=$1, status_pop=$2 WHERE treinamento_id=$3 AND (pop_id=$4 OR id=$4)', [novoConcluido, novoStatus, req.params.id, req.params.pop_id]);
     res.json({ concluido: !!novoConcluido });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -405,11 +434,13 @@ router.get('/:id/pdf', async (req, res) => {
     // documentos, segurança, penalidades) — não só título e checklist.
     const completo = req.query.completo === '1';
     const camposPop = completo
-      ? 'p.titulo, p.codigo, p.objetivo, p.campo_aplicacao, p.procedimento, p.documentos, p.seguranca, p.penalidade'
-      : 'p.titulo, p.codigo';
+      ? 'p.objetivo, p.campo_aplicacao, p.procedimento, p.documentos, p.seguranca, p.penalidade'
+      : '';
     const pops = await all(`
-      SELECT tp.*, ${camposPop}, u.nome AS instrutor_nome
-      FROM treinamento_pops tp JOIN pops p ON p.id = tp.pop_id
+      SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.tempo_estimado, tp.tempo_realizado,
+             tp.topicos, tp.data_prevista, tp.modulo_id, tp.descricao,
+             COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo ${camposPop ? ', ' + camposPop : ''}, u.nome AS instrutor_nome
+      FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
       LEFT JOIN usuarios u ON u.id = tp.instrutor_id
       WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
     `, [req.params.id]);
@@ -465,10 +496,10 @@ router.post('/:id/duplicar', async (req, res) => {
       const novoPopRowId = uuidv4();
       mapaPop.set(p.pop_id, novoPopRowId);
       await run(`INSERT INTO treinamento_pops
-        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
       `, [novoPopRowId, novoId, p.pop_id, p.ordem, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
-          p.data_prevista, p.modulo_id ? mapaModulo.get(p.modulo_id) : null]);
+          p.data_prevista, p.modulo_id ? mapaModulo.get(p.modulo_id) : null, p.titulo, p.descricao]);
     }
 
     const avaliacoes = await all('SELECT * FROM treinamento_avaliacoes WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);

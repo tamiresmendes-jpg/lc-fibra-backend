@@ -43,10 +43,12 @@ function montarHtmlTrilha(dados, completo = false) {
             <span class="pop-status ${p.concluido ? 'ok' : ''}">${p.concluido ? 'Concluído' : 'Pendente'}</span>
           </div>
           <div class="pop-meta">
+            ${!p.pop_id ? `<span><b>Sem POP</b> — tópico só em texto</span>` : ''}
             ${p.instrutor_nome ? `<span><b>Instrutor:</b> ${esc(p.instrutor_nome)}</span>` : ''}
             ${p.data_prevista ? `<span><b>Previsto:</b> ${fmtDataHora(p.data_prevista)}</span>` : ''}
             ${p.tempo_realizado ? `<span><b>Tempo realizado:</b> ${p.tempo_realizado} min</span>` : ''}
           </div>
+          ${p.descricao ? `<p class="pop-descricao">${esc(p.descricao)}</p>` : ''}
           ${topicos.length ? `<ul class="checklist">${topicos.map(t => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
           ${completo ? `<div class="pop-completo">
             ${secaoCompleta('Objetivo', p.objetivo)}
@@ -87,6 +89,7 @@ function montarHtmlTrilha(dados, completo = false) {
     .pop-status{font-size:9.5px;font-weight:700;padding:2px 8px;border-radius:10px;background:#f1f5f9;color:#64748b}
     .pop-status.ok{background:#dcfce7;color:#166534}
     .pop-meta{display:flex;gap:16px;font-size:10px;color:#475569;margin-bottom:4px}
+    .pop-descricao{font-size:10.5px;color:#334155;line-height:1.5;margin:4px 0}
     .checklist{margin:4px 0 0 34px;font-size:10.5px;color:#334155}
     .checklist li{margin-bottom:2px}
     .vazio{color:#94a3b8;font-style:italic;margin-left:8px}

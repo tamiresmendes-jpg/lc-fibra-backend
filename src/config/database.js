@@ -397,7 +397,7 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS treinamento_pops (
       id TEXT PRIMARY KEY,
       treinamento_id TEXT NOT NULL,
-      pop_id TEXT NOT NULL,
+      pop_id TEXT,
       concluido INTEGER DEFAULT 0,
       ordem INTEGER DEFAULT 0,
       instrutor_id TEXT,
@@ -406,9 +406,14 @@ async function initSchema() {
       topicos TEXT,
       versao_pop TEXT,
       data_prevista TEXT,
-      status_pop TEXT DEFAULT 'pendente',
-      UNIQUE(treinamento_id, pop_id)
+      status_pop TEXT DEFAULT 'pendente'
     );
+    -- Sub-módulo (linha desta tabela) nem sempre tem POP — às vezes é só um
+    -- tópico explicado em texto. titulo/descricao valem quando não tem POP
+    -- (ou complementam o POP, quando tem); pop_id agora é opcional.
+    ALTER TABLE treinamento_pops ALTER COLUMN pop_id DROP NOT NULL;
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS titulo TEXT;
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS descricao TEXT;
 
     CREATE TABLE IF NOT EXISTS treinamento_avaliacoes (
       id TEXT PRIMARY KEY,
