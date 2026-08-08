@@ -1,10 +1,10 @@
 // Quem pode ver TODOS os colaboradores de uma meta (por departamento), em vez
-// de só a própria linha. Regra (confirmada 08/08/2026):
-// - admin e gestor sempre veem tudo, em qualquer departamento.
-// - líder também vê tudo (ele é o "líder do setor" mencionado pela usuária).
+// de só a própria linha. Regra (confirmada 09/08/2026):
+// - admin, gestor e líder sempre veem TODOS os setores.
 // - qualquer outro e-mail pode ser liberado por departamento em meta_visibilidade_extra
 //   (ex.: um usuário administrativo que precisa acompanhar sem ser líder/gestor).
-// - todo mundo que não se encaixa nisso só vê a PRÓPRIA linha, casada pelo e-mail.
+// - todo mundo que não se encaixa nisso só vê a PRÓPRIA linha, casada pelo e-mail
+//   (cada setor/pessoa vê só o seu).
 const { get } = require('../config/database');
 
 async function podeVerTudoNaMeta(usuario, departamento) {

@@ -43,6 +43,42 @@ function exigirVerMetaAtendimento(origemDepto) {
 const depDaQuery = req => req.query.departamento;
 const depDoBody = req => req.body.departamento;
 
+// Mesma regra da Meta de Atendimento, mas pra tudo que é monitoramento em tempo
+// real (Status ao Vivo, Por Atendente, Por Departamento, Dashboard, Mensagens):
+// cada setor só pode pedir dado do PRÓPRIO departamento — nunca de outro, mesmo
+// trocando o filtro na tela — e quem tem "meta-geral" (líder/gestor) vê qualquer
+// um, inclusive a visão combinada (sem filtro).
+async function departamentosPermitidosAoVivo(req) {
+  if (req.usuario.perfil === 'admin') return { geral: true };
+  let ownPerms = null;
+  try {
+    const row = await get('SELECT permissoes_modulos FROM usuarios WHERE id=$1', [req.usuario.id]);
+    if (row?.permissoes_modulos) ownPerms = JSON.parse(row.permissoes_modulos);
+  } catch { /* usa só os grupos */ }
+  const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
+  if (temPermissaoServer(perms, 'atendimentos.meta-geral', 'visualizar')) return { geral: true };
+  const deps = [];
+  if (temPermissaoServer(perms, 'atendimentos.meta-financeiro', 'visualizar')) deps.push('Financeiro');
+  if (temPermissaoServer(perms, 'atendimentos.meta-callcenter', 'visualizar')) deps.push('Suporte');
+  return { geral: false, deps };
+}
+function exigirEFiltrarDepartamentoAoVivo(campo = 'departamento') {
+  return async (req, res, next) => {
+    try {
+      const perm = await departamentosPermitidosAoVivo(req);
+      if (perm.geral) return next(); // vê qualquer departamento, inclusive "todos" (filtro vazio)
+      if (!perm.deps.length) return res.status(403).json({ erro: 'Você não tem permissão para ver os dados de atendimento.' });
+      const pedido = (req.query[campo] || '').trim();
+      // Pediu um departamento que não é o dele (ou nenhum = "todos" combinado):
+      // troca à força pelo departamento que ele realmente pode ver, sem 403 —
+      // a tela simplesmente mostra o próprio setor em vez do que foi pedido.
+      req.query[campo] = perm.deps.includes(pedido) ? pedido : perm.deps[0];
+      req.deptosPermitidos = perm; // rotas que sempre trazem TODOS os deptos numa lista (ex.: /tempos-departamento) usam isso pra filtrar a resposta
+      next();
+    } catch { res.status(500).json({ erro: 'Erro ao verificar permissão.' }); }
+  };
+}
+
 const BASE_PADRAO = 'https://srv6.chatmix.com.br';
 const API = '/api-v2/public-api';
 
@@ -222,7 +258,7 @@ async function buscarFechados(cfg, di, df, maxPaginas = 2) {
 }
 
 // ---------- INDICADORES ---------- (lê do histórico sincronizado, sem amostra)
-router.get('/indicadores', async (req, res) => {
+router.get('/indicadores', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     await garantir();
     const emp = req.usuario.empresa_id;
@@ -397,7 +433,7 @@ function fmtEspera(seg) {
   return `${m} min`;
 }
 
-router.get('/status', async (req, res) => {
+router.get('/status', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id;
     const cfg = await carregarCfg(emp);
@@ -470,9 +506,15 @@ router.get('/status', async (req, res) => {
     const encHoje = encHojeTot?.n || 0;
     const ini = iniHoje?.n || 0;
 
+      // Sem permissão geral, o próprio dropdown de departamento na tela só mostra
+      // o(s) setor(es) que a pessoa realmente pode escolher (nada de listar todos
+      // e o servidor ignorar o que foi selecionado por baixo dos panos).
+      const listaDeps = (req.deptosPermitidos && !req.deptosPermitidos.geral)
+        ? req.deptosPermitidos.deps
+        : mapaDeps.map(d => d.nome).sort();
     res.json({
       atualizado_em: new Date().toISOString(),
-      departamentos: mapaDeps.map(d => d.nome).sort(),
+      departamentos: listaDeps,
       departamento_selecionado: depFiltro || null,
       totais: {
         em_andamento: emAnd, aguardando: emEsp, automacao: emAuto, finalizados_hoje: encHoje,
@@ -771,7 +813,7 @@ router.get('/por-atendente', async (req, res) => {
 });
 
 // TEMPOS por DEPARTAMENTO (Total/Média-dia/TMA/TME) — fonte OFICIAL do painel Chatmix
-router.get('/tempos-departamento', async (req, res) => {
+router.get('/tempos-departamento', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const [j, jsat] = await Promise.all([departamentosOficial(emp, di, df), satisfacaoOficial(emp, di, df)]);
@@ -800,11 +842,16 @@ router.get('/tempos-departamento', async (req, res) => {
       };
     };
 
-    const departamentos = (j.data || []).map(d => ({
+    let departamentos = (j.data || []).map(d => ({
       departamento: d.name, total: d.total || 0, media_dia: d.daily_average ?? 0,
       tma: d.tma || '00:00:00', tme: d.tme || '00:00:00',
       ...satDe(d.name),
     })).sort((a, b) => b.total - a.total);
+    // Essa rota sempre trouxe TODOS os departamentos numa lista só — sem geral,
+    // corta pra só o(s) que a pessoa tem permissão de ver.
+    if (req.deptosPermitidos && !req.deptosPermitidos.geral) {
+      departamentos = departamentos.filter(d => req.deptosPermitidos.deps.includes(d.departamento));
+    }
 
     // Geral: soma de todos os atendentes (não só dos departamentos listados)
     let gSat = 0, gIns = 0, gInv = 0, gSoma = 0, gN = 0;
@@ -814,21 +861,24 @@ router.get('/tempos-departamento', async (req, res) => {
     }
     const gValidas = gSat + gIns;
     const g = j.overview || {};
+    // "Geral" é a soma de TODOS os departamentos — sem permissão geral, não faz sentido
+    // mostrar (misturaria dado de setor que a pessoa não pode ver com o que ela vê).
+    const podeVerGeral = !req.deptosPermitidos || req.deptosPermitidos.geral;
     res.json({
       periodo: { di, df },
-      geral: {
+      geral: podeVerGeral ? {
         total: g.total || 0, media_dia: g.average ?? 0, tma: g.tma || '00:00:00', tme: g.tme || '00:00:00',
         satisfeito: jsat ? gSat : null, insatisfeito: jsat ? gIns : null, invalida: jsat ? gInv : null,
         media_nota: gN ? Math.round((gSoma / gN) * 100) / 100 : null,
         pct_satisfacao: gValidas ? Math.round((gSat / gValidas) * 1000) / 10 : null,
-      },
+      } : null,
       departamentos, painel: statusPainel(emp),
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
 // TEMPOS por atendente (TMA/TME/TMR/TMR média/Total/Média-dia) — fonte OFICIAL do painel Chatmix
-router.get('/tempos', async (req, res) => {
+router.get('/tempos', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const [j, jsat] = await Promise.all([overviewOficial(emp, di, df), satisfacaoOficial(emp, di, df)]);
@@ -889,7 +939,7 @@ router.get('/tempos', async (req, res) => {
 // Os cards (geral) usam o relatório OFICIAL por DEPARTAMENTO (medida dos atendimentos: Financeiro TMA 00:43:14).
 // TMR / TMR média não existem no relatório por departamento — vêm do relatório por atendente.
 // A lista "atendentes" traz TMA/TME/TMR de cada atendente (para a tabela Por atendente do Status).
-router.get('/tempos-status', async (req, res) => {
+router.get('/tempos-status', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const dep = (req.query.departamento || '').trim();
@@ -1332,7 +1382,7 @@ router.put('/msg-config', async (req, res) => {
 });
 
 // Mensagens & custo por período (lê do que já foi contado; cobrável = enviadas entregues não-internas)
-router.get('/mensagens', async (req, res) => {
+router.get('/mensagens', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const cfg = await garantirMsgConfig(emp);
@@ -1367,7 +1417,7 @@ router.get('/mensagens', async (req, res) => {
 });
 
 // Média de conversas por dia / semana / mês
-router.get('/medias', async (req, res) => {
+router.get('/medias', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id; const { di, df } = periodo(req);
     const dias = diasEntre(di, df);
