@@ -11,6 +11,7 @@ const SELECT_TREINAMENTO = `
     d.nome AS departamento_nome,
     r.nome AS responsavel_nome,
     c.nome AS colaborador_nome,
+    tpz.nome AS trilha_principal_nome,
     (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS total_pops,
     (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.concluido = 1) AS pops_concluidos,
     (SELECT COALESCE(SUM(tp.tempo_estimado),0) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS tempo_total_estimado,
@@ -23,6 +24,7 @@ const SELECT_TREINAMENTO = `
   LEFT JOIN departamentos d ON d.id = t.departamento_id
   LEFT JOIN usuarios r ON r.id = t.responsavel_id
   LEFT JOIN usuarios c ON c.id = t.colaborador_id
+  LEFT JOIN treinamento_trilhas_principais tpz ON tpz.id = t.trilha_principal_id
 `;
 
 async function trDaEmpresa(id, eid) {
@@ -33,6 +35,50 @@ router.get('/', async (req, res) => {
   try {
     const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
     res.json(itens);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── TRILHAS PRINCIPAIS (departamento agrupando "trilhas do dia") ────────────
+router.get('/trilhas-principais', async (req, res) => {
+  try {
+    const itens = await all(`
+      SELECT tpz.*, d.nome AS departamento_nome,
+        (SELECT COUNT(*) FROM treinamentos t WHERE t.trilha_principal_id = tpz.id AND t.excluido_em IS NULL) AS total_trilhas
+      FROM treinamento_trilhas_principais tpz
+      LEFT JOIN departamentos d ON d.id = tpz.departamento_id
+      WHERE tpz.empresa_id = $1
+      ORDER BY tpz.nome ASC
+    `, [req.usuario.empresa_id]);
+    res.json(itens);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.post('/trilhas-principais', async (req, res) => {
+  try {
+    const { nome, departamento_id } = req.body;
+    if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
+    const id = uuidv4();
+    await run('INSERT INTO treinamento_trilhas_principais (id, empresa_id, nome, departamento_id) VALUES ($1,$2,$3,$4)',
+      [id, req.usuario.empresa_id, nome, departamento_id || null]);
+    res.status(201).json({ id, nome });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/trilhas-principais/:id', async (req, res) => {
+  try {
+    const { nome, departamento_id } = req.body;
+    await run('UPDATE treinamento_trilhas_principais SET nome=$1, departamento_id=$2 WHERE id=$3 AND empresa_id=$4',
+      [nome, departamento_id || null, req.params.id, req.usuario.empresa_id]);
+    res.json({ mensagem: 'Atualizado' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.delete('/trilhas-principais/:id', async (req, res) => {
+  try {
+    // Não apaga as trilhas do dia — só desvincula (elas continuam existindo soltas).
+    await run('UPDATE treinamentos SET trilha_principal_id=NULL WHERE trilha_principal_id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    await run('DELETE FROM treinamento_trilhas_principais WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+    res.json({ mensagem: 'Removida' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -89,13 +135,13 @@ async function salvarModulos(treinamentoId, modulos) {
 
 router.post('/', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos } = req.body;
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos, trilha_principal_id } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(`INSERT INTO treinamentos
-      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10)
-    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa']);
+      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse, trilha_principal_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10,$11)
+    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa', trilha_principal_id || null]);
 
     // Trilha com módulos (o formato novo) — pop_ids solto continua existindo
     // pra treinamento "avulso" (sem estrutura de módulo, mais simples).
@@ -178,11 +224,15 @@ router.get('/:id', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos } = req.body;
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos, trilha_principal_id } = req.body;
+    // trilha_principal_id usa COALESCE: quando a chamada não manda esse campo
+    // (ex.: os PUTs "minimalistas" que só mudam status/tempo), mantém o valor
+    // já salvo em vez de apagar o vínculo com a trilha principal.
     await run(`UPDATE treinamentos SET
-      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8, modo_repasse=$9
+      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8, modo_repasse=$9,
+      trilha_principal_id=COALESCE($12, trilha_principal_id)
       WHERE id=$10 AND empresa_id=$11
-    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id]);
+    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null]);
 
     if (Array.isArray(modulos)) {
       await salvarModulos(req.params.id, modulos);

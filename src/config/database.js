@@ -383,6 +383,16 @@ async function initSchema() {
       tipo_trilha TEXT DEFAULT 'onboarding',
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    -- Trilha Principal: o "guarda-chuva" de um departamento (ex.: "CALL CENTER"),
+    -- dentro do qual ficam várias trilhas do dia (cada treinamento normal).
+    CREATE TABLE IF NOT EXISTS treinamento_trilhas_principais (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      departamento_id TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS trilha_principal_id TEXT;
 
     CREATE TABLE IF NOT EXISTS treinamento_participantes (
       id TEXT PRIMARY KEY,
