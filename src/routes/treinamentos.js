@@ -51,11 +51,17 @@ router.get('/modelos', async (req, res) => {
 });
 
 // ── TRILHAS PRINCIPAIS (departamento agrupando "trilhas do dia") ────────────
+// A mesma pasta (ex.: "CALL CENTER") é usada tanto por Treinamentos (trilhas
+// ATRIBUÍDAS, eh_modelo=0) quanto por Trilhas de Aprendizagem (MODELOS,
+// eh_modelo=1) — sem duplicar a pasta, cada tela só conta/lista o que é dela.
+// ?eh_modelo=0 ou 1 filtra a contagem; sem o parâmetro, conta tudo.
 router.get('/trilhas-principais', async (req, res) => {
   try {
+    const filtroModelo = req.query.eh_modelo === '0' || req.query.eh_modelo === '1'
+      ? ` AND COALESCE(t.eh_modelo,0) = ${req.query.eh_modelo === '1' ? 1 : 0}` : '';
     const itens = await all(`
       SELECT tpz.*, d.nome AS departamento_nome,
-        (SELECT COUNT(*) FROM treinamentos t WHERE t.trilha_principal_id = tpz.id AND t.excluido_em IS NULL) AS total_trilhas
+        (SELECT COUNT(*) FROM treinamentos t WHERE t.trilha_principal_id = tpz.id AND t.excluido_em IS NULL${filtroModelo}) AS total_trilhas
       FROM treinamento_trilhas_principais tpz
       LEFT JOIN departamentos d ON d.id = tpz.departamento_id
       WHERE tpz.empresa_id = $1
@@ -552,7 +558,11 @@ router.get('/trilhas-principais/:id/pdf', async (req, res) => {
     `, [req.params.id, req.usuario.empresa_id]);
     if (!principal) return res.status(404).json({ erro: 'Não encontrada' });
 
-    const trilhasBase = await all(`${SELECT_TREINAMENTO} WHERE t.trilha_principal_id = $1 AND t.excluido_em IS NULL ORDER BY t.data_hora ASC`, [req.params.id]);
+    // Mesma pasta compartilhada por Treinamentos (eh_modelo=0) e Trilhas de
+    // Aprendizagem (eh_modelo=1) — ?eh_modelo= filtra qual dos dois entra no PDF.
+    const filtroModelo = req.query.eh_modelo === '0' || req.query.eh_modelo === '1'
+      ? ` AND COALESCE(t.eh_modelo,0) = ${req.query.eh_modelo === '1' ? 1 : 0}` : '';
+    const trilhasBase = await all(`${SELECT_TREINAMENTO} WHERE t.trilha_principal_id = $1 AND t.excluido_em IS NULL${filtroModelo} ORDER BY t.data_hora ASC`, [req.params.id]);
     const trilhas = [];
     for (const t of trilhasBase) {
       const pops = await all(`
