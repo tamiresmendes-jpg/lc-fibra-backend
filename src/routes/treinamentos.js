@@ -593,7 +593,16 @@ router.get('/trilhas-principais/:id/pdf', async (req, res) => {
     // Aprendizagem (eh_modelo=1) — ?eh_modelo= filtra qual dos dois entra no PDF.
     const filtroModelo = req.query.eh_modelo === '0' || req.query.eh_modelo === '1'
       ? ` AND COALESCE(t.eh_modelo,0) = ${req.query.eh_modelo === '1' ? 1 : 0}` : '';
-    const trilhasBase = await all(`${SELECT_TREINAMENTO} WHERE t.trilha_principal_id = $1 AND t.excluido_em IS NULL${filtroModelo} ORDER BY t.data_hora ASC`, [req.params.id]);
+    // Agrupa por colaborador (não intercala pessoas diferentes) e, dentro de
+    // cada um, ordena pelo número da trilha (ex.: "TRILHA 1", "TRILHA 2"...) —
+    // "ordem" e data_hora quando existem, com o número extraído do título como
+    // desempate. Sem isso, trilhas com a mesma data/hora (comum: o dia todo
+    // marcado pra 08:00) saíam em ordem instável/invertida.
+    const trilhasBase = await all(`${SELECT_TREINAMENTO} WHERE t.trilha_principal_id = $1 AND t.excluido_em IS NULL${filtroModelo}
+      ORDER BY t.colaborador_id NULLS LAST,
+               (CASE WHEN t.ordem > 0 THEN t.ordem ELSE 999999 END) ASC,
+               COALESCE((regexp_match(t.titulo, '(\\d+)'))[1]::int, 999999) ASC,
+               t.data_hora ASC`, [req.params.id]);
     const trilhas = [];
     for (const t of trilhasBase) {
       const pops = await all(`
