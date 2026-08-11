@@ -437,9 +437,9 @@ router.post('/:id/avaliacoes', async (req, res) => {
 router.put('/:id/avaliacoes/:av_id', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
-    const { titulo, tipo, perguntas, obrigatorio, ordem } = req.body;
-    await run('UPDATE treinamento_avaliacoes SET titulo=$1, tipo=$2, perguntas=$3, obrigatorio=$4, ordem=$5 WHERE id=$6 AND treinamento_id=$7',
-      [titulo, tipo, JSON.stringify(perguntas), obrigatorio !== false ? 1 : 0, ordem || 0, req.params.av_id, req.params.id]);
+    const { titulo, tipo, perguntas, obrigatorio, ordem, pop_id, modulo_id } = req.body;
+    await run('UPDATE treinamento_avaliacoes SET titulo=$1, tipo=$2, perguntas=$3, obrigatorio=$4, ordem=$5, pop_id=$6, modulo_id=$7 WHERE id=$8 AND treinamento_id=$9',
+      [titulo, tipo, JSON.stringify(perguntas), obrigatorio !== false ? 1 : 0, ordem || 0, pop_id || null, modulo_id || null, req.params.av_id, req.params.id]);
     res.json({ mensagem: 'Atualizado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -463,12 +463,31 @@ router.post('/:id/avaliacoes/:av_id/responder', async (req, res) => {
     const perguntas = JSON.parse(av.perguntas);
     let nota = null;
 
-    // Calcula nota para múltipla escolha e V/F
-    if (av.tipo === 'multipla_escolha' || av.tipo === 'verdadeiro_falso') {
+    // Compara a resposta do colaborador com o gabarito de cada tipo de questão.
+    // Tipos sem gabarito objetivo (aberta, prática, leitura, checklist) não geram nota.
+    function acertou(p, resposta) {
+      if (av.tipo === 'multipla_escolha' || av.tipo === 'verdadeiro_falso') {
+        return String(resposta) === String(p.resposta_correta);
+      }
+      if (av.tipo === 'multiplas_respostas') {
+        const certo = (p.respostas_corretas || []).map(String).sort();
+        const dado = (Array.isArray(resposta) ? resposta : []).map(String).sort();
+        return certo.length > 0 && JSON.stringify(certo) === JSON.stringify(dado);
+      }
+      if (av.tipo === 'associacao') {
+        const pares = p.pares || [];
+        const dado = resposta || {};
+        return pares.length > 0 && pares.every((par, i) => String(dado[i]) === String(par.direita));
+      }
+      if (av.tipo === 'lacunas') {
+        return String(resposta || '').trim().toLowerCase() === String(p.resposta_correta || '').trim().toLowerCase();
+      }
+      return null;
+    }
+
+    if (['multipla_escolha', 'verdadeiro_falso', 'multiplas_respostas', 'associacao', 'lacunas'].includes(av.tipo)) {
       let acertos = 0;
-      perguntas.forEach((p, i) => {
-        if (String(respostas[i]) === String(p.resposta_correta)) acertos++;
-      });
+      perguntas.forEach((p, i) => { if (acertou(p, respostas[i])) acertos++; });
       nota = perguntas.length > 0 ? Math.round((acertos / perguntas.length) * 10 * 10) / 10 : 0;
     }
 
