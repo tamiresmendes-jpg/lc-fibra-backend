@@ -360,7 +360,9 @@ router.put('/:id/pops/reordenar', async (req, res) => {
     const { ordem } = req.body; // array de pop_ids na nova ordem
     if (!Array.isArray(ordem)) return res.status(400).json({ erro: 'ordem deve ser array' });
     for (const [i, pop_id] of ordem.entries()) {
-      await run('UPDATE treinamento_pops SET ordem=$1 WHERE treinamento_id=$2 AND pop_id=$3', [i, req.params.id, pop_id]);
+      // Tópico sem POP real (só texto) não tem pop_id — o id da própria linha
+      // é usado como referência nesse caso, igual às outras rotas de tópico.
+      await run('UPDATE treinamento_pops SET ordem=$1 WHERE treinamento_id=$2 AND (pop_id=$3 OR id=$3)', [i, req.params.id, pop_id]);
     }
     res.json({ mensagem: 'Reordenado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
