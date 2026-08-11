@@ -36,7 +36,7 @@ async function trDaEmpresa(id, eid) {
 // apareceriam misturados com trilhas reais de colaboradores.
 router.get('/', async (req, res) => {
   try {
-    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND COALESCE(t.eh_modelo,0) = 0 ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
+    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND COALESCE(t.eh_modelo,0) = 0 ORDER BY (CASE WHEN t.ordem > 0 THEN t.ordem ELSE 999999 END) ASC, t.created_at DESC`, [req.usuario.empresa_id]);
     res.json(itens);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -45,8 +45,22 @@ router.get('/', async (req, res) => {
 // tanto pra gerenciar o modelo em si quanto pro seletor "Atribuir trilha" em Treinamentos.
 router.get('/modelos', async (req, res) => {
   try {
-    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND t.eh_modelo = 1 ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
+    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND t.eh_modelo = 1 ORDER BY (CASE WHEN t.ordem > 0 THEN t.ordem ELSE 999999 END) ASC, t.created_at DESC`, [req.usuario.empresa_id]);
     res.json(itens);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── REORDENAR (dentro da mesma pasta/lista) ─────────────────────────────────
+// ids: array com os ids na nova ordem (o índice+1 vira o número de cada uma).
+// Precisa vir ANTES de PUT /:id, senão "reordenar" seria lido como um id.
+router.put('/reordenar', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids)) return res.status(400).json({ erro: 'ids deve ser array' });
+    for (const [i, id] of ids.entries()) {
+      await run('UPDATE treinamentos SET ordem=$1 WHERE id=$2 AND empresa_id=$3', [i + 1, id, req.usuario.empresa_id]);
+    }
+    res.json({ mensagem: 'Reordenado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

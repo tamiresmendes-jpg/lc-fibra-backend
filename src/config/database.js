@@ -399,6 +399,9 @@ async function initSchema() {
     -- (eh_modelo=0), guardando modelo_origem_id pra saber de qual modelo veio.
     ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS eh_modelo INTEGER DEFAULT 0;
     ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS modelo_origem_id TEXT;
+    -- Ordem de exibição dentro da pasta (Trilha Principal) - ex.: TRILHA 1, 2, 3...
+    -- em vez da ordem de criação. 0 = sem ordem definida (fica no fim).
+    ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS ordem INTEGER DEFAULT 0;
 
     CREATE TABLE IF NOT EXISTS treinamento_participantes (
       id TEXT PRIMARY KEY,
