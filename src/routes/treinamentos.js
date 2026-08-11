@@ -226,6 +226,11 @@ router.get('/:id', async (req, res) => {
     // isso LEFT JOIN, e o título exibido usa o do POP quando tem, senão o
     // título digitado à mão (tp.titulo). A descrição (texto explicando o
     // tópico) é sempre a de tp.descricao, tenha POP ou não.
+    // tp.ordem é a posição DENTRO do módulo (cada módulo recomeça do 0) — sem
+    // ordenar primeiro pelo módulo, tópicos de módulos diferentes com a mesma
+    // posição ficavam embaralhados na lista plana (ex.: um tópico do módulo 3
+    // aparecendo antes de um do módulo 1). Mesma ordem usada no bloqueio
+    // sequencial (ver PUT /:id/pops/:pop_id/concluir).
     const pops = await all(`
       SELECT tp.id, tp.treinamento_id, tp.pop_id, tp.concluido, tp.ordem, tp.instrutor_id,
              tp.tempo_estimado, tp.tempo_realizado, tp.topicos, tp.versao_pop, tp.data_prevista,
@@ -236,8 +241,9 @@ router.get('/:id', async (req, res) => {
       FROM treinamento_pops tp
       LEFT JOIN pops p ON p.id = tp.pop_id
       LEFT JOIN usuarios u ON u.id = tp.instrutor_id
+      LEFT JOIN treinamento_modulos m ON m.id = tp.modulo_id
       WHERE tp.treinamento_id = $1
-      ORDER BY tp.ordem ASC
+      ORDER BY COALESCE(m.ordem, -1) ASC, tp.ordem ASC
     `, [req.params.id]);
 
     const avaliacoes = await all('SELECT * FROM treinamento_avaliacoes WHERE treinamento_id = $1 ORDER BY ordem ASC', [req.params.id]);
