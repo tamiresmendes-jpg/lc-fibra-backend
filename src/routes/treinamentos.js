@@ -548,13 +548,17 @@ router.get('/:id/pdf', async (req, res) => {
     const camposPop = completo
       ? 'p.objetivo, p.campo_aplicacao, p.procedimento, p.documentos, p.seguranca, p.penalidade'
       : '';
+    // Mesma correção do GET /:id: ordenar só por tp.ordem (posição DENTRO do
+    // módulo, reinicia em cada um) embaralhava a sequência entre módulos
+    // diferentes no PDF — precisa ordenar pelo módulo primeiro.
     const pops = await all(`
       SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.tempo_estimado, tp.tempo_realizado,
              tp.topicos, tp.data_prevista, tp.modulo_id, tp.descricao,
              COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo ${camposPop ? ', ' + camposPop : ''}, u.nome AS instrutor_nome
       FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
       LEFT JOIN usuarios u ON u.id = tp.instrutor_id
-      WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
+      LEFT JOIN treinamento_modulos m ON m.id = tp.modulo_id
+      WHERE tp.treinamento_id = $1 ORDER BY COALESCE(m.ordem, -1) ASC, tp.ordem ASC
     `, [req.params.id]);
     const modulosRaw = await all(`
       SELECT m.*, u.nome AS colaborador_nome, ui.nome AS instrutor_nome FROM treinamento_modulos m
@@ -597,7 +601,8 @@ router.get('/trilhas-principais/:id/pdf', async (req, res) => {
                COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo, u.nome AS instrutor_nome
         FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
         LEFT JOIN usuarios u ON u.id = tp.instrutor_id
-        WHERE tp.treinamento_id = $1 ORDER BY tp.ordem ASC
+        LEFT JOIN treinamento_modulos m ON m.id = tp.modulo_id
+        WHERE tp.treinamento_id = $1 ORDER BY COALESCE(m.ordem, -1) ASC, tp.ordem ASC
       `, [t.id]);
       const modulosRaw = await all(`
         SELECT m.*, u.nome AS colaborador_nome, ui.nome AS instrutor_nome FROM treinamento_modulos m
