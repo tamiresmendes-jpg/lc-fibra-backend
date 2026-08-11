@@ -60,6 +60,10 @@ async function verificarPermissao(req, res, next) {
     const chave = resolverPermissao(path);
     if (!chave) return next(); // rota não mapeada → liberado para líder/gestor
 
+    // Gestor sempre tem acesso total ao módulo Treinamento, mesmo sem o grupo
+    // ter marcado — espelha a mesma regra do frontend (AuthContext.temPermissao).
+    if (usuario.perfil === 'gestor' && chave.startsWith('treinamento')) return next();
+
     let ownPerms = null;
     try {
       const u = await get('SELECT permissoes_modulos FROM usuarios WHERE id = ?', [usuario.id]);
