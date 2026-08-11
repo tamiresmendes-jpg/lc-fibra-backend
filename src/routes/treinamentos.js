@@ -31,9 +31,21 @@ async function trDaEmpresa(id, eid) {
   return await get('SELECT id FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [id, eid]);
 }
 
+// Lista as trilhas ATRIBUÍDAS (eh_modelo=0) — o que aparece em "Treinamentos".
+// Os MODELOS (montados em "Trilhas de Aprendizagem") não entram aqui, senão
+// apareceriam misturados com trilhas reais de colaboradores.
 router.get('/', async (req, res) => {
   try {
-    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
+    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND COALESCE(t.eh_modelo,0) = 0 ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
+    res.json(itens);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Lista os MODELOS de trilha (montados em "Trilhas de Aprendizagem") — usado
+// tanto pra gerenciar o modelo em si quanto pro seletor "Atribuir trilha" em Treinamentos.
+router.get('/modelos', async (req, res) => {
+  try {
+    const itens = await all(`${SELECT_TREINAMENTO} WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND t.eh_modelo = 1 ORDER BY t.created_at DESC`, [req.usuario.empresa_id]);
     res.json(itens);
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -151,13 +163,13 @@ async function salvarModulos(treinamentoId, modulos) {
 
 router.post('/', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos, trilha_principal_id } = req.body;
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos, trilha_principal_id, eh_modelo } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(`INSERT INTO treinamentos
-      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse, trilha_principal_id)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10,$11)
-    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa', trilha_principal_id || null]);
+      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse, trilha_principal_id, eh_modelo)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10,$11,$12)
+    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa', trilha_principal_id || null, eh_modelo ? 1 : 0]);
 
     // Trilha com módulos (o formato novo) — pop_ids solto continua existindo
     // pra treinamento "avulso" (sem estrutura de módulo, mais simples).
@@ -569,56 +581,92 @@ router.get('/trilhas-principais/:id/pdf', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── CLONE (base de "duplicar" e "atribuir modelo a colaborador") ────────────
+// Copia a trilha/modelo inteiro (módulos, sub-módulos/POPs, checklist,
+// instrutor, avaliações) pra uma trilha nova — sem duplicar progresso nem
+// anotações, que são específicas de quem foi treinado antes.
+async function clonarTrilha(origemId, empresaId, overrides = {}) {
+  const original = await get('SELECT * FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [origemId, empresaId]);
+  if (!original) return null;
+
+  const novoId = uuidv4();
+  await run(`INSERT INTO treinamentos
+    (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse, trilha_principal_id, eh_modelo, modelo_origem_id)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10,$11,0,$12)
+  `, [novoId, empresaId, overrides.titulo || original.titulo,
+      original.tipo_trilha, original.departamento_id,
+      overrides.responsavel_id !== undefined ? (overrides.responsavel_id || null) : original.responsavel_id,
+      overrides.colaborador_id || null, overrides.data_hora || null,
+      overrides.observacoes !== undefined ? (overrides.observacoes || null) : original.observacoes,
+      original.modo_repasse, original.trilha_principal_id, origemId]);
+
+  const modulos = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1 ORDER BY ordem', [origemId]);
+  const mapaModulo = new Map();
+  for (const m of modulos) {
+    const novoModuloId = uuidv4();
+    mapaModulo.set(m.id, novoModuloId);
+    // modo "completa": não copia o colaborador do módulo antigo (o novo treinamento
+    // já tem o colaborador dele); modo "dividido" mantém quem estava em cada módulo,
+    // já que a divisão por módulo é independente de quem faz a trilha toda.
+    await run('INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id) VALUES ($1,$2,$3,$4,$5)',
+      [novoModuloId, novoId, m.nome, m.ordem, original.modo_repasse === 'dividido' ? m.colaborador_id : null]);
+  }
+
+  const pops = await all('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 ORDER BY ordem', [origemId]);
+  for (const p of pops) {
+    const novoPopRowId = uuidv4();
+    await run(`INSERT INTO treinamento_pops
+      (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    `, [novoPopRowId, novoId, p.pop_id, p.ordem, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
+        p.data_prevista, p.modulo_id ? mapaModulo.get(p.modulo_id) : null, p.titulo, p.descricao]);
+  }
+
+  const avaliacoes = await all('SELECT * FROM treinamento_avaliacoes WHERE treinamento_id=$1 ORDER BY ordem', [origemId]);
+  for (const av of avaliacoes) {
+    await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [uuidv4(), novoId, av.pop_id, av.modulo_id ? mapaModulo.get(av.modulo_id) : null, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
+  }
+
+  return novoId;
+}
+
 // ── DUPLICAR ──────────────────────────────────────────────────────────────────
-// Copia a trilha inteira (módulos, sub-módulos/POPs, checklist, instrutor,
-// avaliações) pra treinar outra pessoa com o mesmo conteúdo — sem duplicar o
-// progresso nem as anotações, que são específicas de quem foi treinado antes.
+// Copia uma trilha JÁ ATRIBUÍDA pra treinar outra pessoa com o mesmo conteúdo.
 router.post('/:id/duplicar', async (req, res) => {
   try {
-    const original = await get('SELECT * FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
-    if (!original) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     const { colaborador_id, data_hora, titulo } = req.body;
-
-    const novoId = uuidv4();
-    await run(`INSERT INTO treinamentos
-      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10)
-    `, [novoId, req.usuario.empresa_id, titulo || `${original.titulo} (cópia)`, original.tipo_trilha,
-        original.departamento_id, original.responsavel_id, colaborador_id || null, data_hora || null,
-        original.observacoes, original.modo_repasse]);
-
-    const modulos = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);
-    const mapaModulo = new Map();
-    for (const m of modulos) {
-      const novoModuloId = uuidv4();
-      mapaModulo.set(m.id, novoModuloId);
-      // modo "completa": não copia o colaborador do módulo antigo (o novo treinamento
-      // já tem o colaborador dele); modo "dividido" mantém quem estava em cada módulo,
-      // já que a divisão por módulo é independente de quem faz a trilha toda.
-      await run('INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id) VALUES ($1,$2,$3,$4,$5)',
-        [novoModuloId, novoId, m.nome, m.ordem, original.modo_repasse === 'dividido' ? m.colaborador_id : null]);
-    }
-
-    const pops = await all('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);
-    const mapaPop = new Map(); // pop_id antigo -> novo id de treinamento_pops (pra avaliações)
-    for (const p of pops) {
-      const novoPopRowId = uuidv4();
-      mapaPop.set(p.pop_id, novoPopRowId);
-      await run(`INSERT INTO treinamento_pops
-        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-      `, [novoPopRowId, novoId, p.pop_id, p.ordem, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
-          p.data_prevista, p.modulo_id ? mapaModulo.get(p.modulo_id) : null, p.titulo, p.descricao]);
-    }
-
-    const avaliacoes = await all('SELECT * FROM treinamento_avaliacoes WHERE treinamento_id=$1 ORDER BY ordem', [req.params.id]);
-    for (const av of avaliacoes) {
-      await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-        [uuidv4(), novoId, av.pop_id, av.modulo_id ? mapaModulo.get(av.modulo_id) : null, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
-    }
-
+    const novoId = await clonarTrilha(req.params.id, req.usuario.empresa_id, {
+      colaborador_id, data_hora, titulo: titulo || undefined,
+    });
+    if (!novoId) return res.status(404).json({ erro: 'Treinamento não encontrado' });
     res.status(201).json({ id: novoId, mensagem: 'Trilha duplicada' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── ATRIBUIR MODELO A COLABORADOR(ES) ───────────────────────────────────────
+// A trilha é montada 1x em "Trilhas de Aprendizagem" (eh_modelo=1) e aqui é
+// atribuída a um ou mais colaboradores — cada um ganha sua própria cópia
+// (eh_modelo=0), com progresso e anotações independentes.
+router.post('/:id/atribuir', async (req, res) => {
+  try {
+    const modelo = await get('SELECT id, titulo FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!modelo) return res.status(404).json({ erro: 'Modelo de trilha não encontrado' });
+
+    const { colaboradores_ids, data_hora, responsavel_id, observacoes } = req.body;
+    if (!Array.isArray(colaboradores_ids) || !colaboradores_ids.length) {
+      return res.status(400).json({ erro: 'Selecione ao menos um colaborador' });
+    }
+
+    const criados = [];
+    for (const colaborador_id of colaboradores_ids) {
+      const novoId = await clonarTrilha(req.params.id, req.usuario.empresa_id, {
+        colaborador_id, data_hora, responsavel_id, observacoes,
+      });
+      if (novoId) criados.push(novoId);
+    }
+    res.status(201).json({ criados, mensagem: `Trilha atribuída a ${criados.length} colaborador(es)` });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 

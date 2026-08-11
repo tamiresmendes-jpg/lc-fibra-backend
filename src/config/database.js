@@ -393,6 +393,12 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
     ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS trilha_principal_id TEXT;
+    -- Modelo de trilha: montado uma vez em "Trilhas de Aprendizagem" (módulos,
+    -- tópicos, POPs, checklist), sem colaborador/data — depois é "atribuído" a um
+    -- ou mais colaboradores, o que clona o modelo pra uma trilha real de cada um
+    -- (eh_modelo=0), guardando modelo_origem_id pra saber de qual modelo veio.
+    ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS eh_modelo INTEGER DEFAULT 0;
+    ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS modelo_origem_id TEXT;
 
     CREATE TABLE IF NOT EXISTS treinamento_participantes (
       id TEXT PRIMARY KEY,
