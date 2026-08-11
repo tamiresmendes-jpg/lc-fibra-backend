@@ -281,6 +281,21 @@ router.get('/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Rota estreita só pra trocar o status_agenda (iniciar/concluir treinamento) —
+// usada pelo próprio colaborador/instrutor em "Meu Treinamento". Não aceita
+// titulo/modulos/pop_ids etc., então é segura pra liberar geral (ver
+// ROTAS_PESSOAIS em utils/permissoes.js), diferente do PUT /:id completo que
+// reconstrói a trilha inteira e por isso fica restrito a admin/gestor/líder.
+router.put('/:id/status', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const { status_agenda } = req.body;
+    if (!['agendado', 'em_andamento', 'concluido'].includes(status_agenda)) return res.status(400).json({ erro: 'Status inválido' });
+    await run('UPDATE treinamentos SET status_agenda=$1 WHERE id=$2 AND empresa_id=$3', [status_agenda, req.params.id, req.usuario.empresa_id]);
+    res.json({ mensagem: 'Atualizado' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.put('/:id', async (req, res) => {
   try {
     const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos, trilha_principal_id, ordem } = req.body;

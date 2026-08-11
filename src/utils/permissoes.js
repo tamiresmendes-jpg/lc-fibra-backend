@@ -231,6 +231,10 @@ const ROTAS_PESSOAIS = [
   /^\/api\/alteracoes\/[^/]+\/ciente\/?$/,                       // dar ciência
   /^\/api\/alteracoes\/[^/]+\/curtir\/?$/,                       // curtir aviso
   /^\/api\/treinamentos\/[^/]+\/pops\/[^/]+\/concluir\/?$/,      // concluir treinamento próprio
+  /^\/api\/treinamentos\/[^/]+\/status\/?$/,                     // iniciar/concluir a trilha (só troca status_agenda)
+  /^\/api\/treinamentos\/[^/]+\/pops\/(?!reordenar(?:\/|$))[^/]+\/?$/, // salvar tempo/anotação do próprio tópico (exclui reordenar, admin-only)
+  /^\/api\/treinamentos\/[^/]+\/anotacoes(\/|$)/,                // anotações do treinamento
+  /^\/api\/treinamentos\/[^/]+\/avaliacoes\/[^/]+\/responder\/?$/, // responder avaliação da trilha
   // POP — comentar, curtir/reagir e excluir o próprio comentário (resolver continua bloqueado)
   /^\/api\/pop-comentarios\/?$/,                                 // criar comentário
   /^\/api\/pop-comentarios\/[^/]+\/reagir\/?$/,                  // curtir/reagir
