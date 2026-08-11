@@ -169,6 +169,14 @@ async function exigirVerMetaComercial(req, res, next) {
     // Financeiro/Call Center/Cobrança) também vê todo mundo, não só a própria linha.
     const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
     if (await podeVerTudoNaMeta(u, 'comercial')) return next();
+
+    // Vendedor com cadastro vinculado (meta_comercial_vendedor.usuario_id) SEMPRE
+    // trava na própria linha — mesmo que o grupo dele tenha a permissão de módulo
+    // "visualizar" (essa permissão só abre a TELA, não dá direito de ver os colegas,
+    // supervisor ou os cortes gerais da Análise).
+    const proprio = await vendedorVinculado(req).catch(() => null);
+    if (proprio) { req.somenteVendedorId = proprio.id; return next(); }
+
     let ownPerms = null;
     try {
       const row = await get('SELECT permissoes_modulos FROM usuarios WHERE id = $1', [u.id]);
@@ -176,9 +184,6 @@ async function exigirVerMetaComercial(req, res, next) {
     } catch { /* usa só os grupos */ }
     const perms = await buscarPermsEfetivas(u.id, u.empresa_id, ownPerms);
     if (temPermissaoServer(perms, 'gestao.meta-comercial', 'visualizar')) return next();
-
-    const proprio = await vendedorVinculado(req).catch(() => null);
-    if (proprio) { req.somenteVendedorId = proprio.id; return next(); }
 
     return res.status(403).json({ erro: 'Você não tem permissão para ver a Meta do Comercial.' });
   } catch {
