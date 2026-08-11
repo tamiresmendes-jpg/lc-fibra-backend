@@ -187,13 +187,13 @@ async function salvarModulos(treinamentoId, modulos) {
 
 router.post('/', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos, trilha_principal_id, eh_modelo } = req.body;
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, pop_ids, modo_repasse, modulos, trilha_principal_id, eh_modelo, ordem } = req.body;
     if (!titulo) return res.status(400).json({ erro: 'Título obrigatório' });
     const id = uuidv4();
     await run(`INSERT INTO treinamentos
-      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse, trilha_principal_id, eh_modelo)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10,$11,$12)
-    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa', trilha_principal_id || null, eh_modelo ? 1 : 0]);
+      (id, empresa_id, titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, modo_repasse, trilha_principal_id, eh_modelo, ordem)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'agendado',$10,$11,$12,$13)
+    `, [id, req.usuario.empresa_id, titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, modo_repasse || 'completa', trilha_principal_id || null, eh_modelo ? 1 : 0, Number(ordem) || 0]);
 
     // Trilha com módulos (o formato novo) — pop_ids solto continua existindo
     // pra treinamento "avulso" (sem estrutura de módulo, mais simples).
@@ -283,15 +283,16 @@ router.get('/:id', async (req, res) => {
 
 router.put('/:id', async (req, res) => {
   try {
-    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos, trilha_principal_id } = req.body;
-    // trilha_principal_id usa COALESCE: quando a chamada não manda esse campo
-    // (ex.: os PUTs "minimalistas" que só mudam status/tempo), mantém o valor
-    // já salvo em vez de apagar o vínculo com a trilha principal.
+    const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos, trilha_principal_id, ordem } = req.body;
+    // trilha_principal_id e ordem usam COALESCE: quando a chamada não manda
+    // esses campos (ex.: os PUTs "minimalistas" que só mudam status/tempo),
+    // mantém o valor já salvo em vez de apagar/zerar.
     await run(`UPDATE treinamentos SET
       titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8, modo_repasse=$9,
-      trilha_principal_id=COALESCE($12, trilha_principal_id)
+      trilha_principal_id=COALESCE($12, trilha_principal_id),
+      ordem=COALESCE($13, ordem)
       WHERE id=$10 AND empresa_id=$11
-    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null]);
+    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null, ordem !== undefined && ordem !== '' ? Number(ordem) : null]);
 
     if (Array.isArray(modulos)) {
       await salvarModulos(req.params.id, modulos);
