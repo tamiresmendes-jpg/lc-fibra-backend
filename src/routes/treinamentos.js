@@ -61,7 +61,11 @@ router.get('/trilhas-principais', async (req, res) => {
       ? ` AND COALESCE(t.eh_modelo,0) = ${req.query.eh_modelo === '1' ? 1 : 0}` : '';
     const itens = await all(`
       SELECT tpz.*, d.nome AS departamento_nome,
-        (SELECT COUNT(*) FROM treinamentos t WHERE t.trilha_principal_id = tpz.id AND t.excluido_em IS NULL${filtroModelo}) AS total_trilhas
+        (SELECT COUNT(*) FROM treinamentos t WHERE t.trilha_principal_id = tpz.id AND t.excluido_em IS NULL${filtroModelo}) AS total_trilhas,
+        (SELECT STRING_AGG(DISTINCT u.nome, ', ') FROM treinamentos t
+          LEFT JOIN usuarios u ON u.id = t.colaborador_id
+          WHERE t.trilha_principal_id = tpz.id AND t.excluido_em IS NULL AND u.nome IS NOT NULL${filtroModelo}
+        ) AS colaboradores_nomes
       FROM treinamento_trilhas_principais tpz
       LEFT JOIN departamentos d ON d.id = tpz.departamento_id
       WHERE tpz.empresa_id = $1
