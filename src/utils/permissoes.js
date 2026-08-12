@@ -231,6 +231,7 @@ const ROTAS_PESSOAIS = [
   /^\/api\/alteracoes\/[^/]+\/ciente\/?$/,                       // dar ciência
   /^\/api\/alteracoes\/[^/]+\/curtir\/?$/,                       // curtir aviso
   /^\/api\/treinamentos\/[^/]+\/pops\/[^/]+\/concluir\/?$/,      // concluir treinamento próprio
+  /^\/api\/treinamentos\/[^/]+\/pops\/[^/]+\/iniciar\/?$/,       // registra inicio real do topico/modulo
   /^\/api\/treinamentos\/[^/]+\/status\/?$/,                     // iniciar/concluir a trilha (só troca status_agenda)
   /^\/api\/treinamentos\/[^/]+\/pops\/(?!reordenar(?:\/|$))[^/]+\/?$/, // salvar tempo/anotação do próprio tópico (exclui reordenar, admin-only)
   /^\/api\/treinamentos\/[^/]+\/anotacoes(\/|$)/,                // anotações do treinamento

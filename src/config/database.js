@@ -488,6 +488,13 @@ async function initSchema() {
     -- (só leitura, "informações importantes"), mas pro INSTRUTOR é uma lista de
     -- verificação de verdade — aqui fica quais itens ele já marcou como feitos.
     ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS checklist_marcado TEXT;
+    -- Data/hora REAL de início e fim do tópico, gravada automaticamente pelo
+    -- sistema (não digitada por ninguém) — diferente de data_prevista, que é
+    -- só o planejado e não muda quando surge um imprevisto e atrasa/antecipa.
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS data_inicio_real TEXT;
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS data_fim_real TEXT;
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS data_inicio_real TEXT;
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS data_fim_real TEXT;
     -- Instrutor do MÓDULO inteiro (repassa todos os tópicos dele) — diferente do
     -- instrutor por tópico (treinamento_pops.instrutor_id), que cobre só aquele
     -- tópico específico. Um módulo pode ter os dois: um instrutor geral do módulo

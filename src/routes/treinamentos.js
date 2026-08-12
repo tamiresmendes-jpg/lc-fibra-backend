@@ -235,6 +235,7 @@ router.get('/:id', async (req, res) => {
       SELECT tp.id, tp.treinamento_id, tp.pop_id, tp.concluido, tp.ordem, tp.instrutor_id,
              tp.tempo_estimado, tp.tempo_realizado, tp.topicos, tp.versao_pop, tp.data_prevista,
              tp.status_pop, tp.modulo_id, tp.descricao, tp.checklist_marcado,
+             tp.data_inicio_real, tp.data_fim_real,
              COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo, p.versao AS versao_atual,
              u.nome AS instrutor_nome,
              CASE WHEN tp.pop_id IS NOT NULL AND tp.versao_pop IS NOT NULL AND tp.versao_pop != p.versao THEN 1 ELSE 0 END AS precisa_reciclagem
@@ -405,6 +406,27 @@ router.put('/:id/pops/reordenar', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Registra a data/hora REAL de início do tópico (automático, na hora que o
+// cronômetro é ligado) — só grava na primeira vez (COALESCE mantém o que já
+// tinha), pra não perder o horário original se a pessoa reabrir/pausar depois.
+// Se é o primeiro tópico do módulo a começar, marca o início real do módulo
+// também — assim o módulo tem sua própria data/hora real de início, mesmo que
+// a prevista não bata por algum imprevisto.
+router.put('/:id/pops/:pop_id/iniciar', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const agora = new Date().toISOString();
+    const tp = await get('SELECT modulo_id FROM treinamento_pops WHERE treinamento_id=$1 AND (pop_id=$2 OR id=$2)', [req.params.id, req.params.pop_id]);
+    if (!tp) return res.status(404).json({ erro: 'Não encontrado' });
+    await run(`UPDATE treinamento_pops SET data_inicio_real=COALESCE(data_inicio_real,$1)
+      WHERE treinamento_id=$2 AND (pop_id=$3 OR id=$3)`, [agora, req.params.id, req.params.pop_id]);
+    if (tp.modulo_id) {
+      await run('UPDATE treinamento_modulos SET data_inicio_real=COALESCE(data_inicio_real,$1) WHERE id=$2', [agora, tp.modulo_id]);
+    }
+    res.json({ mensagem: 'Registrado', data_inicio_real: agora });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Toggle conclusão de um sub-módulo — SEQUENCIAL: só marca concluído se todos
 // os sub-módulos ANTERIORES da trilha (por módulo, depois por ordem dentro do
 // módulo) já estiverem concluídos. O colaborador não pode pular pro próximo
@@ -430,7 +452,20 @@ router.put('/:id/pops/:pop_id/concluir', async (req, res) => {
     }
 
     const novoStatus = novoConcluido ? 'concluido' : 'pendente';
-    await run('UPDATE treinamento_pops SET concluido=$1, status_pop=$2 WHERE treinamento_id=$3 AND (pop_id=$4 OR id=$4)', [novoConcluido, novoStatus, req.params.id, req.params.pop_id]);
+    const agora = new Date().toISOString();
+    // Ao concluir, garante que início e fim reais existam (se por algum motivo
+    // o /iniciar nunca foi chamado, pelo menos o fim fica registrado certo).
+    await run(`UPDATE treinamento_pops SET concluido=$1, status_pop=$2,
+      data_inicio_real=COALESCE(data_inicio_real,$5), data_fim_real=$5
+      WHERE treinamento_id=$3 AND (pop_id=$4 OR id=$4)`, [novoConcluido, novoStatus, req.params.id, req.params.pop_id, novoConcluido ? agora : null]);
+
+    // Se esse era o último tópico pendente do módulo, marca o fim real do módulo também.
+    if (novoConcluido && tp.modulo_id) {
+      const pendentesDoModulo = await get(`SELECT COUNT(*) AS n FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id=$2 AND concluido=0`, [req.params.id, tp.modulo_id]);
+      if (Number(pendentesDoModulo?.n) === 0) {
+        await run('UPDATE treinamento_modulos SET data_fim_real=$1 WHERE id=$2', [agora, tp.modulo_id]);
+      }
+    }
     res.json({ concluido: !!novoConcluido });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
