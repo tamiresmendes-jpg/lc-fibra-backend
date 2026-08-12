@@ -724,6 +724,151 @@ router.get('/analise-produto', async (req, res) => {
   }
 });
 
+// ── ANÁLISE FISCAL — notas emitidas (NFSe, NFCOM, Telecom 21/22, NFe55) ─────
+// Consulta TODAS as empresas cadastradas (que tenham CNPJ válido) por período,
+// soma os principais impostos de cada tipo de nota e devolve o total geral +
+// a quebra por empresa. Roda em segundo plano com cache (mesmo padrão da
+// análise de produto), porque o volume de notas pode ser grande.
+const num = (v) => Number(v) || 0;
+
+function somaImpostos(acc, n, mapa) {
+  for (const [chaveAcc, chaveNota] of Object.entries(mapa)) {
+    acc[chaveAcc] = (acc[chaveAcc] || 0) + num(n[chaveNota]);
+  }
+}
+
+function notaVazia() {
+  return {
+    total: 0, cancelada: 0,
+    valor_total: 0,
+    icms: 0, iss: 0, pis: 0, cofins: 0, csll: 0, irrf: 0, inss: 0, fust: 0, funttel: 0,
+  };
+}
+
+async function calcularFiscal(dataInicio, dataFim) {
+  const empresas = await db.all('SELECT id, nome, cnpj FROM empresas');
+  const porEmpresa = [];
+  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+
+  for (const emp of empresas) {
+    const documento = (emp.cnpj || '').replace(/\D/g, '');
+    if (documento.length !== 14) {
+      porEmpresa.push({ empresa: emp.nome, cnpj: emp.cnpj, indisponivel: true, motivo: 'CNPJ não cadastrado ou inválido' });
+      continue;
+    }
+
+    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+    let erroEmpresa = null;
+    try {
+      const nfses = await hubsoft.listarNfse({ documento, dataInicio, dataFim });
+      for (const n of nfses) {
+        tipos.nfse.total++;
+        if (n.status === 'cancelado') tipos.nfse.cancelada++;
+        tipos.nfse.valor_total += num(n.valor);
+        somaImpostos(tipos.nfse, n, { iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', inss: 'valor_inss', irrf: 'valor_irrf' });
+      }
+    } catch (e) { erroEmpresa = e.message; }
+
+    try {
+      const nfcoms = await hubsoft.listarNfcom({ documento, dataInicio, dataFim });
+      for (const n of nfcoms) {
+        tipos.nfcom.total++;
+        if (n.status === 'cancelada') tipos.nfcom.cancelada++;
+        tipos.nfcom.valor_total += num(n.valor_nota);
+        somaImpostos(tipos.nfcom, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', fust: 'valor_fust', funttel: 'valor_funttel' });
+      }
+    } catch (e) { erroEmpresa = erroEmpresa || e.message; }
+
+    for (const [chave, modelo] of [['telecom21', '21'], ['telecom22', '22']]) {
+      try {
+        const notas = await hubsoft.listarNotaTelecom({ documento, dataInicio, dataFim, modelo });
+        for (const n of notas) {
+          tipos[chave].total++;
+          if (n.status === 'cancelada') tipos[chave].cancelada++;
+          tipos[chave].valor_total += num(n.valor_nota ?? n.valor);
+          somaImpostos(tipos[chave], n, { icms: 'valor_icms', iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins' });
+        }
+      } catch (e) { erroEmpresa = erroEmpresa || e.message; }
+    }
+
+    try {
+      const nfes = await hubsoft.listarNfe55({ documento, dataInicio, dataFim });
+      for (const n of nfes) {
+        tipos.nfe55.total++;
+        if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
+        tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
+        somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
+      }
+    } catch (e) { erroEmpresa = erroEmpresa || e.message; }
+
+    for (const chave of Object.keys(geral)) {
+      for (const campo of Object.keys(geral[chave])) geral[chave][campo] += tipos[chave][campo];
+    }
+
+    porEmpresa.push({ empresa: emp.nome, cnpj: emp.cnpj, tipos, erro: erroEmpresa });
+  }
+
+  const totalGeral = notaVazia();
+  for (const chave of Object.keys(geral)) {
+    for (const campo of Object.keys(totalGeral)) totalGeral[campo] += geral[chave][campo];
+  }
+
+  return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, total_geral: totalGeral, por_tipo: geral, por_empresa: porEmpresa };
+}
+
+async function processarCacheFiscal(id, dataInicio, dataFim) {
+  try {
+    const resultado = await calcularFiscal(dataInicio, dataFim);
+    await db.run(
+      `UPDATE erp_fiscal_cache SET status='pronto', dados=$1, erro=NULL, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$2`,
+      [JSON.stringify(resultado), id]
+    );
+  } catch (e) {
+    console.error('Erro ao processar análise fiscal em background:', e.message);
+    await db.run(
+      `UPDATE erp_fiscal_cache SET status='erro', erro=$1, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$2`,
+      [e.message.replace('HUBSOFT', 'HubSoft'), id]
+    ).catch(() => {});
+  }
+}
+
+// GET /api/erp/fiscal — status: 'pronto' | 'processando' | 'erro'
+router.get('/fiscal', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = req.query.data_fim || iso(hoje);
+    const forcar = req.query.forcar === '1';
+    const empresaId = req.usuario.empresa_id;
+
+    const cache = await db.get(
+      `SELECT * FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3`,
+      [empresaId, dataInicio, dataFim]
+    );
+
+    if (cache && cache.status === 'pronto' && !forcar) {
+      return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
+    }
+    if (cache && cache.status === 'processando' && !forcar) {
+      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 15 * 60 * 1000;
+      if (!velho) return res.json({ status: 'processando' });
+    }
+
+    const id = cache?.id || uuidv4();
+    if (cache) {
+      await db.run(`UPDATE erp_fiscal_cache SET status='processando', erro=NULL, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$1`, [id]);
+    } else {
+      await db.run(`INSERT INTO erp_fiscal_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')`, [id, empresaId, dataInicio, dataFim]);
+    }
+    processarCacheFiscal(id, dataInicio, dataFim); // sem await (background)
+    res.json({ status: 'processando' });
+  } catch (e) {
+    console.error('Erro /erp/fiscal:', e.message);
+    res.status(500).json({ erro: 'Erro ao analisar dados fiscais: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
 // ── GET /api/erp/financeiro — faturas por vencimento + totais ──
 router.get('/financeiro', async (req, res) => {
   try {

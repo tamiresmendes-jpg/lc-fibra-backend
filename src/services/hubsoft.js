@@ -487,10 +487,79 @@ async function listarServicosVendidos({ dataInicio, dataFim, maxPaginas = 500 } 
   return servicos;
 }
 
+// ── Notas fiscais ────────────────────────────────────────────────────────────
+// Todos os endpoints de nota fiscal exigem `documento` (CNPJ da empresa
+// emissora, só dígitos) e usam o token de INTEGRAÇÃO normal (getToken), não o
+// de painel. itens_por_pagina máx 500 (menos p/ nota_entrada, máx 50).
+// Volume pode ser grande (dezenas de milhares no ano) — por isso quem chama
+// estas funções deve sempre restringir o período (nunca "geral sem data").
+
+// NFS-e (Modelo Serviços — ISS/Prefeitura)
+async function listarNfse({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todas', maxPaginas = 120 } = {}) {
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfse', {
+      documento: soDigitos(documento), tipo_data: tipoData,
+      data_inicio: dataInicio, data_fim: dataFim, status,
+      pagina, itens_por_pagina: 500,
+    }),
+    { extrair: d => d.nfses || [], maxPaginas }
+  );
+}
+
+// NFCOM (Modelo 62 — telecom atual, substituiu o 21/22)
+async function listarNfcom({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todos', maxPaginas = 120 } = {}) {
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfcom', {
+      documento: soDigitos(documento), tipo_data: tipoData,
+      data_inicio: dataInicio, data_fim: dataFim, status,
+      pagina, itens_por_pagina: 500,
+    }),
+    { extrair: d => d.nfcoms || [], maxPaginas }
+  );
+}
+
+// Telecom antigo (Modelo 21/22 — hoje substituído pela NFCOM na maioria dos casos)
+async function listarNotaTelecom({ documento, dataInicio, dataFim, modelo, tipoData = 'data_emissao', status = 'todas', maxPaginas = 120 } = {}) {
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/telecom', {
+      documento: soDigitos(documento), tipo_data: tipoData,
+      data_inicio: dataInicio, data_fim: dataFim, modelo, status,
+      pagina, itens_por_pagina: 500,
+    }),
+    { extrair: d => d.notas_fiscais || d.notas || [], maxPaginas }
+  );
+}
+
+// NF-e (Modelo 55 — produto)
+async function listarNfe55({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status, maxPaginas = 120 } = {}) {
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfe', {
+      documento: soDigitos(documento), tipo_data: tipoData,
+      data_inicio: dataInicio, data_fim: dataFim, ...(status ? { status } : {}),
+      pagina, itens_por_pagina: 500,
+    }),
+    { extrair: d => d.nfes || [], maxPaginas }
+  );
+}
+
+// Notas de entrada (compras recebidas de fornecedor) — itens_por_pagina máx 50
+async function listarNotaEntrada({ dataInicio, dataFim, maxPaginas = 40 } = {}) {
+  return buscarTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nota_entrada', {
+      data_inicio: dataInicio, data_fim: dataFim,
+      pagina, itens_por_pagina: 50,
+    }),
+    { extrair: d => d.notas_entrada || d.notas || [], maxPaginas }
+  );
+}
+
+function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
+
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
   relatorioServicos, autenticarPainel, statusContrato,
   listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
   buscarRecebimentos,
+  listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
 };
