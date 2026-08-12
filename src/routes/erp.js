@@ -759,50 +759,58 @@ async function calcularFiscal(dataInicio, dataFim) {
 
     const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
     let erroEmpresa = null;
+
+    // Processa cada página assim que chega e descarta — nunca guarda a lista
+    // inteira de notas na memória (com NFCOM/telecom o volume é grande demais
+    // e já derrubou o processo por falta de memória).
     try {
-      const nfses = await hubsoft.listarNfse({ documento, dataInicio, dataFim });
-      for (const n of nfses) {
-        tipos.nfse.total++;
-        if (n.status === 'cancelado') tipos.nfse.cancelada++;
-        tipos.nfse.valor_total += num(n.valor);
-        somaImpostos(tipos.nfse, n, { iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', inss: 'valor_inss', irrf: 'valor_irrf' });
-      }
+      await hubsoft.varrerNfse({ documento, dataInicio, dataFim }, async (lote) => {
+        for (const n of lote) {
+          tipos.nfse.total++;
+          if (n.status === 'cancelado') tipos.nfse.cancelada++;
+          tipos.nfse.valor_total += num(n.valor);
+          somaImpostos(tipos.nfse, n, { iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', inss: 'valor_inss', irrf: 'valor_irrf' });
+        }
+      });
     } catch (e) { erroEmpresa = e.message; }
 
     try {
-      const nfcoms = await hubsoft.listarNfcom({ documento, dataInicio, dataFim });
-      for (const n of nfcoms) {
-        tipos.nfcom.total++;
-        if (n.status === 'cancelada') tipos.nfcom.cancelada++;
-        tipos.nfcom.valor_total += num(n.valor_nota);
-        somaImpostos(tipos.nfcom, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', fust: 'valor_fust', funttel: 'valor_funttel' });
-      }
+      await hubsoft.varrerNfcom({ documento, dataInicio, dataFim }, async (lote) => {
+        for (const n of lote) {
+          tipos.nfcom.total++;
+          if (n.status === 'cancelada') tipos.nfcom.cancelada++;
+          tipos.nfcom.valor_total += num(n.valor_nota);
+          somaImpostos(tipos.nfcom, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', fust: 'valor_fust', funttel: 'valor_funttel' });
+        }
+      });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
 
     // Modelo 0 = Fatura de Serviços (o que a maior parte do volume de telecom
     // usa hoje), 21/22 são os modelos antigos de nota telecom "clássica".
     for (const [chave, modelo] of [['telecom0', '0'], ['telecom21', '21'], ['telecom22', '22']]) {
       try {
-        const notas = await hubsoft.listarNotaTelecom({ documento, dataInicio, dataFim, modelo });
-        for (const n of notas) {
-          tipos[chave].total++;
-          // "situacao": 'N' = normal, 'C' = cancelada (campo usado neste endpoint,
-          // diferente do "status" usado em NFSe/NFCOM).
-          if (n.situacao === 'C' || String(n.status || '').includes('cancel')) tipos[chave].cancelada++;
-          tipos[chave].valor_total += num(n.valor_nota ?? n.valor);
-          somaImpostos(tipos[chave], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', irrf: 'valor_irrf', fust: 'valor_fust', funttel: 'valor_funttel' });
-        }
+        await hubsoft.varrerNotaTelecom({ documento, dataInicio, dataFim, modelo }, async (lote) => {
+          for (const n of lote) {
+            tipos[chave].total++;
+            // "situacao": 'N' = normal, 'C' = cancelada (campo usado neste endpoint,
+            // diferente do "status" usado em NFSe/NFCOM).
+            if (n.situacao === 'C' || String(n.status || '').includes('cancel')) tipos[chave].cancelada++;
+            tipos[chave].valor_total += num(n.valor_nota ?? n.valor);
+            somaImpostos(tipos[chave], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', irrf: 'valor_irrf', fust: 'valor_fust', funttel: 'valor_funttel' });
+          }
+        });
       } catch (e) { erroEmpresa = erroEmpresa || e.message; }
     }
 
     try {
-      const nfes = await hubsoft.listarNfe55({ documento, dataInicio, dataFim });
-      for (const n of nfes) {
-        tipos.nfe55.total++;
-        if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
-        tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
-        somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
-      }
+      await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
+        for (const n of lote) {
+          tipos.nfe55.total++;
+          if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
+          tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
+          somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
+        }
+      });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
 
     for (const chave of Object.keys(geral)) {

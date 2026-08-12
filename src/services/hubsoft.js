@@ -211,6 +211,25 @@ async function buscarTodasPaginas(fetchPagina, { extrair, maxPaginas = 60, conc 
   return todos;
 }
 
+// Igual à buscarTodasPaginas, mas NÃO acumula os registros em memória — chama
+// `processarLote(itens)` a cada página e descarta em seguida. Necessário pra
+// endpoints com volume muito grande (nota fiscal, principalmente NFCOM: dezenas
+// de milhares de registros só num mês), onde guardar tudo antes de agregar
+// estourava o heap do Node e derrubava o processo inteiro (visto em produção).
+async function varrerTodasPaginas(fetchPagina, processarLote, { extrair, maxPaginas = 200, conc = 3, deveCancelar } = {}) {
+  await checarCancelamento(deveCancelar);
+  const primeira = await fetchPagina(0);
+  await processarLote(extrair(primeira));
+  const ultima = Math.min(primeira.paginacao?.ultima_pagina || 0, maxPaginas);
+  for (let p = 1; p <= ultima; p += conc) {
+    await checarCancelamento(deveCancelar);
+    const lote = [];
+    for (let i = p; i < Math.min(p + conc, ultima + 1); i++) lote.push(i);
+    const resultados = await Promise.all(lote.map(fetchPagina));
+    for (const d of resultados) await processarLote(extrair(d));
+  }
+}
+
 // ── Consultas de negócio ────────────────────────────────────────────────────
 
 // Lista equipamentos de rede (roteadores, access points, ONUs, etc.)
@@ -542,6 +561,46 @@ async function listarNfe55({ documento, dataInicio, dataFim, tipoData = 'data_em
   );
 }
 
+// ── Versões "streaming" das 4 acima — processam página a página via
+// `processarLote(itens)` em vez de acumular tudo em memória. Usar sempre que
+// só for preciso AGREGAR (somar valores/contar), nunca listar/exibir tudo.
+async function varrerNfse({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300 } = {}, processarLote) {
+  return varrerTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfse', {
+      documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, status,
+      pagina, itens_por_pagina: 500,
+    }),
+    processarLote, { extrair: d => d.nfses || [], maxPaginas }
+  );
+}
+async function varrerNfcom({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todos', maxPaginas = 300 } = {}, processarLote) {
+  return varrerTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfcom', {
+      documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, status,
+      pagina, itens_por_pagina: 500,
+    }),
+    processarLote, { extrair: d => d.nfcoms || [], maxPaginas }
+  );
+}
+async function varrerNotaTelecom({ documento, dataInicio, dataFim, modelo, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300 } = {}, processarLote) {
+  return varrerTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/telecom', {
+      documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, modelo, status,
+      pagina, itens_por_pagina: 500,
+    }),
+    processarLote, { extrair: d => d.notas_fiscais || d.notas || [], maxPaginas }
+  );
+}
+async function varrerNfe55({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status, maxPaginas = 300 } = {}, processarLote) {
+  return varrerTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfe', {
+      documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, ...(status ? { status } : {}),
+      pagina, itens_por_pagina: 500,
+    }),
+    processarLote, { extrair: d => d.nfes || [], maxPaginas }
+  );
+}
+
 // Notas de entrada (compras recebidas de fornecedor) — itens_por_pagina máx 50
 async function listarNotaEntrada({ dataInicio, dataFim, maxPaginas = 40 } = {}) {
   return buscarTodasPaginas(
@@ -573,5 +632,6 @@ module.exports = {
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
   buscarRecebimentos,
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
+  varrerNfse, varrerNfcom, varrerNotaTelecom, varrerNfe55,
   listarCaixasFinanceiro, listarMeiosPagamento,
 };
