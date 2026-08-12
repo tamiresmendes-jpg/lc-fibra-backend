@@ -619,6 +619,69 @@ async function sincronizarTodas() {
   }
 }
 
+// Sincroniza a Análise Fiscal de Janeiro até o mês atual, de todas as
+// empresas (chamada pelo cron das 4h, junto com a Análise de Produto).
+// Mesmo critério: mês atual e anterior sempre atualizam; meses fechados já
+// salvos não repetem a consulta ao ERP.
+async function sincronizarTodasFiscal() {
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const mesAtual = hoje.getMonth();
+  const periodos = [];
+  for (let m = 0; m <= mesAtual; m++) periodos.push([new Date(ano, m, 1), new Date(ano, m + 1, 0)]);
+  const empresas = await db.all('SELECT id, nome FROM empresas');
+  for (const emp of empresas) {
+    for (let i = 0; i < periodos.length; i++) {
+      const [di, df] = periodos[i];
+      const p = `${iso(di)}..${iso(df)}`;
+      const ehRecente = i >= periodos.length - 2;
+      try {
+        if (!ehRecente) {
+          const jaPronto = await db.get("SELECT id FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3 AND status='pronto'", [emp.id, iso(di), iso(df)]);
+          if (jaPronto) { console.log(`[sync-fiscal] ${emp.nome || emp.id} ${p} — já salvo, pula`); continue; }
+        }
+        console.log(`[sync-fiscal] ${emp.nome || emp.id} ${p}`);
+        const cache = await db.get('SELECT id FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3', [emp.id, iso(di), iso(df)]);
+        const id = cache?.id || uuidv4();
+        if (cache) await db.run("UPDATE erp_fiscal_cache SET status='processando', erro=NULL WHERE id=$1", [id]);
+        else await db.run("INSERT INTO erp_fiscal_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')", [id, emp.id, iso(di), iso(df)]);
+        await processarCacheFiscal(id, iso(di), iso(df));
+      } catch (e) { console.error(`[sync-fiscal] falha ${emp.id} ${p}:`, e.message); }
+    }
+  }
+}
+
+// Idem para o Financeiro mensal (Contas a Receber).
+async function sincronizarTodasFinanceiro() {
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const hoje = new Date();
+  const ano = hoje.getFullYear();
+  const mesAtual = hoje.getMonth();
+  const periodos = [];
+  for (let m = 0; m <= mesAtual; m++) periodos.push([new Date(ano, m, 1), new Date(ano, m + 1, 0)]);
+  const empresas = await db.all('SELECT id, nome FROM empresas');
+  for (const emp of empresas) {
+    for (let i = 0; i < periodos.length; i++) {
+      const [di, df] = periodos[i];
+      const p = `${iso(di)}..${iso(df)}`;
+      const ehRecente = i >= periodos.length - 2;
+      try {
+        if (!ehRecente) {
+          const jaPronto = await db.get("SELECT id FROM erp_financeiro_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3 AND status='pronto'", [emp.id, iso(di), iso(df)]);
+          if (jaPronto) { console.log(`[sync-financeiro] ${emp.nome || emp.id} ${p} — já salvo, pula`); continue; }
+        }
+        console.log(`[sync-financeiro] ${emp.nome || emp.id} ${p}`);
+        const cache = await db.get('SELECT id FROM erp_financeiro_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3', [emp.id, iso(di), iso(df)]);
+        const id = cache?.id || uuidv4();
+        if (cache) await db.run("UPDATE erp_financeiro_cache SET status='processando', erro=NULL WHERE id=$1", [id]);
+        else await db.run("INSERT INTO erp_financeiro_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')", [id, emp.id, iso(di), iso(df)]);
+        await processarCacheFinanceiroMensal(id, emp.id, iso(di), iso(df));
+      } catch (e) { console.error(`[sync-financeiro] falha ${emp.id} ${p}:`, e.message); }
+    }
+  }
+}
+
 // ── GET /api/erp/produtos-precos — preço (valor_compra) de cada produto do catálogo ──
 // Cache em memória de 12h para não consultar o ERP a cada acesso.
 let _precosCache = { mapa: null, ts: 0 };
@@ -1501,3 +1564,5 @@ router.post('/painel-testar', autenticar, async (req, res) => {
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;
+module.exports.sincronizarTodasFiscal = sincronizarTodasFiscal;
+module.exports.sincronizarTodasFinanceiro = sincronizarTodasFinanceiro;
