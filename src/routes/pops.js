@@ -119,7 +119,54 @@ router.get('/dashboard', async (req, res) => {
       ORDER BY h.created_at DESC LIMIT 15
     `, [eid]);
 
-    res.json({ totalPops, totalCategorias, totalVisualizacoes, porStatus, porCategoria, maisAcessados, historicoRecente });
+    // POPs por departamento — mesmo padrão de "por categoria", mas pelo
+    // departamento principal do POP (departamento_id).
+    const porDepartamento = await all(`
+      SELECT d.nome, COUNT(p.id) as total
+      FROM departamentos d
+      LEFT JOIN pops p ON p.departamento_id = d.id AND p.empresa_id = d.empresa_id AND p.excluido_em IS NULL
+      WHERE d.empresa_id = $1
+      GROUP BY d.id, d.nome
+      HAVING COUNT(p.id) > 0
+      ORDER BY total DESC
+    `, [eid]);
+
+    // Atualizações de versão de verdade (não toda edição/correção) — e quantas
+    // aconteceram nos últimos 30 dias, pra saber se o ritmo de manutenção caiu.
+    const rowVersoes = await get(`
+      SELECT COUNT(*) as total FROM pop_historico h
+      JOIN pops p ON p.id = h.pop_id
+      WHERE p.empresa_id=$1 AND p.excluido_em IS NULL AND h.tipo_alteracao='nova_versao'
+    `, [eid]);
+    const totalAtualizacoesVersao = rowVersoes.total;
+    const rowVersoes30d = await get(`
+      SELECT COUNT(*) as total FROM pop_historico h
+      JOIN pops p ON p.id = h.pop_id
+      WHERE p.empresa_id=$1 AND p.excluido_em IS NULL AND h.tipo_alteracao='nova_versao'
+        AND h.created_at >= TO_CHAR(NOW() - INTERVAL '3 hours' - INTERVAL '30 days', 'YYYY-MM-DD HH24:MI:SS')
+    `, [eid]);
+    const atualizacoesVersao30d = rowVersoes30d.total;
+
+    // Lançamentos (POPs novos) nos últimos 30 dias, e a linha do tempo mês a
+    // mês do ano corrente — pra ver se o ritmo de criação de POPs novos.
+    const rowNovos30d = await get(`
+      SELECT COUNT(*) as total FROM pops
+      WHERE empresa_id=$1 AND excluido_em IS NULL
+        AND created_at >= TO_CHAR(NOW() - INTERVAL '3 hours' - INTERVAL '30 days', 'YYYY-MM-DD HH24:MI:SS')
+    `, [eid]);
+    const novosPops30d = rowNovos30d.total;
+    const lancamentosPorMes = await all(`
+      SELECT TO_CHAR(created_at::timestamp, 'YYYY-MM') as mes, COUNT(*) as total
+      FROM pops
+      WHERE empresa_id=$1 AND excluido_em IS NULL
+        AND created_at::timestamp >= NOW() - INTERVAL '3 hours' - INTERVAL '12 months'
+      GROUP BY mes ORDER BY mes ASC
+    `, [eid]);
+
+    res.json({
+      totalPops, totalCategorias, totalVisualizacoes, porStatus, porCategoria, maisAcessados, historicoRecente,
+      porDepartamento, totalAtualizacoesVersao, atualizacoesVersao30d, novosPops30d, lancamentosPorMes,
+    });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
