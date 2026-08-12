@@ -234,7 +234,7 @@ router.get('/:id', async (req, res) => {
     const pops = await all(`
       SELECT tp.id, tp.treinamento_id, tp.pop_id, tp.concluido, tp.ordem, tp.instrutor_id,
              tp.tempo_estimado, tp.tempo_realizado, tp.topicos, tp.versao_pop, tp.data_prevista,
-             tp.status_pop, tp.modulo_id, tp.descricao,
+             tp.status_pop, tp.modulo_id, tp.descricao, tp.checklist_marcado,
              COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo, p.versao AS versao_atual,
              u.nome AS instrutor_nome,
              CASE WHEN tp.pop_id IS NOT NULL AND tp.versao_pop IS NOT NULL AND tp.versao_pop != p.versao THEN 1 ELSE 0 END AS precisa_reciclagem
@@ -375,16 +375,17 @@ router.post('/:id/modulos/:modulo_id/pops', async (req, res) => {
 router.put('/:id/pops/:pop_id', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
-    const { instrutor_id, tempo_estimado, tempo_realizado, topicos, data_prevista, status_pop } = req.body;
+    const { instrutor_id, tempo_estimado, tempo_realizado, topicos, data_prevista, status_pop, checklist_marcado } = req.body;
     await run(`UPDATE treinamento_pops SET
       instrutor_id=COALESCE($1, instrutor_id),
       tempo_estimado=COALESCE($2, tempo_estimado),
       tempo_realizado=COALESCE($3, tempo_realizado),
       topicos=COALESCE($4, topicos),
       data_prevista=COALESCE($5, data_prevista),
-      status_pop=COALESCE($6, status_pop)
+      status_pop=COALESCE($6, status_pop),
+      checklist_marcado=COALESCE($9, checklist_marcado)
       WHERE treinamento_id=$7 AND (pop_id=$8 OR id=$8)
-    `, [instrutor_id ?? null, tempo_estimado ?? null, tempo_realizado ?? null, topicos ?? null, data_prevista ?? null, status_pop ?? null, req.params.id, req.params.pop_id]);
+    `, [instrutor_id ?? null, tempo_estimado ?? null, tempo_realizado ?? null, topicos ?? null, data_prevista ?? null, status_pop ?? null, req.params.id, req.params.pop_id, checklist_marcado ?? null]);
     res.json({ mensagem: 'Atualizado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

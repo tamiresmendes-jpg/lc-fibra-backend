@@ -484,6 +484,10 @@ async function initSchema() {
       colaborador_id TEXT
     );
     ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS modulo_id TEXT;
+    -- Checklist do tópico (treinamento_pops.topicos) é conteúdo pro colaborador
+    -- (só leitura, "informações importantes"), mas pro INSTRUTOR é uma lista de
+    -- verificação de verdade — aqui fica quais itens ele já marcou como feitos.
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS checklist_marcado TEXT;
     -- Instrutor do MÓDULO inteiro (repassa todos os tópicos dele) — diferente do
     -- instrutor por tópico (treinamento_pops.instrutor_id), que cobre só aquele
     -- tópico específico. Um módulo pode ter os dois: um instrutor geral do módulo
