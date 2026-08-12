@@ -916,6 +916,61 @@ router.get('/financeiro', async (req, res) => {
   }
 });
 
+// ── GET /api/erp/financeiro-mensal — recebido x a receber, mês a mês (por vencimento) ──
+router.get('/financeiro-mensal', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const meses = Math.min(24, Math.max(1, Number(req.query.meses) || 12));
+    // Varre do 1º dia do mês mais antigo até o último dia do mês atual.
+    const inicioJanela = new Date(hoje.getFullYear(), hoje.getMonth() - (meses - 1), 1);
+    const fimJanela = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    const dataInicio = iso(inicioJanela);
+    const dataFim = iso(fimJanela);
+
+    const faturas = await hubsoft.listarFaturas({ dataInicio, dataFim });
+    const hojeStr = iso(hoje);
+
+    // Monta os meses da janela (mesmo os sem fatura nenhuma aparecem, com zero).
+    const porMes = {};
+    for (let i = 0; i < meses; i++) {
+      const d = new Date(inicioJanela.getFullYear(), inicioJanela.getMonth() + i, 1);
+      const chave = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      porMes[chave] = { mes: chave, faturado: 0, recebido: 0, a_receber: 0, vencido: 0, qtd: 0, qtd_pagas: 0, qtd_abertas: 0 };
+    }
+
+    for (const f of faturas) {
+      const venc = f.data_vencimento;
+      if (!venc) continue;
+      const chave = venc.slice(0, 7);
+      if (!porMes[chave]) continue; // fora da janela pedida (não deveria acontecer)
+      const pago = !!f.data_pagamento;
+      const valorOriginal = Number(f.valor_original || f.valor || 0);
+      const vencida = !pago && venc < hojeStr;
+      const m = porMes[chave];
+      m.qtd++;
+      m.faturado += valorOriginal;
+      if (pago) { m.recebido += Number(f.valor_pago || 0); m.qtd_pagas++; }
+      else {
+        m.qtd_abertas++;
+        m.a_receber += Number(f.valor || valorOriginal);
+        if (vencida) m.vencido += Number(f.valor || valorOriginal);
+      }
+    }
+
+    const lista = Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
+    const totais = lista.reduce((acc, m) => ({
+      faturado: acc.faturado + m.faturado, recebido: acc.recebido + m.recebido,
+      a_receber: acc.a_receber + m.a_receber, vencido: acc.vencido + m.vencido,
+    }), { faturado: 0, recebido: 0, a_receber: 0, vencido: 0 });
+
+    res.json({ janela: { data_inicio: dataInicio, data_fim: dataFim, meses }, totais, meses: lista });
+  } catch (e) {
+    console.error('Erro /erp/financeiro-mensal:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar financeiro mensal: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
 // ── GET /api/erp/atendimentos — chamados por período, agrupados por status/tipo ──
 router.get('/atendimentos', async (req, res) => {
   try {

@@ -555,6 +555,17 @@ async function listarNotaEntrada({ dataInicio, dataFim, maxPaginas = 40 } = {}) 
 
 function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
 
+// Caixas financeiros e meios de pagamento cadastrados (config, chamada única
+// sem paginação) — usados hoje só pra identificar como cada fatura foi paga.
+async function listarCaixasFinanceiro() {
+  const d = await apiGet('/api/v1/integracao/configuracao/caixa_financeiro');
+  return d.caixas_financeiro || [];
+}
+async function listarMeiosPagamento() {
+  const d = await apiGet('/api/v1/integracao/configuracao/meio_pagamento');
+  return d.meios_pagamento || [];
+}
+
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
   relatorioServicos, autenticarPainel, statusContrato,
@@ -562,4 +573,5 @@ module.exports = {
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
   buscarRecebimentos,
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
+  listarCaixasFinanceiro, listarMeiosPagamento,
 };
