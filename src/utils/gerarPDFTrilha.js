@@ -4,6 +4,12 @@
 const { htmlParaPdf } = require('./gerarPDFHtml');
 
 const esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+// Módulo já pode ter sido salvo como "Módulo 1 - Conhecendo a empresa" — sem
+// isso, o PDF mostrava "Módulo 1 — Módulo 1 - Conhecendo a empresa" duplicado
+// (mesma correção já aplicada na tela de execução do colaborador).
+function nomeLimpoModulo(nome) {
+  return (nome || '').replace(/^m[oó]dulo\s*\d+\s*[-–—:]?\s*/i, '').trim();
+}
 function fmtDataHora(s) {
   if (!s) return '—';
   const d = new Date(s.includes('T') ? s : s.replace(' ', 'T'));
@@ -63,7 +69,7 @@ function montarHtmlTrilha(dados, completo = false) {
     return `
       <div class="modulo">
         ${m.nome ? `<div class="modulo-header">
-          <span class="modulo-nome">Módulo ${mi + 1} — ${esc(m.nome)}</span>
+          <span class="modulo-nome">Módulo ${mi + 1} — ${esc(nomeLimpoModulo(m.nome))}</span>
           <span class="modulo-extras">
             ${m.colaborador_nome ? `<span class="modulo-colab">Treinando: ${esc(m.colaborador_nome)}</span>` : ''}
             ${m.instrutor_nome ? `<span class="modulo-colab">Instrutor: ${esc(m.instrutor_nome)}</span>` : ''}
@@ -82,12 +88,13 @@ function montarHtmlTrilha(dados, completo = false) {
     .cabecalho .sub{font-size:11px;opacity:.9}
     .info{display:grid;grid-template-columns:1fr 1fr;gap:6px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 16px;margin-bottom:18px;font-size:11px}
     .info b{color:#0b2b6b}
-    .modulo{margin-bottom:18px;page-break-inside:avoid}
+    .modulo{margin-bottom:18px}
+    .modulo-header{page-break-after:avoid;break-after:avoid}
     .modulo-header{background:#eef2ff;border-radius:6px;padding:7px 12px;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px}
     .modulo-extras{display:flex;gap:12px;flex-wrap:wrap}
     .modulo-nome{font-weight:800;color:#0b2b6b;font-size:12.5px}
     .modulo-colab{font-size:10.5px;color:#64748b}
-    .pop-item{border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:8px;margin-left:8px}
+    .pop-item{border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:8px;margin-left:8px;page-break-inside:avoid}
     .pop-item-topo{display:flex;align-items:center;gap:8px;margin-bottom:4px}
     .pop-num{background:#7B55F1;color:#fff;border-radius:50%;width:20px;height:20px;display:inline-flex;align-items:center;justify-content:center;font-size:9px;flex-shrink:0}
     .pop-titulo{font-weight:700;flex:1}
@@ -144,7 +151,7 @@ function montarHtmlTrilhaPrincipal(principal, trilhas) {
       ].filter(Boolean).join(' · ');
       return `
         <div class="modulo-mini">
-          ${m.nome ? `<div class="modulo-mini-nome">Módulo ${mi + 1} — ${esc(m.nome)}${extrasModulo ? ` <span class="modulo-mini-resp">(${extrasModulo})</span>` : ''}</div>` : ''}
+          ${m.nome ? `<div class="modulo-mini-nome">Módulo ${mi + 1} — ${esc(nomeLimpoModulo(m.nome))}${extrasModulo ? ` <span class="modulo-mini-resp">(${extrasModulo})</span>` : ''}</div>` : ''}
           <ul class="topicos-mini">${linhas || '<li class="vazio">Nenhum tópico.</li>'}</ul>
         </div>`;
     }).join('');
@@ -172,7 +179,8 @@ function montarHtmlTrilhaPrincipal(principal, trilhas) {
     .cabecalho{background:#7B55F1;color:#fff;padding:18px 22px;margin-bottom:16px}
     .cabecalho h1{font-size:19px;margin-bottom:4px}
     .cabecalho .sub{font-size:11px;opacity:.9}
-    .trilha-bloco{border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;page-break-inside:avoid}
+    .trilha-bloco{border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px}
+    .trilha-bloco-topo{page-break-after:avoid;break-after:avoid}
     .trilha-bloco-topo{display:flex;gap:10px;margin-bottom:8px;padding-bottom:8px;border-bottom:1px solid #f1f5f9}
     .trilha-num{background:#7B55F1;color:#fff;border-radius:50%;width:22px;height:22px;flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700}
     .trilha-titulo{font-weight:800;color:#0b2b6b;font-size:13px}
