@@ -1377,6 +1377,22 @@ async function initSchema() {
     )
   `);
 
+  // Cache do financeiro mensal (recebido x a receber) — mesmo padrão.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS erp_financeiro_cache (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      data_inicio TEXT NOT NULL,
+      data_fim TEXT NOT NULL,
+      status TEXT DEFAULT 'processando',
+      dados TEXT,
+      erro TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      UNIQUE(empresa_id, data_inicio, data_fim)
+    )
+  `);
+
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS foto TEXT`);
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS fixo INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS maps_url TEXT`);

@@ -146,6 +146,56 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
   return { registros: pg.data || [], pagina: pg.current_page || pagina, paginas: pg.last_page || 1, total: pg.total || 0 };
 }
 
+// Relatório de Contas a Receber do painel — é o que a usuária confere como
+// "faturamento" de verdade (diferente do endpoint de integração de faturas,
+// que não tem o mesmo critério/alcance). Usa token de PAINEL, método POST, e
+// datas em ISO (não dd/mm/aaaa como o relatório de Serviços) — payload real
+// capturado do próprio painel web do HubSoft.
+// tipo_data aceita: data_vencimento, data_cadastro, data_pagamento.
+async function varrerContaReceber({ empresaId, dataInicio, dataFim, tipoData = 'data_vencimento', quant = 500, maxPaginas = 2000 } = {}, processarLote) {
+  const corpoBase = {
+    apenas_ativo: true,
+    data_inicio: dataInicio, data_fim: dataFim, // ISO: 'YYYY-MM-DDT00:00:00.000Z'
+    tipo_data: tipoData, order_by: 'data_vencimento', order_by_key: 'ASC',
+    quant, relations: true,
+    tipo_endereco: 'instalacao', tipo_cobranca: 'todos',
+    recebido: null, cliente_ativo: null, status_generico: null, busca: null, carne: null, group_by: null,
+    bairro: [], cidade: [], condominio: [], empresa: [], forma_cobranca: [], grupos_clientes: [],
+    grupos_clientes_servicos: [], meio_pagamento: [], servico: [], servico_status: [], tipo_servico: [],
+    usuario_recebimento: [], caixa_financeiro: [], criterios: [],
+  };
+  const chamar = async (token, page) => fetch(`${baseUrl()}/api/v1/relatorio/conta_receber`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
+    body: JSON.stringify({ ...corpoBase, page }),
+  });
+  async function buscarPagina(page) {
+    let resp = await chamar(await getTokenPainel(empresaId), page);
+    if (resp.status === 401) { _tokenPainel = null; _expiraPainel = 0; resp = await chamar(await getTokenPainel(empresaId), page); }
+    const j = await resp.json().catch(() => null);
+    if (!j || j.status !== 'success') throw new Error(`HubSoft conta_receber: ${(j?.errors || []).join(' | ') || j?.msg || 'falha'}`);
+    return j;
+  }
+
+  const primeira = await buscarPagina(1);
+  await processarLote(primeira.dados || []);
+  const ultimaPagina = Math.min(primeira.paginador?.last_page || 1, maxPaginas);
+  const conc = 3;
+  for (let p = 2; p <= ultimaPagina; p += conc) {
+    const lote = [];
+    for (let i = p; i < Math.min(p + conc, ultimaPagina + 1); i++) lote.push(i);
+    const resultados = await Promise.all(lote.map(buscarPagina));
+    for (const r of resultados) await processarLote(r.dados || []);
+  }
+}
+
+// "R$ 1.234,56" → 1234.56
+function parseValorBR(v) {
+  if (v == null) return 0;
+  const s = String(v).replace(/[^\d,.-]/g, '').replace(/\./g, '').replace(',', '.');
+  return Number(s) || 0;
+}
+
 // Situação REAL do contrato de um serviço. O Relatório de Serviços devolve "-"
 // para todo mundo nesse campo (não é confiável); este endpoint devolve o campo
 // `aceito` (true/false) direto, sem ambiguidade. Sem contrato = array vazio.
@@ -304,6 +354,20 @@ async function listarPaginado(caminho, { dataInicio, dataFim, relacoes, extra = 
       ...extra,
     }),
     { extrair: d => { const key = chaveArray || Object.keys(d).find(k => Array.isArray(d[k])); return key ? d[key] : []; }, maxPaginas }
+  );
+}
+
+// Versão "streaming" de faturas — processa e descarta página a página, sem
+// limite baixo de páginas. O volume é grande (~10 mil faturas em 12 dias só
+// em ago/2026), então listarFaturas (maxPaginas=60, 100/página = 6 mil no
+// total) parava bem antes do fim em janelas de vários meses — por isso meses
+// mais recentes apareciam com faturamento zerado num período de 12/24 meses.
+async function varrerFaturas({ dataInicio, dataFim, maxPaginas = 2000 } = {}, processarLote) {
+  return varrerTodasPaginas(
+    (pagina) => apiGet('/api/v1/integracao/financeiro/fatura', {
+      pagina, itens_por_pagina: 500, data_inicio: dataInicio, data_fim: dataFim, relacoes: 'cliente',
+    }),
+    processarLote, { extrair: d => d.faturas || [], maxPaginas }
   );
 }
 
@@ -628,7 +692,7 @@ async function listarMeiosPagamento() {
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
   relatorioServicos, autenticarPainel, statusContrato,
-  listarFaturas, listarAtendimentos, listarClientes, listarMovimentosEstoque,
+  listarFaturas, varrerFaturas, varrerContaReceber, parseValorBR, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
   buscarRecebimentos,
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,

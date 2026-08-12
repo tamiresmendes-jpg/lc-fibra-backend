@@ -928,10 +928,92 @@ router.get('/financeiro', async (req, res) => {
   }
 });
 
+// Converte "01/08/2026" (dd/mm/aaaa, como o relatório de Contas a Receber
+// devolve) pra "2026-08" (chave do mês) e pra comparação de string YYYY-MM-DD.
+function dataBRParaChaveMes(dataBR) {
+  const [dia, mes, ano] = String(dataBR || '').split('/');
+  if (!dia || !mes || !ano) return null;
+  return { chaveMes: `${ano}-${mes}`, iso: `${ano}-${mes}-${dia}` };
+}
+
+// Calcula faturado/recebido/a_receber/vencido por mês a partir do relatório
+// de Contas a Receber do painel (mesmo critério que a usuária já usa: tudo
+// que tem VENCIMENTO naquele mês) — processado página a página, nunca guarda
+// a lista inteira (mesmo problema de memória já corrigido na Análise Fiscal).
+async function calcularFinanceiroMensal(empresaId, dataInicio, dataFim) {
+  const hoje = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  const hojeStr = iso(hoje);
+
+  // Monta todos os meses entre data_inicio e data_fim (mesmo os sem cobrança
+  // nenhuma aparecem, com zero) — pode ser só 1 mês (o padrão) ou vários.
+  const inicioJanela = new Date(dataInicio + 'T00:00:00');
+  const fimJanela = new Date(dataFim + 'T00:00:00');
+  const porMes = {};
+  const cursor = new Date(inicioJanela.getFullYear(), inicioJanela.getMonth(), 1);
+  while (cursor <= fimJanela) {
+    const chave = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
+    porMes[chave] = { mes: chave, faturado: 0, recebido: 0, a_receber: 0, vencido: 0, qtd: 0, qtd_pagas: 0, qtd_abertas: 0 };
+    cursor.setMonth(cursor.getMonth() + 1);
+  }
+
+  // O relatório quer as datas em ISO (não dd/mm/aaaa) — início do dia inicial
+  // até o fim do dia final, cobrindo o mês inteiro.
+  const dataInicioISO = `${dataInicio}T00:00:00.000Z`;
+  const dataFimISO = `${dataFim}T23:59:59.999Z`;
+
+  await hubsoft.varrerContaReceber({ empresaId, dataInicio: dataInicioISO, dataFim: dataFimISO }, async (lote) => {
+    for (const f of lote) {
+      const venc = dataBRParaChaveMes(f.data_vencimento);
+      if (!venc) continue;
+      const chave = venc.chaveMes;
+      if (!porMes[chave]) continue; // fora da janela pedida (não deveria acontecer)
+      const pago = !!f.data_pagamento;
+      const valor = hubsoft.parseValorBR(f.valor);
+      const valorPago = hubsoft.parseValorBR(f.valor_pago);
+      const vencida = !pago && venc.iso < hojeStr;
+      const m = porMes[chave];
+      m.qtd++;
+      m.faturado += valor;
+      if (pago) { m.recebido += valorPago; m.qtd_pagas++; }
+      else {
+        m.qtd_abertas++;
+        m.a_receber += valor;
+        if (vencida) m.vencido += valor;
+      }
+    }
+  });
+
+  const lista = Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
+  const totais = lista.reduce((acc, m) => ({
+    faturado: acc.faturado + m.faturado, recebido: acc.recebido + m.recebido,
+    a_receber: acc.a_receber + m.a_receber, vencido: acc.vencido + m.vencido,
+  }), { faturado: 0, recebido: 0, a_receber: 0, vencido: 0 });
+
+  return { janela: { data_inicio: dataInicio, data_fim: dataFim }, totais, meses: lista };
+}
+
+async function processarCacheFinanceiroMensal(id, empresaId, dataInicio, dataFim) {
+  try {
+    const resultado = await calcularFinanceiroMensal(empresaId, dataInicio, dataFim);
+    await db.run(
+      `UPDATE erp_financeiro_cache SET status='pronto', dados=$1, erro=NULL, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$2`,
+      [JSON.stringify(resultado), id]
+    );
+  } catch (e) {
+    console.error('Erro ao processar financeiro mensal em background:', e.message);
+    await db.run(
+      `UPDATE erp_financeiro_cache SET status='erro', erro=$1, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$2`,
+      [e.message.replace('HUBSOFT', 'HubSoft'), id]
+    ).catch(() => {});
+  }
+}
+
 // ── GET /api/erp/financeiro-mensal — recebido x a receber, mês a mês (por vencimento) ──
 // Por padrão só o mês atual — mas aceita data_inicio/data_fim explícitos pra
-// consultar outro mês, o ano inteiro, ou uma janela de N meses (o frontend
-// calcula o intervalo certo conforme a opção escolhida).
+// consultar outro mês, o ano inteiro, ou uma janela de N meses. Roda em
+// segundo plano com cache (mesmo padrão da Análise Fiscal), porque janelas de
+// vários meses envolvem dezenas de milhares de faturas.
 router.get('/financeiro-mensal', async (req, res) => {
   try {
     const hoje = new Date();
@@ -940,48 +1022,30 @@ router.get('/financeiro-mensal', async (req, res) => {
     const fimMesAtual = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
     const dataInicio = req.query.data_inicio || iso(inicioMesAtual);
     const dataFim = req.query.data_fim || iso(fimMesAtual);
+    const forcar = req.query.forcar === '1';
+    const empresaId = req.usuario.empresa_id;
 
-    const faturas = await hubsoft.listarFaturas({ dataInicio, dataFim });
-    const hojeStr = iso(hoje);
+    const cache = await db.get(
+      `SELECT * FROM erp_financeiro_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3`,
+      [empresaId, dataInicio, dataFim]
+    );
 
-    // Monta todos os meses entre data_inicio e data_fim (mesmo os sem fatura
-    // nenhuma aparecem, com zero) — pode ser só 1 mês (o padrão) ou vários.
-    const inicioJanela = new Date(dataInicio + 'T00:00:00');
-    const fimJanela = new Date(dataFim + 'T00:00:00');
-    const porMes = {};
-    const cursor = new Date(inicioJanela.getFullYear(), inicioJanela.getMonth(), 1);
-    while (cursor <= fimJanela) {
-      const chave = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
-      porMes[chave] = { mes: chave, faturado: 0, recebido: 0, a_receber: 0, vencido: 0, qtd: 0, qtd_pagas: 0, qtd_abertas: 0 };
-      cursor.setMonth(cursor.getMonth() + 1);
+    if (cache && cache.status === 'pronto' && !forcar) {
+      return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
+    }
+    if (cache && cache.status === 'processando' && !forcar) {
+      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 15 * 60 * 1000;
+      if (!velho) return res.json({ status: 'processando' });
     }
 
-    for (const f of faturas) {
-      const venc = f.data_vencimento;
-      if (!venc) continue;
-      const chave = venc.slice(0, 7);
-      if (!porMes[chave]) continue; // fora da janela pedida (não deveria acontecer)
-      const pago = !!f.data_pagamento;
-      const valorOriginal = Number(f.valor_original || f.valor || 0);
-      const vencida = !pago && venc < hojeStr;
-      const m = porMes[chave];
-      m.qtd++;
-      m.faturado += valorOriginal;
-      if (pago) { m.recebido += Number(f.valor_pago || 0); m.qtd_pagas++; }
-      else {
-        m.qtd_abertas++;
-        m.a_receber += Number(f.valor || valorOriginal);
-        if (vencida) m.vencido += Number(f.valor || valorOriginal);
-      }
+    const id = cache?.id || uuidv4();
+    if (cache) {
+      await db.run(`UPDATE erp_financeiro_cache SET status='processando', erro=NULL, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$1`, [id]);
+    } else {
+      await db.run(`INSERT INTO erp_financeiro_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')`, [id, empresaId, dataInicio, dataFim]);
     }
-
-    const lista = Object.values(porMes).sort((a, b) => a.mes.localeCompare(b.mes));
-    const totais = lista.reduce((acc, m) => ({
-      faturado: acc.faturado + m.faturado, recebido: acc.recebido + m.recebido,
-      a_receber: acc.a_receber + m.a_receber, vencido: acc.vencido + m.vencido,
-    }), { faturado: 0, recebido: 0, a_receber: 0, vencido: 0 });
-
-    res.json({ janela: { data_inicio: dataInicio, data_fim: dataFim }, totais, meses: lista });
+    processarCacheFinanceiroMensal(id, empresaId, dataInicio, dataFim); // sem await (background)
+    res.json({ status: 'processando' });
   } catch (e) {
     console.error('Erro /erp/financeiro-mensal:', e.message);
     res.status(500).json({ erro: 'Erro ao buscar financeiro mensal: ' + e.message.replace('HUBSOFT', 'HubSoft') });
