@@ -570,12 +570,12 @@ router.get('/:id/anotacoes', async (req, res) => {
 router.post('/:id/anotacoes', async (req, res) => {
   try {
     if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
-    const { texto, tipo, pop_id } = req.body;
+    const { texto, tipo, pop_id, trecho } = req.body;
     if (!texto) return res.status(400).json({ erro: 'Texto obrigatório' });
     const id = uuidv4();
-    await run(`INSERT INTO treinamento_anotacoes (id, treinamento_id, pop_id, usuario_id, tipo, texto)
-      VALUES ($1,$2,$3,$4,$5,$6)
-    `, [id, req.params.id, pop_id || null, req.usuario.id, tipo || 'observacao', texto]);
+    await run(`INSERT INTO treinamento_anotacoes (id, treinamento_id, pop_id, usuario_id, tipo, texto, trecho)
+      VALUES ($1,$2,$3,$4,$5,$6,$7)
+    `, [id, req.params.id, pop_id || null, req.usuario.id, tipo || 'observacao', texto, trecho || null]);
     res.status(201).json({ id });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });

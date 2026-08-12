@@ -471,6 +471,9 @@ async function initSchema() {
       texto TEXT NOT NULL,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    -- Trecho do POP selecionado (igual ao "trecho" do comentário de POP) —
+    -- pra saber exatamente qual parte do procedimento gerou a dúvida/anotação.
+    ALTER TABLE treinamento_anotacoes ADD COLUMN IF NOT EXISTS trecho TEXT;
 
     -- Módulo dentro de uma trilha (treinamento): agrupa os sub-módulos (POPs).
     -- colaborador_id: só usado quando a trilha é repassada DIVIDIDA por módulo
