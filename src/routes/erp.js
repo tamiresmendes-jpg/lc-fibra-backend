@@ -748,7 +748,7 @@ function notaVazia() {
 async function calcularFiscal(dataInicio, dataFim) {
   const empresas = await db.all('SELECT id, nome, cnpj FROM empresas');
   const porEmpresa = [];
-  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
 
   for (const emp of empresas) {
     const documento = (emp.cnpj || '').replace(/\D/g, '');
@@ -757,7 +757,7 @@ async function calcularFiscal(dataInicio, dataFim) {
       continue;
     }
 
-    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
     let erroEmpresa = null;
     try {
       const nfses = await hubsoft.listarNfse({ documento, dataInicio, dataFim });
@@ -779,14 +779,18 @@ async function calcularFiscal(dataInicio, dataFim) {
       }
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
 
-    for (const [chave, modelo] of [['telecom21', '21'], ['telecom22', '22']]) {
+    // Modelo 0 = Fatura de Serviços (o que a maior parte do volume de telecom
+    // usa hoje), 21/22 são os modelos antigos de nota telecom "clássica".
+    for (const [chave, modelo] of [['telecom0', '0'], ['telecom21', '21'], ['telecom22', '22']]) {
       try {
         const notas = await hubsoft.listarNotaTelecom({ documento, dataInicio, dataFim, modelo });
         for (const n of notas) {
           tipos[chave].total++;
-          if (n.status === 'cancelada') tipos[chave].cancelada++;
+          // "situacao": 'N' = normal, 'C' = cancelada (campo usado neste endpoint,
+          // diferente do "status" usado em NFSe/NFCOM).
+          if (n.situacao === 'C' || String(n.status || '').includes('cancel')) tipos[chave].cancelada++;
           tipos[chave].valor_total += num(n.valor_nota ?? n.valor);
-          somaImpostos(tipos[chave], n, { icms: 'valor_icms', iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins' });
+          somaImpostos(tipos[chave], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', irrf: 'valor_irrf', fust: 'valor_fust', funttel: 'valor_funttel' });
         }
       } catch (e) { erroEmpresa = erroEmpresa || e.message; }
     }
