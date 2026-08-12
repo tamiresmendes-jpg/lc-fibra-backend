@@ -630,23 +630,20 @@ async function sincronizarTodasFiscal() {
   const mesAtual = hoje.getMonth();
   const periodos = [];
   for (let m = 0; m <= mesAtual; m++) periodos.push([new Date(ano, m, 1), new Date(ano, m + 1, 0)]);
+  periodos.reverse(); // mês atual primeiro, depois vai voltando (histórico mais antigo por último)
   const empresas = await db.all('SELECT id, nome FROM empresas');
   for (const emp of empresas) {
     for (let i = 0; i < periodos.length; i++) {
       const [di, df] = periodos[i];
       const p = `${iso(di)}..${iso(df)}`;
-      const ehRecente = i >= periodos.length - 2;
+      const ehRecente = i < 2; // os dois primeiros da lista invertida = mês atual e anterior
       try {
         if (!ehRecente) {
           const jaPronto = await db.get("SELECT id FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3 AND status='pronto'", [emp.id, iso(di), iso(df)]);
           if (jaPronto) { console.log(`[sync-fiscal] ${emp.nome || emp.id} ${p} — já salvo, pula`); continue; }
         }
         console.log(`[sync-fiscal] ${emp.nome || emp.id} ${p}`);
-        const cache = await db.get('SELECT id FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3', [emp.id, iso(di), iso(df)]);
-        const id = cache?.id || uuidv4();
-        if (cache) await db.run("UPDATE erp_fiscal_cache SET status='processando', erro=NULL WHERE id=$1", [id]);
-        else await db.run("INSERT INTO erp_fiscal_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')", [id, emp.id, iso(di), iso(df)]);
-        await processarCacheFiscal(id, iso(di), iso(df));
+        await sincronizarFiscal(emp.id, iso(di), iso(df));
       } catch (e) { console.error(`[sync-fiscal] falha ${emp.id} ${p}:`, e.message); }
     }
   }
@@ -889,6 +886,16 @@ async function calcularFiscal(dataInicio, dataFim) {
   }
 
   return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, total_geral: totalGeral, por_tipo: geral, por_empresa: porEmpresa };
+}
+
+// Sincroniza UM período específico da Análise Fiscal (usado pela rotina diária
+// e por sincronizações pontuais/parciais, ex.: só mês atual + anterior).
+async function sincronizarFiscal(empresaId, dataInicio, dataFim) {
+  const cache = await db.get('SELECT id FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3', [empresaId, dataInicio, dataFim]);
+  const id = cache?.id || uuidv4();
+  if (cache) await db.run("UPDATE erp_fiscal_cache SET status='processando', erro=NULL WHERE id=$1", [id]);
+  else await db.run("INSERT INTO erp_fiscal_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')", [id, empresaId, dataInicio, dataFim]);
+  await processarCacheFiscal(id, dataInicio, dataFim);
 }
 
 async function processarCacheFiscal(id, dataInicio, dataFim) {
