@@ -921,26 +921,31 @@ router.get('/financeiro', async (req, res) => {
 });
 
 // ── GET /api/erp/financeiro-mensal — recebido x a receber, mês a mês (por vencimento) ──
+// Por padrão só o mês atual — mas aceita data_inicio/data_fim explícitos pra
+// consultar outro mês, o ano inteiro, ou uma janela de N meses (o frontend
+// calcula o intervalo certo conforme a opção escolhida).
 router.get('/financeiro-mensal', async (req, res) => {
   try {
     const hoje = new Date();
     const iso = (d) => d.toISOString().slice(0, 10);
-    const meses = Math.min(24, Math.max(1, Number(req.query.meses) || 12));
-    // Varre do 1º dia do mês mais antigo até o último dia do mês atual.
-    const inicioJanela = new Date(hoje.getFullYear(), hoje.getMonth() - (meses - 1), 1);
-    const fimJanela = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
-    const dataInicio = iso(inicioJanela);
-    const dataFim = iso(fimJanela);
+    const inicioMesAtual = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
+    const fimMesAtual = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
+    const dataInicio = req.query.data_inicio || iso(inicioMesAtual);
+    const dataFim = req.query.data_fim || iso(fimMesAtual);
 
     const faturas = await hubsoft.listarFaturas({ dataInicio, dataFim });
     const hojeStr = iso(hoje);
 
-    // Monta os meses da janela (mesmo os sem fatura nenhuma aparecem, com zero).
+    // Monta todos os meses entre data_inicio e data_fim (mesmo os sem fatura
+    // nenhuma aparecem, com zero) — pode ser só 1 mês (o padrão) ou vários.
+    const inicioJanela = new Date(dataInicio + 'T00:00:00');
+    const fimJanela = new Date(dataFim + 'T00:00:00');
     const porMes = {};
-    for (let i = 0; i < meses; i++) {
-      const d = new Date(inicioJanela.getFullYear(), inicioJanela.getMonth() + i, 1);
-      const chave = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    const cursor = new Date(inicioJanela.getFullYear(), inicioJanela.getMonth(), 1);
+    while (cursor <= fimJanela) {
+      const chave = `${cursor.getFullYear()}-${String(cursor.getMonth() + 1).padStart(2, '0')}`;
       porMes[chave] = { mes: chave, faturado: 0, recebido: 0, a_receber: 0, vencido: 0, qtd: 0, qtd_pagas: 0, qtd_abertas: 0 };
+      cursor.setMonth(cursor.getMonth() + 1);
     }
 
     for (const f of faturas) {
@@ -968,7 +973,7 @@ router.get('/financeiro-mensal', async (req, res) => {
       a_receber: acc.a_receber + m.a_receber, vencido: acc.vencido + m.vencido,
     }), { faturado: 0, recebido: 0, a_receber: 0, vencido: 0 });
 
-    res.json({ janela: { data_inicio: dataInicio, data_fim: dataFim, meses }, totais, meses: lista });
+    res.json({ janela: { data_inicio: dataInicio, data_fim: dataFim }, totais, meses: lista });
   } catch (e) {
     console.error('Erro /erp/financeiro-mensal:', e.message);
     res.status(500).json({ erro: 'Erro ao buscar financeiro mensal: ' + e.message.replace('HUBSOFT', 'HubSoft') });
