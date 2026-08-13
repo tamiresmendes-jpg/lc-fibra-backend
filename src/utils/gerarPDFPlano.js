@@ -81,8 +81,14 @@ const COMPOSICAO_CADASTRO = [
   ['descricao_nota_fiscal', 'Descrição Nota Fiscal'], ['plano_conta', 'Plano de Contas'],
   ['empresa', 'Empresa'], ['incluir_dici_anatel', 'Incluir DICI Anatel'],
   ['tipo_servico', 'Tipo de Serviço'], ['tipo_documento_fiscal', 'Tipo de Documento Fiscal'],
-  ['aplicar_partilha_icms', 'Aplicar Partilha ICMS'], ['incluir_nfcom', 'Incluir Nfcom'],
+  ['aplicar_partilha_icms', 'Aplicar Partilha ICMS'],
 ];
+// "Incluir Nfcom" só existe na tela do painel quando o Tipo de Documento
+// Fiscal do item NÃO é NFCom (fica redundante/escondido quando já é NFCom).
+function ehDocumentoNfcom(item) {
+  const doc = item?.tipo_documento_fiscal;
+  return /nfcom/i.test(doc?.descricao || doc?.display || '');
+}
 const COMPOSICAO_ICMS = [['icms', 'ICMS (%)'], ['cst_tributacao', 'CST Tributação (ICMS)'], ['tipo_tributo', 'Tipo Tributação (ICMS)']];
 const COMPOSICAO_PIS = [['pis', 'PIS (%)'], ['cst_pis', 'CST PIS'], ['tipo_bc_pis', 'Tipo BC PIS']];
 const COMPOSICAO_COFINS = [['cofins', 'COFINS (%)'], ['cst_cofins', 'CST COFINS'], ['tipo_bc_cofins', 'Tipo BC COFINS']];
@@ -137,7 +143,7 @@ function renderItemComposicao(item, titulo) {
     ${grupo('Compra Governamental', item, COMPOSICAO_COMPRA_GOV)}
   ` : '';
   return `<div class="bloco"><b class="bloco-titulo">${esc(titulo)}</b>
-    ${grupo('Dados Cadastrais / Financeiros', item, COMPOSICAO_CADASTRO)}
+    ${grupo('Dados Cadastrais / Financeiros', item, ehDocumentoNfcom(item) ? COMPOSICAO_CADASTRO : [...COMPOSICAO_CADASTRO, ['incluir_nfcom', 'Incluir Nfcom']])}
     <div class="grupolinha">${grupo('ICMS', item, COMPOSICAO_ICMS)}${grupo('PIS', item, COMPOSICAO_PIS)}${grupo('COFINS', item, COMPOSICAO_COFINS)}</div>
     ${ibsCbsHtml}
     <div class="grupolinha">${grupo('Outros Impostos', item, COMPOSICAO_OUTROS)}${grupo('Produto / Estoque', item, COMPOSICAO_PRODUTO_ESTOQUE)}</div>
