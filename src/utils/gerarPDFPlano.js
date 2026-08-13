@@ -187,6 +187,29 @@ function renderConfiguracao(obj) {
   </div>`;
 }
 
+// Mesmos campos da tela "Pacotes" (catálogo geral) do painel.
+const PACOTE_CADASTRO = [
+  ['descricao', 'Descrição'], ['codigo', 'Código'], ['valor', 'Valor'],
+  ['degustacao', 'Degustação'], ['obrigatorio', 'Obrigatório'], ['ativo', 'Ativo'],
+];
+const PACOTE_CONFIG = [
+  ['gerenciado_api', 'Gerenciado API'], ['permite_stfc', 'Permite STFC'], ['permite_mvno', 'Permite MVNO'],
+  ['permite_degustacao', 'Permite Degustação'], ['nao_cobrar_degustacao', 'Não Cobrar Degustação'],
+  ['permite_proporcional', 'Permite Proporcional'], ['permite_seguranca_monitoramento', 'Permite Segurança/Monitoramento'],
+];
+const PACOTE_CAMPOS_USADOS = comVariantesId([...PACOTE_CADASTRO, ...PACOTE_CONFIG].map(([chave]) => chave));
+
+function renderItemPacote(item, titulo) {
+  const restante = Object.fromEntries(Object.entries(item).filter(([k]) => !k.startsWith('_') && !PACOTE_CAMPOS_USADOS.has(k)));
+  const restanteHtml = Object.keys(restante).length
+    ? `<details open class="aninhado"><summary>Outros campos deste pacote</summary>${kvGrid(restante)}</details>` : '';
+  return `<div class="bloco"><b class="bloco-titulo">${esc(titulo)}</b>
+    ${grupo('Cadastro', item, PACOTE_CADASTRO)}
+    ${grupo('Configuração', item, PACOTE_CONFIG)}
+    ${restanteHtml}
+  </div>`;
+}
+
 function renderValor(v, chave, nivel = 0) {
   if (v === null || v === undefined || v === '') return '<span class="vazio">—</span>';
   if (Array.isArray(v)) {
@@ -195,6 +218,9 @@ function renderValor(v, chave, nivel = 0) {
     if (chave === 'servico_composicao') {
       const lista = agruparComposicao(v);
       return `<div class="arr">${lista.map((item, i) => renderItemComposicao(item, `Item ${i + 1}${item._quantidade > 1 ? ` — ${item._quantidade}x` : ''}`)).join('')}</div>`;
+    }
+    if (chave === 'servico_pacote') {
+      return `<div class="arr">${v.map((item, i) => renderItemPacote(item, `Pacote ${i + 1}`)).join('')}</div>`;
     }
     return `<div class="arr">${v.map((item, i) => renderObjeto(item, nivel + 1, `Item ${i + 1}`)).join('')}</div>`;
   }
@@ -213,12 +239,12 @@ function renderObjeto(obj, nivel, titulo, chave) {
   return `<div class="bloco">${(titulo || resolvido) ? `<b class="bloco-titulo">${esc(cabecalho)}</b>` : ''}${corpo}</div>`;
 }
 
+// PDF do plano traz só o essencial: cadastro + Composição + Pacotes (com a
+// composição/config de cada pacote) — sem Contratos, Desconto, Navegação,
+// Configuração etc. (informação de cadastro do próprio HubSoft, menos útil
+// pra quem só quer conferir o que o cliente está pagando e por quê).
 const SECOES = [
-  ['servico_composicao', 'Composição'], ['servico_desconto', 'Desconto'], ['servico_contrato', 'Contratos'],
-  ['servico_taxa_instalacao', 'Taxa de Instalação'], ['servico_navegacao', 'Navegação'], ['servico_pacote', 'Pacotes'],
-  ['acao_evento_sistema', 'Ações para Eventos'], ['configuracao', 'Configuração'], ['servico_atributo_extra', 'Atributo Extra'],
-  ['servico_mensalidade_progressiva', 'Mensalidade Progressiva'], ['parametros', 'Parâmetros'], ['parametros_estaticos', 'Parâmetros Estáticos'],
-  ['perfil_migracao_servico', 'Migração (SAC)'], ['servico_integracao_rede_neutra', 'Redes Neutras'], ['horarios_acesso', 'Horários de Acesso'],
+  ['servico_composicao', 'Composição'], ['servico_pacote', 'Pacotes'],
 ];
 
 function corpoPlano(plano) {
