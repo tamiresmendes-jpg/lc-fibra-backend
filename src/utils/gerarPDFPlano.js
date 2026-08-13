@@ -30,10 +30,17 @@ function kvGrid(obj, omitir) {
 // (id_tipo_servico) e de novo dentro do próprio objeto resolvido
 // (tipo_servico.tipo_servico). Junta os dois num só "Nome (#id)".
 function nomeResolvido(chave, obj) {
-  const texto = obj?.display || obj?.descricao;
+  const texto = obj?.display || obj?.descricao || obj?.nome;
   if (!texto) return null;
-  const id = obj[chave];
+  const id = obj[chave] ?? obj[`id_${chave}`];
   return id != null ? `${texto} (#${id})` : texto;
+}
+// Inclui as variações id_<chave>/<chave> pra excluir do "Outros campos" tudo
+// que já apareceu resolvido num grupo (senão o número solto reaparece lá).
+function comVariantesId(chaves) {
+  const s = new Set();
+  for (const c of chaves) { s.add(c); s.add(`id_${c}`); s.add(c.replace(/^id_/, '')); }
+  return s;
 }
 // Mesma regra da tela: itens repetidos só agrupam num "×N" se TODA a
 // configuração (menos id/pivot, que sempre variam) for idêntica.
@@ -109,7 +116,7 @@ const COMPOSICAO_GRUPOS = [
   COMPOSICAO_IBS_UF, COMPOSICAO_IBS_MUN, COMPOSICAO_CBS, COMPOSICAO_COMPRA_GOV,
   COMPOSICAO_OUTROS, COMPOSICAO_PRODUTO_ESTOQUE, COMPOSICAO_COMPLEMENTAR,
 ];
-const COMPOSICAO_CAMPOS_USADOS = new Set(COMPOSICAO_GRUPOS.flat().map(([chave]) => chave));
+const COMPOSICAO_CAMPOS_USADOS = comVariantesId(COMPOSICAO_GRUPOS.flat().map(([chave]) => chave));
 
 function renderItemComposicao(item, titulo) {
   const restante = Object.fromEntries(Object.entries(item).filter(([k]) => !k.startsWith('_') && !COMPOSICAO_CAMPOS_USADOS.has(k)));
@@ -161,7 +168,7 @@ const CONFIG_OUTROS = [
   ['forma_cobranca', 'Forma de Cobrança'],
 ];
 const CONFIG_GRUPOS = [CONFIG_GERAIS, CONFIG_FISCAIS, CONFIG_REAJUSTE, CONFIG_OUTROS];
-const CONFIG_CAMPOS_USADOS = new Set(CONFIG_GRUPOS.flat().map(([chave]) => chave));
+const CONFIG_CAMPOS_USADOS = comVariantesId(CONFIG_GRUPOS.flat().map(([chave]) => chave));
 
 function renderConfiguracao(obj) {
   const restante = Object.fromEntries(Object.entries(obj).filter(([k]) => !k.startsWith('_') && !CONFIG_CAMPOS_USADOS.has(k)));
