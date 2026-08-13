@@ -48,14 +48,110 @@ function agruparComposicao(itens) {
   }
   return grupos.map(g => ({ ...g.item, _quantidade: g.qtd }));
 }
+// Grupo com título (ex.: "IBS / CBS") — só aparece se tiver campo preenchido.
+// Mesmo agrupamento das telas "Editar Composição" / "Configuração" do painel.
+function grupo(titulo, obj, campos) {
+  const presentes = campos.filter(([chave]) => obj[chave] !== null && obj[chave] !== undefined && obj[chave] !== '');
+  if (!presentes.length) return '';
+  const kv = presentes.map(([chave, rot]) => `<div class="kv"><span class="kvk">${esc(rot)}</span><span class="kvv">${esc(fmtCampoGrupo(chave, obj[chave]))}</span></div>`).join('');
+  return `<div class="grupo"><span class="grupo-titulo">${esc(titulo)}</span><div class="kvgrid">${kv}</div></div>`;
+}
+function fmtCampoGrupo(chave, v) {
+  if (typeof v === 'boolean') return v ? 'Sim' : 'Não';
+  if (typeof v === 'object') return nomeResolvido(chave, v) || fmtEscalar(chave, JSON.stringify(v));
+  return fmtEscalar(chave, v);
+}
+
+const COMPOSICAO_CADASTRO = [
+  ['descricao', 'Descrição'], ['representacao_percentual', 'Percentual (%)'],
+  ['descricao_nota_fiscal', 'Descrição Nota Fiscal'], ['plano_conta', 'Plano de Contas'],
+  ['empresa', 'Empresa'], ['incluir_dici_anatel', 'Incluir DICI Anatel'],
+  ['tipo_servico', 'Tipo de Serviço'], ['tipo_documento_fiscal', 'Tipo de Documento Fiscal'],
+  ['aplicar_partilha_icms', 'Aplicar Partilha ICMS'], ['incluir_nfcom', 'Incluir Nfcom'],
+];
+const COMPOSICAO_ICMS = [['icms', 'ICMS (%)'], ['cst_tributacao', 'CST Tributação (ICMS)'], ['tipo_tributo', 'Tipo Tributação (ICMS)']];
+const COMPOSICAO_PIS = [['pis', 'PIS (%)'], ['cst_pis', 'CST PIS'], ['tipo_bc_pis', 'Tipo BC PIS']];
+const COMPOSICAO_COFINS = [['cofins', 'COFINS (%)'], ['cst_cofins', 'CST COFINS'], ['tipo_bc_cofins', 'Tipo BC COFINS']];
+const COMPOSICAO_IBSCBS = [
+  ['cst_tributacao_ibs_cbs', 'CST Tributação (IBS/CBS)'], ['cclass_tributacao', 'Classificação do IBS/CBS'],
+  ['tipo_bc_ibs_cbs', 'Tipo BC IBS e CBS'], ['percentual_ibs_uf', 'Alíquota IBS Estadual'],
+  ['percentual_ibs_mun', 'Alíquota IBS Municipal'], ['percentual_cbs', 'Alíquota CBS'],
+];
+const COMPOSICAO_OUTROS = [
+  ['csll', 'CSLL (%)'], ['irrf', 'IRRF (%)'], ['fust', 'FUST (%)'], ['funttel', 'FUNTTEL (%)'], ['fcp', 'FCP (%)'],
+  ['tipo_utilizacao', 'Tipo de Utilização'], ['cclass', 'Classificação de Item da NFCom'],
+  ['codigo_beneficio_fiscal', 'Código do Benefício Fiscal'], ['codigo_servico', 'Código Serviço (IBPT)'],
+  ['cnpj_operadora_longa_distancia', 'CNPJ Operadora Longa Distância'], ['informacao_complementar', 'Informação Complementar'],
+];
+const COMPOSICAO_GRUPOS = [COMPOSICAO_CADASTRO, COMPOSICAO_ICMS, COMPOSICAO_PIS, COMPOSICAO_COFINS, COMPOSICAO_IBSCBS, COMPOSICAO_OUTROS];
+const COMPOSICAO_CAMPOS_USADOS = new Set(COMPOSICAO_GRUPOS.flat().map(([chave]) => chave));
+
+function renderItemComposicao(item, titulo) {
+  const restante = Object.fromEntries(Object.entries(item).filter(([k]) => !k.startsWith('_') && !COMPOSICAO_CAMPOS_USADOS.has(k)));
+  const restanteHtml = Object.keys(restante).length
+    ? `<details open class="aninhado"><summary>Outros campos deste item</summary>${kvGrid(restante)}</details>` : '';
+  return `<div class="bloco"><b class="bloco-titulo">${esc(titulo)}</b>
+    ${grupo('Dados Cadastrais / Financeiros', item, COMPOSICAO_CADASTRO)}
+    <div class="grupolinha">${grupo('ICMS', item, COMPOSICAO_ICMS)}${grupo('PIS', item, COMPOSICAO_PIS)}${grupo('COFINS', item, COMPOSICAO_COFINS)}</div>
+    ${grupo('IBS / CBS', item, COMPOSICAO_IBSCBS)}
+    ${grupo('Outros Impostos', item, COMPOSICAO_OUTROS)}
+    ${restanteHtml}
+  </div>`;
+}
+
+const CONFIG_GERAIS = [
+  ['imprime_boleto', 'Imprimir Boleto'], ['permite_franquia', 'Permite Cobrar Franquia'], ['envia_boleto', 'Enviar Boleto'],
+  ['avisar_franquia_email', 'Avisar Franquia por Email'], ['imprime_carne', 'Imprimir Carnê'], ['permite_dar_desconto', 'Permite Conceder Desconto'],
+  ['envia_carne', 'Enviar Carnê'], ['envia_aviso_email', 'Envia Aviso Email'], ['avisar_franquia_sms', 'Avisar Franquia por SMS'],
+  ['gera_nota_fiscal', 'Gerar Nota Fiscal'], ['permite_cobrar_multa', 'Permite Cobrar Multa'], ['envia_aviso_sms', 'Envia Aviso SMS / Mensageiro'],
+  ['permite_protestar_serasa', 'Permite Protestar Serasa'], ['permite_proporcional', 'Permite Proporcional'], ['permite_suspender', 'Permite Suspender'],
+  ['permite_desbloqueio_confianca', 'Permite Desbloqueio Confiança'], ['permite_reajuste', 'Permite Reajuste de Valor'],
+  ['permite_renovacao', 'Permite Renovação Vigência Contratual'], ['envia_aviso_ligacao', 'Envia Aviso Ligação'],
+  ['permite_protestar_spc', 'Permite Protestar SPC'], ['permite_cobrar_taxa_boleto', 'Cobrar Taxa do Boleto'],
+  ['envia_nota_fiscal', 'Enviar Nota Fiscal'], ['permite_reduzir_velocidade', 'Permite Reduzir Velocidade'],
+  ['atualiza_coords_instalacao', 'Atualizar Coordenadas do Endereço de Instalação'], ['permite_vender_para', 'Permite Vender para'],
+];
+const CONFIG_FISCAIS = [
+  ['cfop', 'CFOP'], ['iss_retido', 'ISS Retido'], ['imposto_federal_retido', 'Imposto Federal Retido'],
+  ['retencao_pis', 'Retenção PIS'], ['retencao_cofins', 'Retenção COFINS'], ['retencao_csll', 'Retenção CSLL'],
+  ['retencao_irrf', 'Retenção IRRF'], ['retencao_nfse', 'Retenção NFSe'], ['retencao_nfcom', 'Retenção NFCom'], ['retencao_modelo_0', 'Retenção Modelo 0'],
+];
+const CONFIG_REAJUSTE = [
+  ['reajuste_automatico', 'Reajuste Automático'], ['reajustar_pacotes', 'Reajustar Pacotes'], ['renovar_contrato', 'Renovar Contrato'],
+  ['indice_reajuste', 'Índice de Reajuste'], ['tipo_data_reajuste', 'Tipo de Data do Reajuste'],
+];
+const CONFIG_OUTROS = [
+  ['boleto_separado', 'Boleto Separado'], ['agrupamento_nota', 'Agrupamento Nota'], ['agrupamento_fatura', 'Agrupamento Fatura'],
+  ['forma_cobranca', 'Forma de Cobrança'],
+];
+const CONFIG_GRUPOS = [CONFIG_GERAIS, CONFIG_FISCAIS, CONFIG_REAJUSTE, CONFIG_OUTROS];
+const CONFIG_CAMPOS_USADOS = new Set(CONFIG_GRUPOS.flat().map(([chave]) => chave));
+
+function renderConfiguracao(obj) {
+  const restante = Object.fromEntries(Object.entries(obj).filter(([k]) => !k.startsWith('_') && !CONFIG_CAMPOS_USADOS.has(k)));
+  const restanteHtml = Object.keys(restante).length
+    ? `<details open class="aninhado"><summary>Outros campos desta seção</summary>${kvGrid(restante)}</details>` : '';
+  return `<div class="bloco">
+    ${grupo('Configurações Gerais', obj, CONFIG_GERAIS)}
+    ${grupo('Configurações Fiscais', obj, CONFIG_FISCAIS)}
+    ${grupo('Reajuste de Valor', obj, CONFIG_REAJUSTE)}
+    ${grupo('Outros', obj, CONFIG_OUTROS)}
+    ${restanteHtml}
+  </div>`;
+}
+
 function renderValor(v, chave, nivel = 0) {
   if (v === null || v === undefined || v === '') return '<span class="vazio">—</span>';
   if (Array.isArray(v)) {
     if (!v.length) return '<span class="vazio">—</span>';
     if (typeof v[0] !== 'object') return esc(v.join(', '));
-    const lista = chave === 'servico_composicao' ? agruparComposicao(v) : v;
-    return `<div class="arr">${lista.map((item, i) => renderObjeto(item, nivel + 1, `Item ${i + 1}${item._quantidade > 1 ? ` — ${item._quantidade}x` : ''}`)).join('')}</div>`;
+    if (chave === 'servico_composicao') {
+      const lista = agruparComposicao(v);
+      return `<div class="arr">${lista.map((item, i) => renderItemComposicao(item, `Item ${i + 1}${item._quantidade > 1 ? ` — ${item._quantidade}x` : ''}`)).join('')}</div>`;
+    }
+    return `<div class="arr">${v.map((item, i) => renderObjeto(item, nivel + 1, `Item ${i + 1}`)).join('')}</div>`;
   }
+  if (chave === 'configuracao' && typeof v === 'object') return renderConfiguracao(v);
   if (typeof v === 'object') return renderObjeto(v, nivel + 1, undefined, chave);
   return esc(fmtEscalar(chave, v));
 }
@@ -115,6 +211,11 @@ const ESTILO_PLANO = `
     .arr{display:flex;flex-direction:column;gap:2px}
     .bloco{border:1px solid #e2e8f0;border-radius:4px;padding:2px 5px}
     .bloco-titulo{display:block;font-size:7px;color:#4f46e5;margin-bottom:1px;text-transform:uppercase}
+    .grupo{margin-top:3px;padding-top:3px;border-top:1px solid #eef2ff}
+    .grupo:first-of-type{margin-top:0;padding-top:0;border-top:none}
+    .grupo-titulo{display:block;font-size:6.5px;font-weight:700;color:#4f46e5;text-transform:uppercase}
+    .grupolinha{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:0 10px}
+    .grupolinha .grupo{margin-top:0;padding-top:0;border-top:none}
     .complexa{margin-top:2px}
     .complexa-titulo{display:block;font-size:7px;font-weight:700;color:#4f46e5;text-transform:uppercase;margin-bottom:1px}
     .aninhado{margin:1px 0;border:1px dashed #cbd5e1;border-radius:3px;padding:1px 4px}
