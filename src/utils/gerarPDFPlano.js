@@ -101,7 +101,7 @@ const ESTILO_PLANO = `
     .kvk{font-size:6.5px;color:#94a3b8;text-transform:uppercase}
     .kvv{font-size:8.5px;word-break:break-word;overflow-wrap:anywhere}
     .arr{display:flex;flex-direction:column;gap:2px}
-    .bloco{border:1px solid #e2e8f0;border-radius:4px;padding:2px 5px;page-break-inside:avoid}
+    .bloco{border:1px solid #e2e8f0;border-radius:4px;padding:2px 5px}
     .bloco-titulo{display:block;font-size:7px;color:#4f46e5;margin-bottom:1px;text-transform:uppercase}
     .complexa{margin-top:2px}
     .complexa-titulo{display:block;font-size:7px;font-weight:700;color:#4f46e5;text-transform:uppercase;margin-bottom:1px}
