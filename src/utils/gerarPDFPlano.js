@@ -21,10 +21,19 @@ function fmtEscalar(k, v) {
   }
   return String(v);
 }
-function kvGrid(obj) {
-  const entradas = Object.entries(obj).filter(([k, v]) => !k.startsWith('_') && v !== null && v !== undefined && v !== '' && typeof v !== 'object');
+function kvGrid(obj, omitir) {
+  const entradas = Object.entries(obj).filter(([k, v]) => !k.startsWith('_') && v !== null && v !== undefined && v !== '' && typeof v !== 'object' && !omitir?.has(k));
   if (!entradas.length) return '';
   return `<div class="kvgrid">${entradas.map(([k, v]) => `<div class="kv"><span class="kvk">${esc(rotulo(k))}</span><span class="kvv">${esc(fmtEscalar(k, v))}</span></div>`).join('')}</div>`;
+}
+// Campo-referência (ex.: tipo_servico) manda o número duas vezes: solto
+// (id_tipo_servico) e de novo dentro do próprio objeto resolvido
+// (tipo_servico.tipo_servico). Junta os dois num só "Nome (#id)".
+function nomeResolvido(chave, obj) {
+  const texto = obj?.display || obj?.descricao;
+  if (!texto) return null;
+  const id = obj[chave];
+  return id != null ? `${texto} (#${id})` : texto;
 }
 // Mesma regra da tela: itens repetidos só agrupam num "×N" se TODA a
 // configuração (menos id/pivot, que sempre variam) for idêntica.
@@ -47,15 +56,18 @@ function renderValor(v, chave, nivel = 0) {
     const lista = chave === 'servico_composicao' ? agruparComposicao(v) : v;
     return `<div class="arr">${lista.map((item, i) => renderObjeto(item, nivel + 1, `Item ${i + 1}${item._quantidade > 1 ? ` — ${item._quantidade}x` : ''}`)).join('')}</div>`;
   }
-  if (typeof v === 'object') return renderObjeto(v, nivel + 1);
+  if (typeof v === 'object') return renderObjeto(v, nivel + 1, undefined, chave);
   return esc(fmtEscalar(chave, v));
 }
-function renderObjeto(obj, nivel, titulo) {
-  const complexas = Object.entries(obj).filter(([k, v]) => !k.startsWith('_') && typeof v === 'object' && v !== null);
-  const corpo = kvGrid(obj) + complexas.map(([k, v]) => `<div class="complexa"><span class="complexa-titulo">${esc(rotulo(k))}</span>${renderValor(v, k, nivel)}</div>`).join('');
+function renderObjeto(obj, nivel, titulo, chave) {
+  const resolvido = !titulo && chave ? nomeResolvido(chave, obj) : null;
+  const omitir = resolvido ? new Set([chave, 'descricao', 'display']) : undefined;
+  const cabecalho = titulo || resolvido || 'Detalhes';
+  const complexas = Object.entries(obj).filter(([k, v]) => !k.startsWith('_') && typeof v === 'object' && v !== null && !omitir?.has(k));
+  const corpo = kvGrid(obj, omitir) + complexas.map(([k, v]) => `<div class="complexa"><span class="complexa-titulo">${esc(rotulo(k))}</span>${renderValor(v, k, nivel)}</div>`).join('');
   // "open" fixo — no papel não dá pra clicar pra expandir, então já mostra tudo.
-  if (nivel >= 2) return `<details open class="aninhado"><summary>${esc(titulo || 'Detalhes')}</summary>${corpo}</details>`;
-  return `<div class="bloco">${titulo ? `<b class="bloco-titulo">${esc(titulo)}</b>` : ''}${corpo}</div>`;
+  if (nivel >= 2) return `<details open class="aninhado"><summary>${esc(cabecalho)}</summary>${corpo}</details>`;
+  return `<div class="bloco">${(titulo || resolvido) ? `<b class="bloco-titulo">${esc(cabecalho)}</b>` : ''}${corpo}</div>`;
 }
 
 const SECOES = [
