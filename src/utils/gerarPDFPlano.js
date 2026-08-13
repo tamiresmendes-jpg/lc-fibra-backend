@@ -74,27 +74,63 @@ const COMPOSICAO_PIS = [['pis', 'PIS (%)'], ['cst_pis', 'CST PIS'], ['tipo_bc_pi
 const COMPOSICAO_COFINS = [['cofins', 'COFINS (%)'], ['cst_cofins', 'CST COFINS'], ['tipo_bc_cofins', 'Tipo BC COFINS']];
 const COMPOSICAO_IBSCBS = [
   ['cst_tributacao_ibs_cbs', 'CST Tributação (IBS/CBS)'], ['cclass_tributacao', 'Classificação do IBS/CBS'],
-  ['tipo_bc_ibs_cbs', 'Tipo BC IBS e CBS'], ['percentual_ibs_uf', 'Alíquota IBS Estadual'],
-  ['percentual_ibs_mun', 'Alíquota IBS Municipal'], ['percentual_cbs', 'Alíquota CBS'],
+  ['tipo_bc_ibs_cbs', 'Tipo BC IBS e CBS'],
+];
+const COMPOSICAO_IBS_UF = [
+  ['percentual_ibs_uf', 'Alíquota IBS'], ['deferimento_ibs_uf', 'Deferimento IBS'],
+  ['valor_tributo_ibs_devolvido_uf', 'Valor Tributo IBS Devolvido'], ['reducao_aliquota_ibs_uf', 'Redução da Alíquota IBS'],
+  ['aliquota_efetiva_ibs_uf', 'Alíquota Efetiva IBS'],
+];
+const COMPOSICAO_IBS_MUN = [
+  ['percentual_ibs_mun', 'Alíquota IBS'], ['deferimento_ibs_mun', 'Deferimento IBS'],
+  ['valor_tributo_ibs_devolvido_mun', 'Valor Tributo IBS Devolvido'], ['reducao_aliquota_ibs_mun', 'Redução da Alíquota IBS'],
+  ['aliquota_efetiva_ibs_mun', 'Alíquota Efetiva IBS'],
+];
+const COMPOSICAO_CBS = [
+  ['percentual_cbs', 'Alíquota CBS'], ['deferimento_cbs', 'Deferimento CBS'],
+  ['valor_tributo_cbs_devolvido', 'Valor Tributo Devolvido CBS'], ['reducao_aliquota_cbs', 'Redução da Alíquota CBS'],
+  ['aliquota_efetiva_cbs', 'Alíquota Efetiva CBS'],
+];
+const COMPOSICAO_COMPRA_GOV = [
+  ['tipo_ente_compra_governamental', 'Tipo Ente Compra Governamental'], ['aliquota_reducao_compra_governamental', 'Alíquota de Redução'],
 ];
 const COMPOSICAO_OUTROS = [
   ['csll', 'CSLL (%)'], ['irrf', 'IRRF (%)'], ['fust', 'FUST (%)'], ['funttel', 'FUNTTEL (%)'], ['fcp', 'FCP (%)'],
   ['tipo_utilizacao', 'Tipo de Utilização'], ['cclass', 'Classificação de Item da NFCom'],
   ['codigo_beneficio_fiscal', 'Código do Benefício Fiscal'], ['codigo_servico', 'Código Serviço (IBPT)'],
-  ['cnpj_operadora_longa_distancia', 'CNPJ Operadora Longa Distância'], ['informacao_complementar', 'Informação Complementar'],
+  ['cnpj_operadora_longa_distancia', 'CNPJ Operadora Longa Distância'],
 ];
-const COMPOSICAO_GRUPOS = [COMPOSICAO_CADASTRO, COMPOSICAO_ICMS, COMPOSICAO_PIS, COMPOSICAO_COFINS, COMPOSICAO_IBSCBS, COMPOSICAO_OUTROS];
+const COMPOSICAO_PRODUTO_ESTOQUE = [
+  ['local_estoque', 'Local de Estoque'], ['tipo_movimento_estoque', 'Tipo de Movimento de Estoque'], ['produto', 'Produto'],
+];
+const COMPOSICAO_COMPLEMENTAR = [['informacao_complementar', 'Informação Complementar']];
+const COMPOSICAO_GRUPOS = [
+  COMPOSICAO_CADASTRO, COMPOSICAO_ICMS, COMPOSICAO_PIS, COMPOSICAO_COFINS, COMPOSICAO_IBSCBS,
+  COMPOSICAO_IBS_UF, COMPOSICAO_IBS_MUN, COMPOSICAO_CBS, COMPOSICAO_COMPRA_GOV,
+  COMPOSICAO_OUTROS, COMPOSICAO_PRODUTO_ESTOQUE, COMPOSICAO_COMPLEMENTAR,
+];
 const COMPOSICAO_CAMPOS_USADOS = new Set(COMPOSICAO_GRUPOS.flat().map(([chave]) => chave));
 
 function renderItemComposicao(item, titulo) {
   const restante = Object.fromEntries(Object.entries(item).filter(([k]) => !k.startsWith('_') && !COMPOSICAO_CAMPOS_USADOS.has(k)));
   const restanteHtml = Object.keys(restante).length
     ? `<details open class="aninhado"><summary>Outros campos deste item</summary>${kvGrid(restante)}</details>` : '';
+  const temIbsCbs = [...COMPOSICAO_IBSCBS, ...COMPOSICAO_IBS_UF, ...COMPOSICAO_IBS_MUN, ...COMPOSICAO_CBS]
+    .some(([chave]) => item[chave] !== null && item[chave] !== undefined && item[chave] !== '');
+  const ibsCbsHtml = temIbsCbs ? `
+    ${grupo('IBS / CBS', item, COMPOSICAO_IBSCBS)}
+    ${grupo('Dados IBS Estadual', item, COMPOSICAO_IBS_UF)}
+    ${grupo('Dados IBS Municipal', item, COMPOSICAO_IBS_MUN)}
+    ${grupo('Dados CBS', item, COMPOSICAO_CBS)}
+    ${grupo('Compra Governamental', item, COMPOSICAO_COMPRA_GOV)}
+  ` : '';
   return `<div class="bloco"><b class="bloco-titulo">${esc(titulo)}</b>
     ${grupo('Dados Cadastrais / Financeiros', item, COMPOSICAO_CADASTRO)}
     <div class="grupolinha">${grupo('ICMS', item, COMPOSICAO_ICMS)}${grupo('PIS', item, COMPOSICAO_PIS)}${grupo('COFINS', item, COMPOSICAO_COFINS)}</div>
-    ${grupo('IBS / CBS', item, COMPOSICAO_IBSCBS)}
+    ${ibsCbsHtml}
     ${grupo('Outros Impostos', item, COMPOSICAO_OUTROS)}
+    ${grupo('Produto / Estoque', item, COMPOSICAO_PRODUTO_ESTOQUE)}
+    ${grupo('Informação Complementar', item, COMPOSICAO_COMPLEMENTAR)}
     ${restanteHtml}
   </div>`;
 }
