@@ -126,9 +126,7 @@ function renderItemComposicao(item, titulo) {
     .some(([chave]) => item[chave] !== null && item[chave] !== undefined && item[chave] !== '');
   const ibsCbsHtml = temIbsCbs ? `
     ${grupo('IBS / CBS', item, COMPOSICAO_IBSCBS)}
-    ${grupo('Dados IBS Estadual', item, COMPOSICAO_IBS_UF)}
-    ${grupo('Dados IBS Municipal', item, COMPOSICAO_IBS_MUN)}
-    ${grupo('Dados CBS', item, COMPOSICAO_CBS)}
+    <div class="grupolinha">${grupo('Dados IBS Estadual', item, COMPOSICAO_IBS_UF)}${grupo('Dados IBS Municipal', item, COMPOSICAO_IBS_MUN)}${grupo('Dados CBS', item, COMPOSICAO_CBS)}</div>
     ${grupo('Compra Governamental', item, COMPOSICAO_COMPRA_GOV)}
   ` : '';
   return `<div class="bloco"><b class="bloco-titulo">${esc(titulo)}</b>
