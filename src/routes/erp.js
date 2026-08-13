@@ -1568,6 +1568,16 @@ router.post('/painel-testar', autenticar, async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// GET /api/erp/planos — cadastro/configuração dos planos (sem dado de cliente):
+// preço, pacote, composição, desconto, etc. Cacheado no servidor por 15min
+// (ver listarPlanosDetalhado) — ?forcar=1 ignora o cache.
+router.get('/planos', async (req, res) => {
+  try {
+    const planos = await hubsoft.listarPlanosDetalhado(req.usuario.empresa_id, { forcar: req.query.forcar === '1' });
+    res.json({ planos });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;

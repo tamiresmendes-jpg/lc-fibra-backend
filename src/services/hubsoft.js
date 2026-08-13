@@ -152,7 +152,7 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
 // datas em ISO (não dd/mm/aaaa como o relatório de Serviços) — payload real
 // capturado do próprio painel web do HubSoft.
 // tipo_data aceita: data_vencimento, data_cadastro, data_pagamento.
-async function varrerContaReceber({ empresaId, dataInicio, dataFim, tipoData = 'data_vencimento', quant = 500, maxPaginas = 2000 } = {}, processarLote) {
+async function varrerContaReceber({ empresaId, dataInicio, dataFim, tipoData = 'data_vencimento', quant = 500, maxPaginas = 2000, deveCancelar } = {}, processarLote) {
   const corpoBase = {
     apenas_ativo: true,
     data_inicio: dataInicio, data_fim: dataFim, // ISO: 'YYYY-MM-DDT00:00:00.000Z'
@@ -177,11 +177,13 @@ async function varrerContaReceber({ empresaId, dataInicio, dataFim, tipoData = '
     return j;
   }
 
+  await checarCancelamento(deveCancelar);
   const primeira = await buscarPagina(1);
   await processarLote(primeira.dados || []);
   const ultimaPagina = Math.min(primeira.paginador?.last_page || 1, maxPaginas);
   const conc = 3;
   for (let p = 2; p <= ultimaPagina; p += conc) {
+    await checarCancelamento(deveCancelar);
     const lote = [];
     for (let i = p; i < Math.min(p + conc, ultimaPagina + 1); i++) lote.push(i);
     const resultados = await Promise.all(lote.map(buscarPagina));
@@ -362,12 +364,12 @@ async function listarPaginado(caminho, { dataInicio, dataFim, relacoes, extra = 
 // em ago/2026), então listarFaturas (maxPaginas=60, 100/página = 6 mil no
 // total) parava bem antes do fim em janelas de vários meses — por isso meses
 // mais recentes apareciam com faturamento zerado num período de 12/24 meses.
-async function varrerFaturas({ dataInicio, dataFim, maxPaginas = 2000 } = {}, processarLote) {
+async function varrerFaturas({ dataInicio, dataFim, maxPaginas = 2000, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/financeiro/fatura', {
       pagina, itens_por_pagina: 500, data_inicio: dataInicio, data_fim: dataFim, relacoes: 'cliente',
     }),
-    processarLote, { extrair: d => d.faturas || [], maxPaginas }
+    processarLote, { extrair: d => d.faturas || [], maxPaginas, deveCancelar }
   );
 }
 
@@ -628,40 +630,40 @@ async function listarNfe55({ documento, dataInicio, dataFim, tipoData = 'data_em
 // ── Versões "streaming" das 4 acima — processam página a página via
 // `processarLote(itens)` em vez de acumular tudo em memória. Usar sempre que
 // só for preciso AGREGAR (somar valores/contar), nunca listar/exibir tudo.
-async function varrerNfse({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300 } = {}, processarLote) {
+async function varrerNfse({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfse', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, status,
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.nfses || [], maxPaginas }
+    processarLote, { extrair: d => d.nfses || [], maxPaginas, deveCancelar }
   );
 }
-async function varrerNfcom({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todos', maxPaginas = 300 } = {}, processarLote) {
+async function varrerNfcom({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todos', maxPaginas = 300, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfcom', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, status,
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.nfcoms || [], maxPaginas }
+    processarLote, { extrair: d => d.nfcoms || [], maxPaginas, deveCancelar }
   );
 }
-async function varrerNotaTelecom({ documento, dataInicio, dataFim, modelo, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300 } = {}, processarLote) {
+async function varrerNotaTelecom({ documento, dataInicio, dataFim, modelo, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/telecom', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, modelo, status,
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.notas_fiscais || d.notas || [], maxPaginas }
+    processarLote, { extrair: d => d.notas_fiscais || d.notas || [], maxPaginas, deveCancelar }
   );
 }
-async function varrerNfe55({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status, maxPaginas = 300 } = {}, processarLote) {
+async function varrerNfe55({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status, maxPaginas = 300, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfe', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, ...(status ? { status } : {}),
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.nfes || [], maxPaginas }
+    processarLote, { extrair: d => d.nfes || [], maxPaginas, deveCancelar }
   );
 }
 
@@ -674,6 +676,49 @@ async function listarNotaEntrada({ dataInicio, dataFim, maxPaginas = 40 } = {}) 
     }),
     { extrair: d => d.notas_entrada || d.notas || [], maxPaginas }
   );
+}
+
+// Catálogo de PLANOS (cadastro/configuração — sem nenhum dado de cliente),
+// pra análise. Dois passos: a lista resumida vem da API de Integração normal
+// (token fixo); o detalhe completo de cada plano (composição, desconto, etc,
+// as mesmas abas do "Editar Serviço" no painel) só existe na API interna do
+// painel, por isso usa token de PAINEL — mesmo mecanismo já usado no
+// Relatório de Serviços/Contas a Receber, com credenciais próprias guardadas,
+// não a sessão pessoal de quem estiver logado.
+// Cacheado por 15min: é cadastro, não muda a cada segundo, e evita martelar
+// o painel com 1 chamada de detalhe por plano toda vez que a tela é aberta.
+let _planosCache = null, _planosExpira = 0;
+async function listarPlanosDetalhado(empresaId, { forcar = false } = {}) {
+  if (!forcar && _planosCache && Date.now() < _planosExpira) return _planosCache;
+
+  const resumo = await apiGet('/api/v1/integracao/configuracao/servico');
+  const lista = resumo?.servicos || [];
+
+  async function detalheDe(idServico, tentouRelogar = false) {
+    const token = await getTokenPainel(empresaId);
+    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/servico/${idServico}`, {
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    });
+    if (resp.status === 401 && !tentouRelogar) {
+      _tokenPainel = null; _expiraPainel = 0;
+      return detalheDe(idServico, true);
+    }
+    const j = await resp.json().catch(() => null);
+    if (!j || j.status !== 'success') throw new Error(`HubSoft servico/${idServico}: ${j?.msg || 'falha'}`);
+    return j.servico;
+  }
+
+  // Um de cada vez — são só ~20 planos e é chamada pontual (clique num botão),
+  // não uma rotina automática; não precisa (nem deve) paralelizar no painel.
+  const detalhados = [];
+  for (const item of lista) {
+    try { detalhados.push(await detalheDe(item.id_servico)); }
+    catch (e) { detalhados.push({ ...item, _erro: e.message }); }
+  }
+
+  _planosCache = detalhados;
+  _planosExpira = Date.now() + 15 * 60 * 1000;
+  return _planosCache;
 }
 
 function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
@@ -698,4 +743,5 @@ module.exports = {
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
   varrerNfse, varrerNfcom, varrerNotaTelecom, varrerNfe55,
   listarCaixasFinanceiro, listarMeiosPagamento,
+  listarPlanosDetalhado,
 };
