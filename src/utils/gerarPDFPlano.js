@@ -133,8 +133,7 @@ function renderItemComposicao(item, titulo) {
     ${grupo('Dados Cadastrais / Financeiros', item, COMPOSICAO_CADASTRO)}
     <div class="grupolinha">${grupo('ICMS', item, COMPOSICAO_ICMS)}${grupo('PIS', item, COMPOSICAO_PIS)}${grupo('COFINS', item, COMPOSICAO_COFINS)}</div>
     ${ibsCbsHtml}
-    ${grupo('Outros Impostos', item, COMPOSICAO_OUTROS)}
-    ${grupo('Produto / Estoque', item, COMPOSICAO_PRODUTO_ESTOQUE)}
+    <div class="grupolinha">${grupo('Outros Impostos', item, COMPOSICAO_OUTROS)}${grupo('Produto / Estoque', item, COMPOSICAO_PRODUTO_ESTOQUE)}</div>
     ${grupo('Informação Complementar', item, COMPOSICAO_COMPLEMENTAR)}
     ${restanteHtml}
   </div>`;
