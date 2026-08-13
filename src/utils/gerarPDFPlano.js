@@ -195,8 +195,9 @@ function renderConfiguracao(obj) {
 
 // Mesmos campos da tela "Pacotes" (catálogo geral) do painel.
 const PACOTE_CADASTRO = [
-  ['descricao', 'Descrição'], ['codigo', 'Código'], ['valor', 'Valor'],
-  ['degustacao', 'Degustação'], ['obrigatorio', 'Obrigatório'], ['ativo', 'Ativo'],
+  ['display', 'Pacote'], ['descricao', 'Descrição'], ['codigo', 'Código'], ['valor', 'Valor'],
+  ['degustacao', 'Degustação'], ['obrigatorio', 'Obrigatório'],
+  ['nao_cobrar_degustacao_pacote', 'Não Cobrar Degustação'], ['ativo', 'Ativo'],
 ];
 const PACOTE_CONFIG = [
   ['gerenciado_api', 'Gerenciado API'], ['permite_stfc', 'Permite STFC'], ['permite_mvno', 'Permite MVNO'],

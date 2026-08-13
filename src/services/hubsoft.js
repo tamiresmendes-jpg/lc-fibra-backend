@@ -743,7 +743,10 @@ async function listarPacotesResumo(empresaId, { forcar = false } = {}) {
     // formato exato do paginador ainda não confirmado — tenta os nomes mais
     // prováveis (mesmo padrão dos outros endpoints do painel) sem quebrar se
     // vier diferente.
-    return j.pacotes || j.paginador?.data || j.data || [];
+    const lista = j.pacotes || j.paginador?.data || j.data || j.registros || j.itens
+      || Object.values(j).find(v => Array.isArray(v)) || [];
+    if (!lista.length) console.warn('[hubsoft] pacote/paginado sem lista reconhecida — chaves recebidas:', Object.keys(j));
+    return lista;
   }
 
   _pacotesCache = await chamar();
@@ -759,11 +762,19 @@ async function listarPacotesResumo(empresaId, { forcar = false } = {}) {
 function mesclarPacotes(servicoPacote, catalogo) {
   if (!Array.isArray(servicoPacote) || !servicoPacote.length || !Array.isArray(catalogo) || !catalogo.length) return servicoPacote;
   const porId = new Map(catalogo.map(p => [p.id_pacote ?? p.id, p]));
-  return servicoPacote.map(item => {
+  let casou = 0;
+  const mesclado = servicoPacote.map(item => {
     const idPacote = item.id_pacote ?? item.pacote?.id_pacote ?? item.pacote_id ?? item.id;
     const doCatalogo = porId.get(idPacote);
+    if (doCatalogo) casou++;
     return doCatalogo ? { ...doCatalogo, ...item } : item;
   });
+  if (!casou) {
+    console.warn('[hubsoft] pacote do plano não casou com o catálogo — ids do plano:',
+      servicoPacote.map(i => i.id_pacote ?? i.pacote?.id_pacote ?? i.pacote_id ?? i.id),
+      'ids do catálogo (amostra):', catalogo.slice(0, 5).map(p => p.id_pacote ?? p.id));
+  }
+  return mesclado;
 }
 
 // Detalhe completo de UM plano (composição, contrato, desconto, taxa de
@@ -785,7 +796,7 @@ async function detalhePlano(empresaId, idServico, tentouRelogar = false) {
     try {
       const catalogo = await listarPacotesResumo(empresaId);
       servico.servico_pacote = mesclarPacotes(servico.servico_pacote, catalogo);
-    } catch { /* se o catálogo falhar, mantém o pacote como veio do plano mesmo */ }
+    } catch (e) { console.warn('[hubsoft] falha ao buscar catálogo de pacotes:', e.message); }
   }
   return servico;
 }
