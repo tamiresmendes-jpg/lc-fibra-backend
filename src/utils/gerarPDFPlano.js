@@ -254,11 +254,12 @@ const ESTILO_PLANO = `
     .arr{display:flex;flex-direction:column;gap:2px}
     .bloco{border:1px solid #e2e8f0;border-radius:4px;padding:2px 5px}
     .bloco-titulo{display:block;font-size:7px;color:#4f46e5;margin-bottom:1px;text-transform:uppercase}
-    .grupo{margin-top:3px;padding-top:3px;border-top:1px solid #eef2ff}
-    .grupo:first-of-type{margin-top:0;padding-top:0;border-top:none}
+    .grupo{margin-top:3px;padding:3px 5px;border:1px solid #e2e8f0;border-radius:3px}
+    .grupo:first-of-type{margin-top:0}
     .grupo-titulo{display:block;font-size:6.5px;font-weight:700;color:#4f46e5;text-transform:uppercase}
-    .grupolinha{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:0 10px}
-    .grupolinha .grupo{margin-top:0;padding-top:0;border-top:none}
+    .grupolinha{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:3px;margin-top:3px}
+    .grupolinha:first-of-type{margin-top:0}
+    .grupolinha .grupo{margin-top:0}
     .complexa{margin-top:2px}
     .complexa-titulo{display:block;font-size:7px;font-weight:700;color:#4f46e5;text-transform:uppercase;margin-bottom:1px}
     .aninhado{margin:1px 0;border:1px dashed #cbd5e1;border-radius:3px;padding:1px 4px}
