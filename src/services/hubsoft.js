@@ -715,6 +715,57 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
   return _planosCache;
 }
 
+// Catálogo geral de PACOTES (add-ons como Watch TV, HBO Max, roteador mesh,
+// etc) — a tela "Pacotes" do painel (fora de um plano específico). O plano
+// só guarda o valor/degustação/obrigatório de cada pacote vinculado, sem o
+// cadastro completo (Código, Gerenciado API, Permite STFC/MVNO/Degustação,
+// Permite Proporcional, Ativo) — por isso buscamos esse catálogo à parte e
+// juntamos com o pacote vinculado ao plano (ver mesclarPacotes). Cacheado
+// 30min: é cadastro, não muda a cada segundo. Página grande (100) porque a
+// base de pacotes é pequena (~13 hoje) — cabe numa chamada só.
+let _pacotesCache = null, _pacotesExpira = 0;
+async function listarPacotesResumo(empresaId, { forcar = false } = {}) {
+  if (!forcar && _pacotesCache && Date.now() < _pacotesExpira) return _pacotesCache;
+
+  async function chamar(tentouRelogar = false) {
+    const token = await getTokenPainel(empresaId);
+    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/100?page=1`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
+      body: JSON.stringify({}),
+    });
+    if (resp.status === 401 && !tentouRelogar) {
+      _tokenPainel = null; _expiraPainel = 0;
+      return chamar(true);
+    }
+    const j = await resp.json().catch(() => null);
+    if (!j || j.status !== 'success') throw new Error(`HubSoft pacote/paginado: ${j?.msg || 'falha'}`);
+    // formato exato do paginador ainda não confirmado — tenta os nomes mais
+    // prováveis (mesmo padrão dos outros endpoints do painel) sem quebrar se
+    // vier diferente.
+    return j.pacotes || j.paginador?.data || j.data || [];
+  }
+
+  _pacotesCache = await chamar();
+  _pacotesExpira = Date.now() + 30 * 60 * 1000;
+  return _pacotesCache;
+}
+
+// Junta, em cada pacote vinculado ao plano, o cadastro completo do catálogo
+// geral (Código, Gerenciado API, Permite STFC/MVNO/Degustação, etc) — o
+// plano só tem id/nome/valor/degustação/obrigatório, o resto vem daqui.
+// Casa pelo id de pacote, tentando os nomes de campo mais prováveis dos dois
+// lados (ainda sem confirmação 100% do formato real).
+function mesclarPacotes(servicoPacote, catalogo) {
+  if (!Array.isArray(servicoPacote) || !servicoPacote.length || !Array.isArray(catalogo) || !catalogo.length) return servicoPacote;
+  const porId = new Map(catalogo.map(p => [p.id_pacote ?? p.id, p]));
+  return servicoPacote.map(item => {
+    const idPacote = item.id_pacote ?? item.pacote?.id_pacote ?? item.pacote_id ?? item.id;
+    const doCatalogo = porId.get(idPacote);
+    return doCatalogo ? { ...doCatalogo, ...item } : item;
+  });
+}
+
 // Detalhe completo de UM plano (composição, contrato, desconto, taxa de
 // instalação, navegação, pacotes, etc) — sob demanda, só quando a pessoa
 // expande aquele plano na tela. Não cacheado (é 1 chamada leve por clique).
@@ -729,7 +780,14 @@ async function detalhePlano(empresaId, idServico, tentouRelogar = false) {
   }
   const j = await resp.json().catch(() => null);
   if (!j || j.status !== 'success') throw new Error(`HubSoft servico/${idServico}: ${j?.msg || 'falha'}`);
-  return j.servico;
+  const servico = j.servico;
+  if (servico?.servico_pacote?.length) {
+    try {
+      const catalogo = await listarPacotesResumo(empresaId);
+      servico.servico_pacote = mesclarPacotes(servico.servico_pacote, catalogo);
+    } catch { /* se o catálogo falhar, mantém o pacote como veio do plano mesmo */ }
+  }
+  return servico;
 }
 
 function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
@@ -754,5 +812,5 @@ module.exports = {
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
   varrerNfse, varrerNfcom, varrerNotaTelecom, varrerNfe55,
   listarCaixasFinanceiro, listarMeiosPagamento,
-  listarPlanosResumo, detalhePlano,
+  listarPlanosResumo, detalhePlano, listarPacotesResumo,
 };
