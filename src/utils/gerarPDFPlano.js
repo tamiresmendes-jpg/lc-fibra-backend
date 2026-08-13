@@ -63,6 +63,13 @@ function grupo(titulo, obj, campos) {
   const kv = presentes.map(([chave, rot]) => `<div class="kv"><span class="kvk">${esc(rot)}</span><span class="kvv">${esc(fmtCampoGrupo(chave, obj[chave]))}</span></div>`).join('');
   return `<div class="grupo"><span class="grupo-titulo">${esc(titulo)}</span><div class="kvgrid">${kv}</div></div>`;
 }
+// Texto longo (ex.: "Informação Complementar") — caixa com borda, tipo área
+// de texto, em vez de kvgrid comum (que fica ruim pra parágrafo grande).
+function grupoTexto(titulo, obj, chave) {
+  const v = obj[chave];
+  if (v === null || v === undefined || v === '') return '';
+  return `<div class="grupo"><span class="grupo-titulo">${esc(titulo)}</span><div class="textocaixa">${esc(String(v))}</div></div>`;
+}
 function fmtCampoGrupo(chave, v) {
   if (typeof v === 'boolean') return v ? 'Sim' : 'Não';
   if (typeof v === 'object') return nomeResolvido(chave, v) || fmtEscalar(chave, JSON.stringify(v));
@@ -134,7 +141,7 @@ function renderItemComposicao(item, titulo) {
     <div class="grupolinha">${grupo('ICMS', item, COMPOSICAO_ICMS)}${grupo('PIS', item, COMPOSICAO_PIS)}${grupo('COFINS', item, COMPOSICAO_COFINS)}</div>
     ${ibsCbsHtml}
     <div class="grupolinha">${grupo('Outros Impostos', item, COMPOSICAO_OUTROS)}${grupo('Produto / Estoque', item, COMPOSICAO_PRODUTO_ESTOQUE)}</div>
-    ${grupo('Informação Complementar', item, COMPOSICAO_COMPLEMENTAR)}
+    ${grupoTexto('Informação Complementar', item, 'informacao_complementar')}
     ${restanteHtml}
   </div>`;
 }
@@ -257,6 +264,7 @@ const ESTILO_PLANO = `
     .grupolinha{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:3px;margin-top:3px}
     .grupolinha:first-of-type{margin-top:0}
     .grupolinha .grupo{margin-top:0}
+    .textocaixa{margin-top:2px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:3px;background:#f8fafc;white-space:pre-wrap;word-break:break-word}
     .complexa{margin-top:2px}
     .complexa-titulo{display:block;font-size:7px;font-weight:700;color:#4f46e5;text-transform:uppercase;margin-bottom:1px}
     .aninhado{margin:1px 0;border:1px dashed #cbd5e1;border-radius:3px;padding:1px 4px}
