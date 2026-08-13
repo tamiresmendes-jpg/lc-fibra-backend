@@ -285,7 +285,7 @@ const ESTILO_PLANO = `
     .secao{margin:0 14px 6px}
     .secao h4{font-size:9.5px;color:#4f46e5;border-bottom:1px solid #cbd5e1;padding-bottom:2px;margin-bottom:3px;text-transform:uppercase;page-break-after:avoid}
     .kvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:1px 10px}
-    .kv{display:flex;flex-direction:column;padding:0 0 1px;border-bottom:1px solid #f1f5f9;overflow:hidden}
+    .kv{display:flex;flex-direction:column;padding:0 0 1px;border-bottom:1px solid #f1f5f9;overflow:hidden;page-break-inside:avoid}
     .kvk{font-size:6.5px;color:#94a3b8;text-transform:uppercase}
     .kvv{font-size:8.5px;word-break:break-word;overflow-wrap:anywhere}
     .arr{display:flex;flex-direction:column;gap:2px}
