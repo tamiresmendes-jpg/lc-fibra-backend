@@ -94,19 +94,19 @@ const ESTILO_PLANO = `
     .plano-titulo{background:#eef2ff;color:#4f46e5;padding:4px 14px;margin-bottom:5px;font-size:11px;font-weight:700}
     .plano-titulo .status{font-size:8px;font-weight:400;margin-left:6px;text-transform:uppercase;color:#64748b}
     .cadastro{border:1px solid #cbd5e1;border-radius:5px;padding:5px 7px;margin:0 14px 6px}
-    .secao{margin:0 14px 6px;page-break-inside:avoid}
-    .secao h4{font-size:9.5px;color:#4f46e5;border-bottom:1px solid #cbd5e1;padding-bottom:2px;margin-bottom:3px;text-transform:uppercase}
-    .kvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(82px,1fr));gap:1px 8px}
-    .kv{display:flex;flex-direction:column;padding:0;border-bottom:1px solid #f1f5f9}
+    .secao{margin:0 14px 6px}
+    .secao h4{font-size:9.5px;color:#4f46e5;border-bottom:1px solid #cbd5e1;padding-bottom:2px;margin-bottom:3px;text-transform:uppercase;page-break-after:avoid}
+    .kvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(105px,1fr));gap:1px 10px}
+    .kv{display:flex;flex-direction:column;padding:0 0 1px;border-bottom:1px solid #f1f5f9;overflow:hidden}
     .kvk{font-size:6.5px;color:#94a3b8;text-transform:uppercase}
-    .kvv{font-size:8.5px}
+    .kvv{font-size:8.5px;word-break:break-word;overflow-wrap:anywhere}
     .arr{display:flex;flex-direction:column;gap:2px}
     .bloco{border:1px solid #e2e8f0;border-radius:4px;padding:2px 5px;page-break-inside:avoid}
     .bloco-titulo{display:block;font-size:7px;color:#4f46e5;margin-bottom:1px;text-transform:uppercase}
     .complexa{margin-top:2px}
     .complexa-titulo{display:block;font-size:7px;font-weight:700;color:#4f46e5;text-transform:uppercase;margin-bottom:1px}
     .aninhado{margin:1px 0;border:1px dashed #cbd5e1;border-radius:3px;padding:1px 4px}
-    .aninhado summary{font-size:7px;color:#64748b;padding:1px 0}
+    .aninhado summary{font-size:7px;color:#64748b;padding:1px 0;word-break:break-word;overflow-wrap:anywhere}
     .vazio{color:#94a3b8;font-style:italic}
     .rodape{margin:10px 14px 0;border-top:1px solid #e2e8f0;padding-top:4px;font-size:7px;color:#94a3b8;text-align:center}
 `;
