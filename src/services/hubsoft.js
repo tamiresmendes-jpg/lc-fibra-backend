@@ -721,6 +721,60 @@ async function listarPlanosDetalhado(empresaId, { forcar = false } = {}) {
   return _planosCache;
 }
 
+// Quantos clientes ATIVOS (não cancelados) tem em cada nome de plano hoje —
+// varre o Relatório de Serviços da base inteira (sem filtro de data, porque
+// um cliente antigo pode estar num plano de anos atrás). PESADO de propósito
+// só quando chamado (botão manual, nunca automático) — mesmo estilo de
+// varredura completa já usado na Análise de Produto.
+// Conta TODO nome de plano que aparecer, esteja ele ainda no catálogo ativo
+// ou não — quem cruza com o catálogo pra separar "descontinuado" é quem chama.
+async function contagemClientesAtivosPorPlano(empresaId, { maxPaginas = 400 } = {}) {
+  const contagem = new Map(); // nome do plano -> qtd de clientes ativos
+  const hojeIso = new Date().toISOString().slice(0, 10);
+  let pagina = 1, paginas = 1;
+  do {
+    const r = await relatorioServicos(empresaId, {
+      dataInicio: '2006-01-01', dataFim: hojeIso, pagina, limit: 200,
+    });
+    paginas = r.paginas || 1;
+    for (const reg of r.registros) {
+      // "N/A" = nunca foi cancelado; qualquer outra coisa é data real de cancelamento.
+      if (reg.data_cancelamento && reg.data_cancelamento !== 'N/A') continue;
+      const nome = (reg.servico || '').trim();
+      if (!nome) continue;
+      contagem.set(nome, (contagem.get(nome) || 0) + 1);
+    }
+    pagina++;
+  } while (pagina <= paginas && pagina <= maxPaginas);
+  return contagem;
+}
+
+// Junta o catálogo de planos ativos com a contagem de clientes de cada um —
+// e também traz, na MESMA lista, os planos que já saíram do catálogo mas
+// ainda têm cliente ativo usando (marcados com _descontinuado:true), pra não
+// precisar olhar em dois lugares separados.
+async function listarPlanosComClientes(empresaId, { forcar = false } = {}) {
+  const [planos, contagem] = await Promise.all([
+    listarPlanosDetalhado(empresaId, { forcar }),
+    contagemClientesAtivosPorPlano(empresaId),
+  ]);
+  const usados = new Set();
+  const comContagem = planos.map(p => {
+    const nome = (p.descricao || '').trim();
+    usados.add(nome.toLowerCase());
+    return { ...p, clientes_ativos: contagem.get(nome) || 0 };
+  });
+  const descontinuados = [];
+  for (const [nome, clientes_ativos] of contagem.entries()) {
+    if (usados.has(nome.toLowerCase())) continue;
+    descontinuados.push({
+      id_servico: `descontinuado-${nome}`, descricao: nome, nome_exibicao: nome,
+      ativo: false, _descontinuado: true, clientes_ativos, valor: null,
+    });
+  }
+  return [...comContagem, ...descontinuados].sort((a, b) => (b.clientes_ativos || 0) - (a.clientes_ativos || 0));
+}
+
 function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
 
 // Caixas financeiros e meios de pagamento cadastrados (config, chamada única
@@ -743,5 +797,5 @@ module.exports = {
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
   varrerNfse, varrerNfcom, varrerNotaTelecom, varrerNfe55,
   listarCaixasFinanceiro, listarMeiosPagamento,
-  listarPlanosDetalhado,
+  listarPlanosDetalhado, listarPlanosComClientes,
 };

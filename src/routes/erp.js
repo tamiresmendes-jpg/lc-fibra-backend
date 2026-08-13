@@ -1574,9 +1574,16 @@ router.post('/painel-testar', autenticar, async (req, res) => {
 // GET /api/erp/planos — cadastro/configuração dos planos (sem dado de cliente):
 // preço, pacote, composição, desconto, etc. Cacheado no servidor por 15min
 // (ver listarPlanosDetalhado) — ?forcar=1 ignora o cache.
+// ?com_clientes=1 junta, na MESMA lista, a quantidade de clientes ativos de
+// cada plano — inclusive os que já saíram do catálogo mas ainda têm cliente
+// (marcados com _descontinuado:true). PESADO (varre a base inteira de
+// serviços vendidos) — só deve ser pedido por um botão explícito, não sozinho.
 router.get('/planos', async (req, res) => {
   try {
-    const planos = await hubsoft.listarPlanosDetalhado(req.usuario.empresa_id, { forcar: req.query.forcar === '1' });
+    const forcar = req.query.forcar === '1';
+    const planos = req.query.com_clientes === '1'
+      ? await hubsoft.listarPlanosComClientes(req.usuario.empresa_id, { forcar })
+      : await hubsoft.listarPlanosDetalhado(req.usuario.empresa_id, { forcar });
     res.json({ planos });
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
