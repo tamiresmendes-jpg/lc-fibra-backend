@@ -1581,12 +1581,65 @@ router.get('/planos', async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// Rotas literais (/planos/pdf, /planos/excel) precisam vir ANTES de
+// /planos/:id, senão o Express trata "pdf"/"excel" como se fosse um id.
+
+// GET /api/erp/planos/pdf — PDF em lista (tabular, resumo) de todos os
+// planos já carregados no cache — sem detalhe por plano (senão precisaria
+// de 1 chamada por plano, pesado pra 500+ planos).
+router.get('/planos/pdf', async (req, res) => {
+  try {
+    const planos = await hubsoft.listarPlanosResumo(req.usuario.empresa_id, {});
+    const { gerarPDFListaPlanos } = require('../utils/gerarPDFPlano');
+    const pdf = await gerarPDFListaPlanos(planos);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="planos.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/excel — mesma lista, em planilha.
+router.get('/planos/excel', async (req, res) => {
+  try {
+    const planos = await hubsoft.listarPlanosResumo(req.usuario.empresa_id, {});
+    const { gerarExcelListaPlanos } = require('../utils/gerarExcelPlano');
+    const buf = gerarExcelListaPlanos(planos);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', 'attachment; filename="planos.xlsx"');
+    res.send(buf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 // GET /api/erp/planos/:id — detalhe completo de UM plano (composição,
 // contrato, desconto, etc) — sob demanda, quando a pessoa expande o plano.
 router.get('/planos/:id', async (req, res) => {
   try {
     const plano = await hubsoft.detalhePlano(req.usuario.empresa_id, req.params.id);
     res.json({ plano });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/:id/pdf — PDF completo de UM plano.
+router.get('/planos/:id/pdf', async (req, res) => {
+  try {
+    const plano = await hubsoft.detalhePlano(req.usuario.empresa_id, req.params.id);
+    const { gerarPDFPlano } = require('../utils/gerarPDFPlano');
+    const pdf = await gerarPDFPlano(plano);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="plano-${(plano.descricao || plano.id_servico).replace(/[^a-zA-Z0-9]/g, '-')}.pdf"`);
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/:id/excel — Excel completo de UM plano (1 aba por seção).
+router.get('/planos/:id/excel', async (req, res) => {
+  try {
+    const plano = await hubsoft.detalhePlano(req.usuario.empresa_id, req.params.id);
+    const { gerarExcelPlano } = require('../utils/gerarExcelPlano');
+    const buf = gerarExcelPlano(plano);
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader('Content-Disposition', `attachment; filename="plano-${(plano.descricao || plano.id_servico).replace(/[^a-zA-Z0-9]/g, '-')}.xlsx"`);
+    res.send(buf);
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
