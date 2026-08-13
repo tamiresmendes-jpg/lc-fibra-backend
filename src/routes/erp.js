@@ -1571,30 +1571,23 @@ router.post('/painel-testar', autenticar, async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
-// GET /api/erp/planos — cadastro/configuração dos planos (sem dado de cliente):
-// preço, pacote, composição, desconto, etc. Cacheado no servidor por 15min
-// (ver listarPlanosDetalhado) — ?forcar=1 ignora o cache.
-// ?com_clientes=1 junta, na MESMA lista, a quantidade de clientes ativos de
-// cada plano — inclusive os que já saíram do catálogo mas ainda têm cliente
-// (marcados com _descontinuado:true). PESADO (varre a base inteira de
-// serviços vendidos) — só deve ser pedido por um botão explícito, não sozinho.
+// GET /api/erp/planos — lista TODOS os planos (ativos e inativos) com a
+// quantidade de clientes de cada um (clientes_servicos_count) — leve, 1
+// chamada só. Cacheado no servidor por 15min — ?forcar=1 ignora o cache.
 router.get('/planos', async (req, res) => {
-  // Se a pessoa clicar em "Parar" (ou fechar a aba) durante a varredura
-  // pesada de clientes, o navegador encerra a conexão — sem isso, o loop
-  // continuava rodando escondido no servidor, martelando o ERP sem ninguém
-  // esperando o resultado.
-  let cancelado = false;
-  req.on('close', () => { cancelado = true; });
   try {
-    const forcar = req.query.forcar === '1';
-    const planos = req.query.com_clientes === '1'
-      ? await hubsoft.listarPlanosComClientes(req.usuario.empresa_id, { forcar, deveCancelar: () => cancelado })
-      : await hubsoft.listarPlanosDetalhado(req.usuario.empresa_id, { forcar });
-    if (cancelado) return;
+    const planos = await hubsoft.listarPlanosResumo(req.usuario.empresa_id, { forcar: req.query.forcar === '1' });
     res.json({ planos });
-  } catch (e) {
-    if (!cancelado && !res.headersSent) res.status(400).json({ erro: e.message });
-  }
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/:id — detalhe completo de UM plano (composição,
+// contrato, desconto, etc) — sob demanda, quando a pessoa expande o plano.
+router.get('/planos/:id', async (req, res) => {
+  try {
+    const plano = await hubsoft.detalhePlano(req.usuario.empresa_id, req.params.id);
+    res.json({ plano });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
 module.exports = router;

@@ -679,101 +679,57 @@ async function listarNotaEntrada({ dataInicio, dataFim, maxPaginas = 40 } = {}) 
 }
 
 // Catálogo de PLANOS (cadastro/configuração — sem nenhum dado de cliente),
-// pra análise. Dois passos: a lista resumida vem da API de Integração normal
-// (token fixo); o detalhe completo de cada plano (composição, desconto, etc,
-// as mesmas abas do "Editar Serviço" no painel) só existe na API interna do
-// painel, por isso usa token de PAINEL — mesmo mecanismo já usado no
-// Relatório de Serviços/Contas a Receber, com credenciais próprias guardadas,
-// não a sessão pessoal de quem estiver logado.
-// Cacheado por 15min: é cadastro, não muda a cada segundo, e evita martelar
-// o painel com 1 chamada de detalhe por plano toda vez que a tela é aberta.
+// pra análise. A LISTA (ativos + inativos, todos de uma vez) e a quantidade
+// de clientes de cada um vêm de UMA chamada só, leve, na API interna do
+// painel (/configuracao/geral/servico/consultar) — ela já devolve
+// clientes_servicos_count por plano, então não precisa varrer a base de
+// clientes pra descobrir quem ainda usa um plano descontinuado.
+// O DETALHE completo (composição, contrato, desconto, etc — as abas do
+// "Editar Serviço" no painel) é uma chamada separada, por plano, feita só
+// quando a pessoa expande aquele plano na tela (ver detalhePlano).
+// Usa token de PAINEL (mesmo mecanismo do Relatório de Serviços/Contas a
+// Receber, credenciais próprias guardadas, não a sessão pessoal de quem
+// estiver logado). Cacheado por 15min: é cadastro, não muda a cada segundo.
 let _planosCache = null, _planosExpira = 0;
-async function listarPlanosDetalhado(empresaId, { forcar = false } = {}) {
+async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
   if (!forcar && _planosCache && Date.now() < _planosExpira) return _planosCache;
 
-  const resumo = await apiGet('/api/v1/integracao/configuracao/servico');
-  const lista = resumo?.servicos || [];
-
-  async function detalheDe(idServico, tentouRelogar = false) {
+  async function chamar(tentouRelogar = false) {
     const token = await getTokenPainel(empresaId);
-    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/servico/${idServico}`, {
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/servico/consultar`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
     });
     if (resp.status === 401 && !tentouRelogar) {
       _tokenPainel = null; _expiraPainel = 0;
-      return detalheDe(idServico, true);
+      return chamar(true);
     }
     const j = await resp.json().catch(() => null);
-    if (!j || j.status !== 'success') throw new Error(`HubSoft servico/${idServico}: ${j?.msg || 'falha'}`);
-    return j.servico;
+    if (!j || j.status !== 'success') throw new Error(`HubSoft servico/consultar: ${j?.msg || 'falha'}`);
+    return j.servicos || [];
   }
 
-  // Um de cada vez — são só ~20 planos e é chamada pontual (clique num botão),
-  // não uma rotina automática; não precisa (nem deve) paralelizar no painel.
-  const detalhados = [];
-  for (const item of lista) {
-    try { detalhados.push(await detalheDe(item.id_servico)); }
-    catch (e) { detalhados.push({ ...item, _erro: e.message }); }
-  }
-
-  _planosCache = detalhados;
+  _planosCache = await chamar();
   _planosExpira = Date.now() + 15 * 60 * 1000;
   return _planosCache;
 }
 
-// Quantos clientes ATIVOS (não cancelados) tem em cada nome de plano hoje —
-// varre o Relatório de Serviços da base inteira (sem filtro de data, porque
-// um cliente antigo pode estar num plano de anos atrás). PESADO de propósito
-// só quando chamado (botão manual, nunca automático) — mesmo estilo de
-// varredura completa já usado na Análise de Produto.
-// Conta TODO nome de plano que aparecer, esteja ele ainda no catálogo ativo
-// ou não — quem cruza com o catálogo pra separar "descontinuado" é quem chama.
-async function contagemClientesAtivosPorPlano(empresaId, { maxPaginas = 400, deveCancelar } = {}) {
-  const contagem = new Map(); // nome do plano -> qtd de clientes ativos
-  const hojeIso = new Date().toISOString().slice(0, 10);
-  let pagina = 1, paginas = 1;
-  do {
-    if (deveCancelar && deveCancelar()) break;
-    const r = await relatorioServicos(empresaId, {
-      dataInicio: '2006-01-01', dataFim: hojeIso, pagina, limit: 200,
-    });
-    paginas = r.paginas || 1;
-    for (const reg of r.registros) {
-      // "N/A" = nunca foi cancelado; qualquer outra coisa é data real de cancelamento.
-      if (reg.data_cancelamento && reg.data_cancelamento !== 'N/A') continue;
-      const nome = (reg.servico || '').trim();
-      if (!nome) continue;
-      contagem.set(nome, (contagem.get(nome) || 0) + 1);
-    }
-    pagina++;
-  } while (pagina <= paginas && pagina <= maxPaginas && !(deveCancelar && deveCancelar()));
-  return contagem;
-}
-
-// Junta o catálogo de planos ativos com a contagem de clientes de cada um —
-// e também traz, na MESMA lista, os planos que já saíram do catálogo mas
-// ainda têm cliente ativo usando (marcados com _descontinuado:true), pra não
-// precisar olhar em dois lugares separados.
-async function listarPlanosComClientes(empresaId, { forcar = false, deveCancelar } = {}) {
-  const [planos, contagem] = await Promise.all([
-    listarPlanosDetalhado(empresaId, { forcar }),
-    contagemClientesAtivosPorPlano(empresaId, { deveCancelar }),
-  ]);
-  const usados = new Set();
-  const comContagem = planos.map(p => {
-    const nome = (p.descricao || '').trim();
-    usados.add(nome.toLowerCase());
-    return { ...p, clientes_ativos: contagem.get(nome) || 0 };
+// Detalhe completo de UM plano (composição, contrato, desconto, taxa de
+// instalação, navegação, pacotes, etc) — sob demanda, só quando a pessoa
+// expande aquele plano na tela. Não cacheado (é 1 chamada leve por clique).
+async function detalhePlano(empresaId, idServico, tentouRelogar = false) {
+  const token = await getTokenPainel(empresaId);
+  const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/servico/${idServico}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
-  const descontinuados = [];
-  for (const [nome, clientes_ativos] of contagem.entries()) {
-    if (usados.has(nome.toLowerCase())) continue;
-    descontinuados.push({
-      id_servico: `descontinuado-${nome}`, descricao: nome, nome_exibicao: nome,
-      ativo: false, _descontinuado: true, clientes_ativos, valor: null,
-    });
+  if (resp.status === 401 && !tentouRelogar) {
+    _tokenPainel = null; _expiraPainel = 0;
+    return detalhePlano(empresaId, idServico, true);
   }
-  return [...comContagem, ...descontinuados].sort((a, b) => (b.clientes_ativos || 0) - (a.clientes_ativos || 0));
+  const j = await resp.json().catch(() => null);
+  if (!j || j.status !== 'success') throw new Error(`HubSoft servico/${idServico}: ${j?.msg || 'falha'}`);
+  return j.servico;
 }
 
 function soDigitos(v) { return String(v || '').replace(/\D/g, ''); }
@@ -798,5 +754,5 @@ module.exports = {
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
   varrerNfse, varrerNfcom, varrerNotaTelecom, varrerNfe55,
   listarCaixasFinanceiro, listarMeiosPagamento,
-  listarPlanosDetalhado, listarPlanosComClientes,
+  listarPlanosResumo, detalhePlano,
 };
