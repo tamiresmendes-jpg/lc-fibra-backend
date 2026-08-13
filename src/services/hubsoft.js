@@ -728,11 +728,12 @@ async function listarPlanosDetalhado(empresaId, { forcar = false } = {}) {
 // varredura completa já usado na Análise de Produto.
 // Conta TODO nome de plano que aparecer, esteja ele ainda no catálogo ativo
 // ou não — quem cruza com o catálogo pra separar "descontinuado" é quem chama.
-async function contagemClientesAtivosPorPlano(empresaId, { maxPaginas = 400 } = {}) {
+async function contagemClientesAtivosPorPlano(empresaId, { maxPaginas = 400, deveCancelar } = {}) {
   const contagem = new Map(); // nome do plano -> qtd de clientes ativos
   const hojeIso = new Date().toISOString().slice(0, 10);
   let pagina = 1, paginas = 1;
   do {
+    if (deveCancelar && deveCancelar()) break;
     const r = await relatorioServicos(empresaId, {
       dataInicio: '2006-01-01', dataFim: hojeIso, pagina, limit: 200,
     });
@@ -745,7 +746,7 @@ async function contagemClientesAtivosPorPlano(empresaId, { maxPaginas = 400 } = 
       contagem.set(nome, (contagem.get(nome) || 0) + 1);
     }
     pagina++;
-  } while (pagina <= paginas && pagina <= maxPaginas);
+  } while (pagina <= paginas && pagina <= maxPaginas && !(deveCancelar && deveCancelar()));
   return contagem;
 }
 
@@ -753,10 +754,10 @@ async function contagemClientesAtivosPorPlano(empresaId, { maxPaginas = 400 } = 
 // e também traz, na MESMA lista, os planos que já saíram do catálogo mas
 // ainda têm cliente ativo usando (marcados com _descontinuado:true), pra não
 // precisar olhar em dois lugares separados.
-async function listarPlanosComClientes(empresaId, { forcar = false } = {}) {
+async function listarPlanosComClientes(empresaId, { forcar = false, deveCancelar } = {}) {
   const [planos, contagem] = await Promise.all([
     listarPlanosDetalhado(empresaId, { forcar }),
-    contagemClientesAtivosPorPlano(empresaId),
+    contagemClientesAtivosPorPlano(empresaId, { deveCancelar }),
   ]);
   const usados = new Set();
   const comContagem = planos.map(p => {

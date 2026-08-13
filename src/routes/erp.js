@@ -1579,13 +1579,22 @@ router.post('/painel-testar', autenticar, async (req, res) => {
 // (marcados com _descontinuado:true). PESADO (varre a base inteira de
 // serviços vendidos) — só deve ser pedido por um botão explícito, não sozinho.
 router.get('/planos', async (req, res) => {
+  // Se a pessoa clicar em "Parar" (ou fechar a aba) durante a varredura
+  // pesada de clientes, o navegador encerra a conexão — sem isso, o loop
+  // continuava rodando escondido no servidor, martelando o ERP sem ninguém
+  // esperando o resultado.
+  let cancelado = false;
+  req.on('close', () => { cancelado = true; });
   try {
     const forcar = req.query.forcar === '1';
     const planos = req.query.com_clientes === '1'
-      ? await hubsoft.listarPlanosComClientes(req.usuario.empresa_id, { forcar })
+      ? await hubsoft.listarPlanosComClientes(req.usuario.empresa_id, { forcar, deveCancelar: () => cancelado })
       : await hubsoft.listarPlanosDetalhado(req.usuario.empresa_id, { forcar });
+    if (cancelado) return;
     res.json({ planos });
-  } catch (e) { res.status(400).json({ erro: e.message }); }
+  } catch (e) {
+    if (!cancelado && !res.headersSent) res.status(400).json({ erro: e.message });
+  }
 });
 
 module.exports = router;
