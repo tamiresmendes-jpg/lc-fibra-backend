@@ -62,21 +62,42 @@ function gerarExcelPlano(plano) {
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 
-// Uma linha por plano — resumo (mesmos campos da tabela da tela).
+// Excel de VÁRIOS planos, com o detalhe COMPLETO de cada um — uma aba
+// "Cadastro" com 1 linha por plano, e uma aba por seção (Composição, Desconto,
+// etc.) com todos os planos juntos, identificados pela coluna "Plano".
 function gerarExcelListaPlanos(planos) {
-  const linhas = planos.map(p => ({
+  const wb = XLSX.utils.book_new();
+
+  const linhasCadastro = planos.map(p => ({
     Plano: p.descricao || p.nome_exibicao,
     'Nome de exibição': p.nome_exibicao || '',
     Status: p.ativo ? 'Ativo' : 'Inativo',
-    Tecnologia: p.servico_tecnologia?.descricao || '',
+    'Tipo de pagamento': p.tipo_pagamento || '',
+    'Tipo de cobrança': p.tipo_cobranca || '',
     Valor: p.valor ?? '',
-    'Valor dos pacotes': p.valor_pacotes ?? '',
-    'Total c/ pacotes': p.valor_com_pacote ?? '',
+    'Garantia banda download': p.garantia_banda_download ?? '',
+    'Garantia banda upload': p.garantia_banda_upload ?? '',
     Vigência: p.validade ?? '',
+    Carnê: p.carne ? 'Sim' : 'Não',
+    'Emite contrato': p.emite_contrato ? 'Sim' : 'Não',
     'Clientes ativos': p.clientes_servicos_count ?? 0,
+    'Data cadastro': p.data_cadastro || '',
   }));
-  const wb = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), 'Planos');
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhasCadastro), 'Cadastro');
+
+  for (const [chave, nomeAba] of SECOES) {
+    const linhas = [];
+    for (const p of planos) {
+      const v = p[chave];
+      if (!v) continue;
+      const nomePlano = p.descricao || p.nome_exibicao || `Plano ${p.id_servico}`;
+      const itens = Array.isArray(v) ? v : [v];
+      for (const item of itens) linhas.push({ Plano: nomePlano, ...achatar(item) });
+    }
+    if (!linhas.length) continue;
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas), nomeAba.slice(0, 31));
+  }
+
   return XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
 }
 

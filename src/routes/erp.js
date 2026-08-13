@@ -1584,12 +1584,26 @@ router.get('/planos', async (req, res) => {
 // Rotas literais (/planos/pdf, /planos/excel) precisam vir ANTES de
 // /planos/:id, senão o Express trata "pdf"/"excel" como se fosse um id.
 
-// GET /api/erp/planos/pdf — PDF em lista (tabular, resumo) de todos os
-// planos já carregados no cache — sem detalhe por plano (senão precisaria
-// de 1 chamada por plano, pesado pra 500+ planos).
+// Planos com pelo menos 1 cliente ativo, já com o detalhe COMPLETO de cada um
+// (composição, contrato, desconto, etc.) — usado pelo "baixar todos". Só
+// entra quem tem cliente (ativo ou inativo com base ativa), senão vira 565
+// chamadas de detalhe por plano.
+async function planosComClienteDetalhados(empresaId) {
+  const resumo = await hubsoft.listarPlanosResumo(empresaId, {});
+  const comCliente = resumo.filter(p => (p.clientes_servicos_count ?? 0) > 0);
+  const detalhados = [];
+  for (const p of comCliente) {
+    const d = await hubsoft.detalhePlano(empresaId, p.id_servico);
+    detalhados.push({ ...d, clientes_servicos_count: p.clientes_servicos_count });
+  }
+  return detalhados;
+}
+
+// GET /api/erp/planos/pdf — PDF completo (todas as seções) de cada plano que
+// tem pelo menos 1 cliente ativo.
 router.get('/planos/pdf', async (req, res) => {
   try {
-    const planos = await hubsoft.listarPlanosResumo(req.usuario.empresa_id, {});
+    const planos = await planosComClienteDetalhados(req.usuario.empresa_id);
     const { gerarPDFListaPlanos } = require('../utils/gerarPDFPlano');
     const pdf = await gerarPDFListaPlanos(planos);
     res.setHeader('Content-Type', 'application/pdf');
@@ -1598,10 +1612,10 @@ router.get('/planos/pdf', async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
-// GET /api/erp/planos/excel — mesma lista, em planilha.
+// GET /api/erp/planos/excel — mesmo conjunto, em planilha (1 aba por seção).
 router.get('/planos/excel', async (req, res) => {
   try {
-    const planos = await hubsoft.listarPlanosResumo(req.usuario.empresa_id, {});
+    const planos = await planosComClienteDetalhados(req.usuario.empresa_id);
     const { gerarExcelListaPlanos } = require('../utils/gerarExcelPlano');
     const buf = gerarExcelListaPlanos(planos);
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');

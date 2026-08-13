@@ -66,7 +66,7 @@ const SECOES = [
   ['perfil_migracao_servico', 'Migração (SAC)'], ['servico_integracao_rede_neutra', 'Redes Neutras'], ['horarios_acesso', 'Horários de Acesso'],
 ];
 
-function montarHtmlPlano(plano) {
+function corpoPlano(plano) {
   const basico = {
     descricao: plano.descricao, nome_exibicao: plano.nome_exibicao, valor: plano.valor,
     tipo_pagamento: plano.tipo_pagamento, tipo_cobranca: plano.tipo_cobranca, validade: plano.validade,
@@ -79,12 +79,19 @@ function montarHtmlPlano(plano) {
     .filter(([chave]) => { const v = plano[chave]; return Array.isArray(v) ? v.length > 0 : !!v; })
     .map(([chave, titulo]) => `<div class="secao"><h4>${esc(titulo)}</h4>${renderValor(plano[chave], chave)}</div>`)
     .join('');
+  return `<div class="cadastro">${kvGrid(basico)}</div>${secoes}`;
+}
 
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
+const ESTILO_PLANO = `
     *{box-sizing:border-box;margin:0;padding:0}
     body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;font-size:10.5px}
     .cabecalho{background:#4f46e5;color:#fff;padding:14px 18px;margin-bottom:12px}
     .cabecalho h1{font-size:16px}
+    .cabecalho .sub{font-size:10px;opacity:.9;margin-top:2px}
+    .plano-bloco{page-break-before:always}
+    .plano-bloco:first-of-type{page-break-before:auto}
+    .plano-titulo{background:#eef2ff;color:#4f46e5;padding:6px 18px;margin-bottom:8px;font-size:13px;font-weight:700}
+    .plano-titulo .status{font-size:9px;font-weight:400;margin-left:6px;text-transform:uppercase;color:#64748b}
     .cadastro{border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin:0 18px 10px}
     .secao{margin:0 18px 10px;page-break-inside:avoid}
     .secao h4{font-size:11px;color:#4f46e5;border-bottom:1px solid #cbd5e1;padding-bottom:3px;margin-bottom:5px;text-transform:uppercase}
@@ -101,10 +108,12 @@ function montarHtmlPlano(plano) {
     .aninhado summary{font-size:8px;color:#64748b;padding:2px 0}
     .vazio{color:#94a3b8;font-style:italic}
     .rodape{margin:16px 18px 0;border-top:1px solid #e2e8f0;padding-top:6px;font-size:8px;color:#94a3b8;text-align:center}
-  </style></head><body>
+`;
+
+function montarHtmlPlano(plano) {
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${ESTILO_PLANO}</style></head><body>
     <div class="cabecalho"><h1>${esc(plano.descricao || plano.nome_exibicao || 'Plano')}</h1></div>
-    <div class="cadastro">${kvGrid(basico)}</div>
-    ${secoes}
+    ${corpoPlano(plano)}
     <div class="rodape">Kronos — Análise de Planos — Gerado em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</div>
   </body></html>`;
 }
@@ -113,48 +122,28 @@ async function gerarPDFPlano(plano) {
   return htmlParaPdf(montarHtmlPlano(plano));
 }
 
-// PDF em lista (tabular) de VÁRIOS planos — usa só os campos de resumo
-// (Status, Tecnologia, Valor, Pacotes, Total, Clientes), sem entrar no
-// detalhe de cada um (senão precisaria de 1 chamada extra por plano).
+// PDF de VÁRIOS planos, com o detalhe COMPLETO de cada um (mesmas seções do
+// PDF de 1 plano só) — usado pra "baixar todos", já filtrado só pra quem tem
+// cliente ativo (filtro é feito na rota, antes de chamar isso aqui).
 function montarHtmlListaPlanos(planos) {
-  const linhas = planos.map((p, i) => `
-    <tr>
-      <td>${i + 1}</td>
-      <td>${esc(p.descricao || p.nome_exibicao)}</td>
-      <td>${p.ativo ? 'Ativo' : 'Inativo'}</td>
-      <td>${esc(p.servico_tecnologia?.descricao || '—')}</td>
-      <td>${p.valor != null ? fmtBRL(p.valor) : '—'}</td>
-      <td>${p.valor_pacotes ? fmtBRL(p.valor_pacotes) : '—'}</td>
-      <td>${p.valor_com_pacote != null ? fmtBRL(p.valor_com_pacote) : (p.valor != null ? fmtBRL(p.valor) : '—')}</td>
-      <td>${p.clientes_servicos_count ?? '—'}</td>
-    </tr>`).join('');
+  const blocos = planos.map(p => `
+    <div class="plano-bloco">
+      <div class="plano-titulo">${esc(p.descricao || p.nome_exibicao || `Plano ${p.id_servico}`)}<span class="status">${p.ativo ? 'Ativo' : 'Inativo'} · ${p.clientes_servicos_count ?? 0} cliente(s)</span></div>
+      ${corpoPlano(p)}
+    </div>`).join('');
 
-  return `<!doctype html><html><head><meta charset="utf-8"><style>
-    *{box-sizing:border-box;margin:0;padding:0}
-    body{font-family:Arial,Helvetica,sans-serif;color:#1e293b;font-size:9.5px}
-    .cabecalho{background:#4f46e5;color:#fff;padding:14px 18px;margin-bottom:12px}
-    .cabecalho h1{font-size:16px}
-    .cabecalho .sub{font-size:10px;opacity:.9}
-    table{width:100%;border-collapse:collapse;margin:0 18px}
-    th{background:#eef2ff;color:#4f46e5;text-align:left;padding:5px 6px;font-size:8.5px;text-transform:uppercase;border-bottom:2px solid #cbd5e1}
-    td{padding:4px 6px;border-bottom:1px solid #f1f5f9}
-    tr:nth-child(even){background:#fafafa}
-    .rodape{margin:16px 18px 0;border-top:1px solid #e2e8f0;padding-top:6px;font-size:8px;color:#94a3b8;text-align:center}
-  </style></head><body>
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${ESTILO_PLANO}</style></head><body>
     <div class="cabecalho">
-      <h1>🎓 Análise de Planos — Lista Completa</h1>
+      <h1>Análise de Planos — Todos os planos com cliente ativo</h1>
       <div class="sub">${planos.length} plano(s) · Gerado em ${new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo' })}</div>
     </div>
-    <table>
-      <thead><tr><th>#</th><th>Plano</th><th>Status</th><th>Tecnologia</th><th>Valor</th><th>Pacotes</th><th>Total c/ pacotes</th><th>Clientes</th></tr></thead>
-      <tbody>${linhas}</tbody>
-    </table>
-    <div class="rodape">Kronos — Análise de Planos — Cadastro/configuração, sem dado de cliente</div>
+    ${blocos}
+    <div class="rodape">Kronos — Análise de Planos — Cadastro/configuração completa de cada plano</div>
   </body></html>`;
 }
 
 async function gerarPDFListaPlanos(planos) {
-  return htmlParaPdf(montarHtmlListaPlanos(planos), null, { landscape: true });
+  return htmlParaPdf(montarHtmlListaPlanos(planos));
 }
 
 module.exports = { gerarPDFPlano, montarHtmlPlano, gerarPDFListaPlanos, montarHtmlListaPlanos };
