@@ -1554,7 +1554,10 @@ router.post('/painel-testar', autenticar, async (req, res) => {
     if (!soAdminGestorErp(req, res)) return;
     await hubsoft.autenticarPainel(req.usuario.empresa_id);
     const hoje = new Date();
-    const dd = (d) => `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}/${d.getFullYear()}`;
+    // ISO (aaaa-mm-dd) — o HubSoft passou a rejeitar dd/mm/aaaa nesse relatório
+    // ("O campo data fim não contém uma data válida"), confirmado testando os
+    // dois formatos direto na API.
+    const dd = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
     const ini = new Date(hoje.getFullYear(), hoje.getMonth(), 1);
     const r = await hubsoft.relatorioServicos(req.usuario.empresa_id, {
       dataInicio: dd(ini), dataFim: dd(hoje), limit: 1, pagina: 1,

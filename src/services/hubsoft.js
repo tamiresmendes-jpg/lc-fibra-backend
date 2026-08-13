@@ -123,7 +123,7 @@ async function getTokenPainel(empresaId) {
 // Os registros vêm em paginador.data (15 por página por padrão).
 async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, limit = 200, origem = 'todos' } = {}) {
   const corpo = {
-    data_inicio: dataInicio, data_fim: dataFim,          // dd/mm/aaaa
+    data_inicio: dataInicio, data_fim: dataFim,          // ISO: aaaa-mm-dd (dd/mm/aaaa foi rejeitado, testado em ago/2026)
     tipo_data: 'data_venda', order_by: 'data_venda', order_by_key: 'ASC',
     tipo_endereco: { descricao: 'Instalação', valor: 'instalacao' },
     tipo_pessoa: { descricao: 'Todos', valor: 'todos' },
