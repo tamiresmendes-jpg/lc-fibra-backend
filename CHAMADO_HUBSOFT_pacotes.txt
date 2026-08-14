@@ -1,39 +1,58 @@
-Assunto: Erro "Ocorreu uma exceção no sistema" ao consultar pacotes paginados (painel)
+Assunto: Instabilidade intermitente — "Ocorreu uma exceção no sistema" ao consultar pacotes paginados (painel)
 
 Descrição do problema:
 Ao consultar o endpoint de listagem paginada de Pacotes do painel administrativo,
-recebemos consistentemente o erro "Ocorreu uma exceção no sistema, contate o suporte".
+recebemos INTERMITENTEMENTE o erro "Ocorreu uma exceção no sistema, contate o
+suporte". A MESMA chamada, com os MESMOS parâmetros e token, às vezes retorna
+sucesso (200, dados completos) e às vezes retorna esse erro (também HTTP 200,
+mas com status:error no corpo) — não há relação aparente com tamanho de
+página, token usado ou origem da chamada (testamos via integração backend e
+via painel web logados manualmente, com o mesmo padrão de falha/sucesso
+alternado nos dois casos).
 
 Endpoint utilizado:
-POST /api/v1/configuracao/geral/pacote/paginado/10?page=1
+POST /api/v1/configuracao/geral/pacote/paginado/{tamanho}?page=N
+(testado com tamanho 3 e 10 — ambos apresentam o mesmo padrão intermitente)
 
 Detalhes da requisição:
-- Autenticação: token de usuário do painel (login normal via OAuth2)
-- Tamanho de página: 10 registros (page-size baixo, não é consulta de grande volume)
-- Frequência: 1x por dia, chamada sequencial (uma página por vez, nunca em paralelo)
+- Autenticação: token de usuário do painel (via login, tanto OAuth2 de
+  aplicação quanto sessão de navegador)
+- Frequência: chamada sequencial (uma página por vez, nunca em paralelo),
+  com pausas de 1.5s entre páginas e retentativas espaçadas (5s, 15s)
 - Corpo da requisição: {} (vazio)
 - Headers: Content-Type: application/json;charset=UTF-8, Accept: application/json
 
-Comportamento observado:
-O erro ocorre de forma INTERMITENTE — a mesma chamada, com o mesmo token e
-mesmos parâmetros, às vezes retorna sucesso (200, dados completos) e às vezes
-retorna esse erro (também 200, mas com status:error no corpo). Testamos
-tanto via nosso sistema quanto direto no painel web (lcvirtual.hubsoft.com.br)
-logados manualmente — em ambos os casos, o mesmo padrão de sucesso/falha
-alternado ocorre, o que indica instabilidade do lado do servidor, não um
-problema de autenticação, tamanho de página ou origem da chamada.
+Linha do tempo das ocorrências (14/08/2026, horário de Brasília):
 
-Códigos de requisição para rastreamento (req_id):
-- req_6a7f4a2a202e2
-- req_6a7f4a2a9acf2
-- req_6a7f4ca50f4ba
-- req_6a7f4cba860ee
+| Horário | Origem                          | page-size | Resultado          | req_id / trace_id      |
+|---------|----------------------------------|-----------|---------------------|-------------------------|
+| 14:02   | Integração backend               | 10        | Falha               | req_6a7f4a2a202e2       |
+| 14:02   | Integração backend               | 10        | Falha               | req_6a7f4a2a9acf2       |
+| 14:12   | Integração backend               | 10        | Falha               | req_6a7f4ca50f4ba       |
+| 14:12   | Integração backend               | 10        | Falha               | req_6a7f4cba860ee       |
+| 14:25   | Integração backend               | 3         | Falha               | req_6a7f4f97b6d62       |
+| 14:25   | Integração backend               | 3         | Falha               | req_6a7f4fad48694       |
+| ~14:36  | Painel web (logado manualmente)  | 3         | SUCESSO             | (não capturado)         |
+| ~14:39  | Painel web (logado manualmente)  | 10        | SUCESSO             | (não capturado)         |
+| 14:42   | Integração backend (mesmo token) | 10        | Falha               | req_6a7f5549d3ff6       |
+| ~14:54  | Painel web (logado manualmente)  | 10        | SUCESSO — dados completos (pacotes id 45, 44, 30, 146...) | (não capturado) |
+| 14:58   | Integração backend               | 10        | Falha               | req_6a7f57429c0e3       |
+| 15:11   | Integração backend               | 10        | Falha               | req_6a7f5a86cd5e1       |
+| 15:11   | Integração backend               | 10        | Falha               | req_6a7f5a9c43ef0       |
+| 15:12   | Integração backend               | 10        | Falha               | req_6a7f5a86cd5e1 (2ª tentativa) |
 
-Data/hora das ocorrências:
-14/08/2026, entre 17:02 e 17:13 (horário UTC) — 14:02 a 14:13 (horário de Brasília)
+Observação importante:
+Note que às 14:42 usamos exatamente o MESMO token JWT (RS256) que a usuária
+havia usado com sucesso no painel web pouco antes (~14:39) — e mesmo assim a
+chamada da integração falhou. Isso descarta diferença de autenticação/permissão
+como causa; o padrão de falha se repete independente de quem/onde faz a
+chamada, indicando instabilidade no processamento do próprio endpoint no
+servidor HubSoft.
 
 Solicitação:
-Poderiam verificar nos logs do sistema o que está causando essa exceção nesse
-endpoint específico? Precisamos listar o catálogo de pacotes cadastrados
-(add-ons como Watch TV, HBO Max, etc.) e esse é o único endpoint de listagem
-paginada disponível para essa finalidade.
+Poderiam verificar nos logs do sistema, nos horários acima, o que está
+causando essa exceção intermitente nesse endpoint específico? Precisamos
+listar o catálogo de pacotes cadastrados (add-ons como Watch TV, HBO Max,
+roteadores adicionais, etc.) de forma confiável, e esse é o único endpoint
+de listagem paginada disponível para essa finalidade (não documentado na
+API pública oficial).
