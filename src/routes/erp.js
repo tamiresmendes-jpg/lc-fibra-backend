@@ -1658,12 +1658,19 @@ router.get('/planos/:id/excel', async (req, res) => {
 });
 
 // GET /api/erp/pacotes — lista TODOS os pacotes (add-ons) cadastrados no HubSoft.
-// Cacheado por 15min — ?forcar=1 ignora o cache.
+// Cacheado por 15min — ?forcar=1 ignora o cache. Cancelável: se a conexão cair
+// (botão Parar no front, ou fechar a aba), a varredura para de pedir a
+// próxima página no meio, em vez de continuar rodando escondida no servidor.
 router.get('/pacotes', async (req, res) => {
+  const controle = new AbortController();
+  req.on('close', () => controle.abort());
   try {
-    const pacotes = await hubsoft.listarPacotesResumo(req.usuario.empresa_id, { forcar: req.query.forcar === '1' });
-    res.json({ pacotes });
-  } catch (e) { res.status(400).json({ erro: e.message }); }
+    const { pacotes, cancelado } = await hubsoft.listarPacotesResumo(req.usuario.empresa_id, {
+      forcar: req.query.forcar === '1',
+      signal: controle.signal,
+    });
+    if (!res.writableEnded) res.json({ pacotes, cancelado });
+  } catch (e) { if (!res.writableEnded) res.status(400).json({ erro: e.message }); }
 });
 
 module.exports = router;

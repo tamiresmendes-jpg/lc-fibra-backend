@@ -720,7 +720,12 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 // (token de painel, página-size=10 confirmado funcionar; size=100+ quebra o HubSoft).
 // Pagina SEQUENCIALMENTE (nunca paralelo) pra não sobrecarregar. Cacheado 15min.
 let _pacotesListaCache = null, _pacotesListaExpira = 0;
-async function listarPacotesResumo(empresaId, { forcar = false } = {}) {
+// signal (AbortSignal, opcional): se abortado, para de pedir a PRÓXIMA página
+// no meio da varredura — a página em andamento ainda termina (não dá pra
+// cancelar um fetch já em voo sem derrubar a conexão), mas nenhuma chamada
+// nova ao HubSoft é feita depois disso. Não usa cache/preenche cache quando
+// cancelado (resultado parcial não deve ser servido como se fosse completo).
+async function listarPacotesResumo(empresaId, { forcar = false, signal } = {}) {
   if (!forcar && _pacotesListaCache && Date.now() < _pacotesListaExpira) return _pacotesListaCache;
 
   async function chamarPagina(pagina, tentouRelogar = false) {
@@ -745,18 +750,23 @@ async function listarPacotesResumo(empresaId, { forcar = false } = {}) {
   async function chamar() {
     const todos = [];
     let pagina = 1;
+    let cancelado = false;
     while (true) {
       const { lista, ultimaPagina } = await chamarPagina(pagina);
       todos.push(...lista);
       if (pagina >= ultimaPagina) break;
+      if (signal?.aborted) { cancelado = true; break; } // não pede a próxima página
       pagina++;
     }
-    return todos;
+    return { todos, cancelado };
   }
 
-  _pacotesListaCache = await chamar();
-  _pacotesListaExpira = Date.now() + 15 * 60 * 1000;
-  return _pacotesListaCache;
+  const { todos, cancelado } = await chamar();
+  if (!cancelado) {
+    _pacotesListaCache = todos;
+    _pacotesListaExpira = Date.now() + 15 * 60 * 1000;
+  }
+  return { pacotes: todos, cancelado };
 }
 
 // Cadastro do PACOTE (add-on como Watch TV, HBO Max, roteador mesh, etc) por
