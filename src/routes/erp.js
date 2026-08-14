@@ -1657,6 +1657,15 @@ router.get('/planos/:id/excel', async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// GET /api/erp/pacotes — lista TODOS os pacotes (add-ons) cadastrados no HubSoft.
+// Cacheado por 15min — ?forcar=1 ignora o cache.
+router.get('/pacotes', async (req, res) => {
+  try {
+    const pacotes = await hubsoft.listarPacotesResumo(req.usuario.empresa_id, { forcar: req.query.forcar === '1' });
+    res.json({ pacotes });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;
