@@ -15,9 +15,13 @@ Detalhes da requisição:
 - Headers: Content-Type: application/json;charset=UTF-8, Accept: application/json
 
 Comportamento observado:
-O erro ocorre de forma consistente, mesmo com múltiplas tentativas espaçadas
-(testamos com esperas de 5 e 15 segundos entre tentativas). Não parece ser
-instabilidade momentânea.
+O erro ocorre de forma INTERMITENTE — a mesma chamada, com o mesmo token e
+mesmos parâmetros, às vezes retorna sucesso (200, dados completos) e às vezes
+retorna esse erro (também 200, mas com status:error no corpo). Testamos
+tanto via nosso sistema quanto direto no painel web (lcvirtual.hubsoft.com.br)
+logados manualmente — em ambos os casos, o mesmo padrão de sucesso/falha
+alternado ocorre, o que indica instabilidade do lado do servidor, não um
+problema de autenticação, tamanho de página ou origem da chamada.
 
 Códigos de requisição para rastreamento (req_id):
 - req_6a7f4a2a202e2
