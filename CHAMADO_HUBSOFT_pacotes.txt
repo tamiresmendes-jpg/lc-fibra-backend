@@ -1,0 +1,35 @@
+Assunto: Erro "Ocorreu uma exceção no sistema" ao consultar pacotes paginados (painel)
+
+Descrição do problema:
+Ao consultar o endpoint de listagem paginada de Pacotes do painel administrativo,
+recebemos consistentemente o erro "Ocorreu uma exceção no sistema, contate o suporte".
+
+Endpoint utilizado:
+POST /api/v1/configuracao/geral/pacote/paginado/10?page=1
+
+Detalhes da requisição:
+- Autenticação: token de usuário do painel (login normal via OAuth2)
+- Tamanho de página: 10 registros (page-size baixo, não é consulta de grande volume)
+- Frequência: 1x por dia, chamada sequencial (uma página por vez, nunca em paralelo)
+- Corpo da requisição: {} (vazio)
+- Headers: Content-Type: application/json;charset=UTF-8, Accept: application/json
+
+Comportamento observado:
+O erro ocorre de forma consistente, mesmo com múltiplas tentativas espaçadas
+(testamos com esperas de 5 e 15 segundos entre tentativas). Não parece ser
+instabilidade momentânea.
+
+Códigos de requisição para rastreamento (req_id):
+- req_6a7f4a2a202e2
+- req_6a7f4a2a9acf2
+- req_6a7f4ca50f4ba
+- req_6a7f4cba860ee
+
+Data/hora das ocorrências:
+14/08/2026, entre 17:02 e 17:13 (horário UTC) — 14:02 a 14:13 (horário de Brasília)
+
+Solicitação:
+Poderiam verificar nos logs do sistema o que está causando essa exceção nesse
+endpoint específico? Precisamos listar o catálogo de pacotes cadastrados
+(add-ons como Watch TV, HBO Max, etc.) e esse é o único endpoint de listagem
+paginada disponível para essa finalidade.

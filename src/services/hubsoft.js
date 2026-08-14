@@ -716,8 +716,11 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 }
 
 // Lista geral de PACOTES (catálogo, todos cadastrados no HubSoft). Usa o
-// endpoint do painel `/configuracao/geral/pacote/paginado/10` (token de
-// painel, página-size=10 confirmado funcionar; size=100+ quebra o HubSoft).
+// endpoint do painel `/configuracao/geral/pacote/paginado/3` (token de
+// painel). page-size=10 dava "exceção no sistema" consistente (testado em
+// 14/08/2026); page-size=3, testado manualmente no painel pela usuária, deu
+// 200 OK — então esse é o tamanho confirmado funcionar pra ESSE endpoint
+// específico (o de Planos usa outro tamanho, não é o mesmo limite).
 // Pagina SEQUENCIALMENTE (nunca paralelo) e com uma pausa entre páginas —
 // esse endpoint específico já causou "exceção no sistema" no HubSoft antes
 // (ver buscarPacotePorId abaixo, que por isso usa outro endpoint pra busca
@@ -733,7 +736,7 @@ const _esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 async function listarPacotesResumo(empresaId) {
   async function chamarPaginaUmaVez(pagina, tentouRelogar = false) {
     const token = await getTokenPainel(empresaId);
-    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/10?page=${pagina}`, {
+    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/3?page=${pagina}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
       body: JSON.stringify({}),
