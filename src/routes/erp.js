@@ -1657,24 +1657,48 @@ router.get('/planos/:id/excel', async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
-// GET /api/erp/pacotes — lista TODOS os pacotes (add-ons) cadastrados no HubSoft.
-// Cacheado por 15min — ?forcar=1 ignora o cache. Cancelável: se a conexão cair
-// (botão Parar no front, ou fechar a aba), a varredura para de pedir a
-// próxima página no meio, em vez de continuar rodando escondida no servidor.
+// Sincroniza o catálogo de Pacotes de TODAS as empresas — chamada pelo cron
+// das 4h30 (syncAnalisePacotes.js), NUNCA pelo clique do usuário. Busca no
+// HubSoft (sequencial, 10/página) e substitui o cache em erp_pacotes_cache.
+async function sincronizarPacotes() {
+  const empresas = await db.all('SELECT id, nome FROM empresas');
+  for (const emp of empresas) {
+    try {
+      console.log(`[sync-pacotes] ${emp.nome || emp.id}`);
+      const { pacotes } = await hubsoft.listarPacotesResumo(emp.id);
+      await db.run(
+        `INSERT INTO erp_pacotes_cache (empresa_id, dados, erro, updated_at)
+         VALUES (?, ?, NULL, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+         ON CONFLICT (empresa_id) DO UPDATE SET dados = EXCLUDED.dados, erro = NULL, updated_at = EXCLUDED.updated_at`,
+        [emp.id, JSON.stringify(pacotes)]
+      );
+    } catch (e) {
+      console.error(`[sync-pacotes] falha ${emp.id}:`, e.message);
+      await db.run(
+        `INSERT INTO erp_pacotes_cache (empresa_id, dados, erro, updated_at)
+         VALUES (?, NULL, ?, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+         ON CONFLICT (empresa_id) DO UPDATE SET erro = EXCLUDED.erro, updated_at = EXCLUDED.updated_at`,
+        [emp.id, e.message]
+      ).catch(() => {});
+    }
+  }
+}
+
+// GET /api/erp/pacotes — lê o catálogo de pacotes já sincronizado de
+// madrugada (erp_pacotes_cache). NUNCA consulta o HubSoft na hora do clique
+// — só a rotina de madrugada (syncAnalisePacotes.js) faz isso.
 router.get('/pacotes', async (req, res) => {
-  const controle = new AbortController();
-  req.on('close', () => controle.abort());
   try {
-    const { pacotes, cancelado } = await hubsoft.listarPacotesResumo(req.usuario.empresa_id, {
-      forcar: req.query.forcar === '1',
-      signal: controle.signal,
-    });
-    if (!res.writableEnded) res.json({ pacotes, cancelado });
-  } catch (e) { if (!res.writableEnded) res.status(400).json({ erro: e.message }); }
+    const linha = await db.get('SELECT dados, erro, updated_at FROM erp_pacotes_cache WHERE empresa_id = ?', [req.usuario.empresa_id]);
+    if (!linha) return res.json({ pacotes: [], atualizadoEm: null });
+    if (linha.erro) return res.status(400).json({ erro: linha.erro, atualizadoEm: linha.updated_at });
+    res.json({ pacotes: linha.dados ? JSON.parse(linha.dados) : [], atualizadoEm: linha.updated_at });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;
 module.exports.sincronizarTodasFiscal = sincronizarTodasFiscal;
+module.exports.sincronizarPacotes = sincronizarPacotes;
 module.exports.sincronizarTodasFinanceiro = sincronizarTodasFinanceiro;

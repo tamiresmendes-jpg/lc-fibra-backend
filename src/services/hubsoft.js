@@ -715,19 +715,15 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
   return _planosCache;
 }
 
-// Lista geral de PACOTES (catálogo, todos cadastrados no HubSoft) — tela
-// "Análise de Pacotes". Usa o endpoint do painel `/configuracao/geral/pacote/paginado/10`
-// (token de painel, página-size=10 confirmado funcionar; size=100+ quebra o HubSoft).
-// Pagina SEQUENCIALMENTE (nunca paralelo) pra não sobrecarregar. Cacheado 15min.
-let _pacotesListaCache = null, _pacotesListaExpira = 0;
-// signal (AbortSignal, opcional): se abortado, para de pedir a PRÓXIMA página
-// no meio da varredura — a página em andamento ainda termina (não dá pra
-// cancelar um fetch já em voo sem derrubar a conexão), mas nenhuma chamada
-// nova ao HubSoft é feita depois disso. Não usa cache/preenche cache quando
-// cancelado (resultado parcial não deve ser servido como se fosse completo).
-async function listarPacotesResumo(empresaId, { forcar = false, signal } = {}) {
-  if (!forcar && _pacotesListaCache && Date.now() < _pacotesListaExpira) return _pacotesListaCache;
-
+// Lista geral de PACOTES (catálogo, todos cadastrados no HubSoft). Usa o
+// endpoint do painel `/configuracao/geral/pacote/paginado/10` (token de
+// painel, página-size=10 confirmado funcionar; size=100+ quebra o HubSoft).
+// Pagina SEQUENCIALMENTE (nunca paralelo) pra não sobrecarregar.
+//
+// Só é chamada pela rotina de madrugada (src/jobs/syncAnalisePacotes.js,
+// cron 4h30) — a tela "Análise de Pacotes" NUNCA dispara isso na hora do
+// clique, só lê o resultado já salvo em erp_pacotes_cache (ver erp.js).
+async function listarPacotesResumo(empresaId) {
   async function chamarPagina(pagina, tentouRelogar = false) {
     const token = await getTokenPainel(empresaId);
     const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/10?page=${pagina}`, {
@@ -747,26 +743,15 @@ async function listarPacotesResumo(empresaId, { forcar = false, signal } = {}) {
     return { lista, ultimaPagina };
   }
 
-  async function chamar() {
-    const todos = [];
-    let pagina = 1;
-    let cancelado = false;
-    while (true) {
-      const { lista, ultimaPagina } = await chamarPagina(pagina);
-      todos.push(...lista);
-      if (pagina >= ultimaPagina) break;
-      if (signal?.aborted) { cancelado = true; break; } // não pede a próxima página
-      pagina++;
-    }
-    return { todos, cancelado };
+  const todos = [];
+  let pagina = 1;
+  while (true) {
+    const { lista, ultimaPagina } = await chamarPagina(pagina);
+    todos.push(...lista);
+    if (pagina >= ultimaPagina) break;
+    pagina++;
   }
-
-  const { todos, cancelado } = await chamar();
-  if (!cancelado) {
-    _pacotesListaCache = todos;
-    _pacotesListaExpira = Date.now() + 15 * 60 * 1000;
-  }
-  return { pacotes: todos, cancelado };
+  return { pacotes: todos };
 }
 
 // Cadastro do PACOTE (add-on como Watch TV, HBO Max, roteador mesh, etc) por

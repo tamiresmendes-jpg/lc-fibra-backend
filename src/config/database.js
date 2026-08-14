@@ -1377,6 +1377,19 @@ async function initSchema() {
     )
   `);
 
+  // Cache dos Pacotes (add-ons como Watch TV, HBO Max, etc) — catálogo sem
+  // período (não muda por mês), só 1 linha por empresa. Preenchido pelo cron
+  // de madrugada (syncAnalisePacotes.js) — a tela NUNCA consulta o HubSoft
+  // na hora do clique, só lê o que já está salvo aqui.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS erp_pacotes_cache (
+      empresa_id TEXT PRIMARY KEY,
+      dados TEXT,
+      erro TEXT,
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Cache do financeiro mensal (recebido x a receber) — mesmo padrão.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS erp_financeiro_cache (
