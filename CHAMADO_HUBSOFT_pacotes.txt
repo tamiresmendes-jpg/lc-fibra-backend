@@ -45,9 +45,16 @@ Observação importante:
 Note que às 14:42 usamos exatamente o MESMO token JWT (RS256) que a usuária
 havia usado com sucesso no painel web pouco antes (~14:39) — e mesmo assim a
 chamada da integração falhou. Isso descarta diferença de autenticação/permissão
-como causa; o padrão de falha se repete independente de quem/onde faz a
-chamada, indicando instabilidade no processamento do próprio endpoint no
-servidor HubSoft.
+como causa.
+
+Também verificamos se poderia ser bloqueio/rate-limit por IP de origem: o
+servidor da nossa integração e o navegador da usuária estão na MESMA rede/
+provedor (AS264042, mesmo ASN), então essa hipótese também está descartada.
+
+O padrão de falha se repete independente de quem/onde faz a chamada,
+indicando instabilidade real no processamento do próprio endpoint no
+servidor HubSoft — não é causa da nossa parte (autenticação, IP, ou
+parâmetros da requisição).
 
 Solicitação:
 Poderiam verificar nos logs do sistema, nos horários acima, o que está
