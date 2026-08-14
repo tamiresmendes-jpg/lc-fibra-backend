@@ -56,6 +56,15 @@ indicando instabilidade real no processamento do próprio endpoint no
 servidor HubSoft — não é causa da nossa parte (autenticação, IP, ou
 parâmetros da requisição).
 
+Nota adicional: reparamos que TODAS as tentativas feitas pela nossa
+integração falharam, enquanto as tentativas manuais da usuária no painel
+web tiveram sucesso. Nosso servidor roda em um container compartilhado
+(carga de CPU variável por vizinhos de infraestrutura), o que pode gerar
+latência inconsistente nas nossas chamadas de saída — se o endpoint for
+sensível a timing/timeout da requisição, isso poderia explicar por que
+nossa origem específica tem mais falhas que uma sessão de navegador comum.
+Mencionamos isso caso seja útil para a investigação de vocês.
+
 Solicitação:
 Poderiam verificar nos logs do sistema, nos horários acima, o que está
 causando essa exceção intermitente nesse endpoint específico? Precisamos
