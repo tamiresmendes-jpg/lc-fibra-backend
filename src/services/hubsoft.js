@@ -715,6 +715,50 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
   return _planosCache;
 }
 
+// Lista geral de PACOTES (catálogo, todos cadastrados no HubSoft) — tela
+// "Análise de Pacotes". Usa o endpoint do painel `/configuracao/geral/pacote/paginado/10`
+// (token de painel, página-size=10 confirmado funcionar; size=100+ quebra o HubSoft).
+// Pagina SEQUENCIALMENTE (nunca paralelo) pra não sobrecarregar. Cacheado 15min.
+let _pacotesListaCache = null, _pacotesListaExpira = 0;
+async function listarPacotesResumo(empresaId, { forcar = false } = {}) {
+  if (!forcar && _pacotesListaCache && Date.now() < _pacotesListaExpira) return _pacotesListaCache;
+
+  async function chamarPagina(pagina, tentouRelogar = false) {
+    const token = await getTokenPainel(empresaId);
+    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/10?page=${pagina}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
+      body: JSON.stringify({}),
+    });
+    if (resp.status === 401 && !tentouRelogar) {
+      _tokenPainel = null; _expiraPainel = 0;
+      return chamarPagina(pagina, true);
+    }
+    const j = await resp.json().catch(() => null);
+    if (!j || j.status !== 'success') throw new Error(`HubSoft pacote/paginado: ${j?.msg || 'falha'}`);
+    const paginador = j.paginador || {};
+    const lista = paginador.data || j.pacotes || [];
+    const ultimaPagina = paginador.last_page || paginador.ultima_pagina || 1;
+    return { lista, ultimaPagina };
+  }
+
+  async function chamar() {
+    const todos = [];
+    let pagina = 1;
+    while (true) {
+      const { lista, ultimaPagina } = await chamarPagina(pagina);
+      todos.push(...lista);
+      if (pagina >= ultimaPagina) break;
+      pagina++;
+    }
+    return todos;
+  }
+
+  _pacotesListaCache = await chamar();
+  _pacotesListaExpira = Date.now() + 15 * 60 * 1000;
+  return _pacotesListaCache;
+}
+
 // Cadastro do PACOTE (add-on como Watch TV, HBO Max, roteador mesh, etc) por
 // id — o plano só guarda id/valor/degustação/obrigatório do pacote vinculado
 // (sem descrição/código/ativo soltos), então buscamos o cadastro completo à
