@@ -718,13 +718,20 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 // Lista geral de PACOTES (catálogo, todos cadastrados no HubSoft). Usa o
 // endpoint do painel `/configuracao/geral/pacote/paginado/10` (token de
 // painel, página-size=10 confirmado funcionar; size=100+ quebra o HubSoft).
-// Pagina SEQUENCIALMENTE (nunca paralelo) pra não sobrecarregar.
+// Pagina SEQUENCIALMENTE (nunca paralelo) e com uma pausa entre páginas —
+// esse endpoint específico já causou "exceção no sistema" no HubSoft antes
+// (ver buscarPacotePorId abaixo, que por isso usa outro endpoint pra busca
+// individual); aqui não há alternativa documentada de listagem, então damos
+// mais folga: pausa de 1.5s entre páginas e até 2 retentativas espaçadas
+// (5s, depois 15s) se o HubSoft devolver "exceção no sistema" — nunca
+// insiste imediatamente/repetidamente.
 //
 // Só é chamada pela rotina de madrugada (src/jobs/syncAnalisePacotes.js,
 // cron 4h30) — a tela "Análise de Pacotes" NUNCA dispara isso na hora do
 // clique, só lê o resultado já salvo em erp_pacotes_cache (ver erp.js).
+const _esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 async function listarPacotesResumo(empresaId) {
-  async function chamarPagina(pagina, tentouRelogar = false) {
+  async function chamarPaginaUmaVez(pagina, tentouRelogar = false) {
     const token = await getTokenPainel(empresaId);
     const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/10?page=${pagina}`, {
       method: 'POST',
@@ -733,7 +740,7 @@ async function listarPacotesResumo(empresaId) {
     });
     if (resp.status === 401 && !tentouRelogar) {
       _tokenPainel = null; _expiraPainel = 0;
-      return chamarPagina(pagina, true);
+      return chamarPaginaUmaVez(pagina, true);
     }
     const j = await resp.json().catch(() => null);
     if (!j || j.status !== 'success') throw new Error(`HubSoft pacote/paginado: ${j?.msg || 'falha'}`);
@@ -743,6 +750,17 @@ async function listarPacotesResumo(empresaId) {
     return { lista, ultimaPagina };
   }
 
+  async function chamarPagina(pagina) {
+    const esperas = [0, 5000, 15000]; // 1ª tentativa direto, depois 5s, depois 15s
+    let ultimoErro;
+    for (const espera of esperas) {
+      if (espera) await _esperar(espera);
+      try { return await chamarPaginaUmaVez(pagina); }
+      catch (e) { ultimoErro = e; }
+    }
+    throw ultimoErro;
+  }
+
   const todos = [];
   let pagina = 1;
   while (true) {
@@ -750,6 +768,7 @@ async function listarPacotesResumo(empresaId) {
     todos.push(...lista);
     if (pagina >= ultimaPagina) break;
     pagina++;
+    await _esperar(1500); // pausa entre páginas, não insiste sem folga
   }
   return { pacotes: todos };
 }
