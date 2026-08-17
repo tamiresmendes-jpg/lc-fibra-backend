@@ -327,6 +327,18 @@ router.put('/:id', async (req, res) => {
         `, [uuidv4(), req.params.id, pid, i, instrutor || null, tempo, topicos || null, pid, dataPrev || null]);
       }
     }
+
+    // Se isso é um MODELO (eh_modelo=1) e a estrutura de módulos foi editada,
+    // propaga automaticamente pros colaboradores já vinculados (clones) o que
+    // for novo — sem apagar/alterar progresso já feito neles. Ver
+    // sincronizarModeloComClones() pra detalhes de como o casamento é feito.
+    if (Array.isArray(modulos)) {
+      const trilha = await get('SELECT eh_modelo FROM treinamentos WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+      if (trilha && Number(trilha.eh_modelo) === 1) {
+        await sincronizarModeloComClones(req.params.id, req.usuario.empresa_id);
+      }
+    }
+
     res.json({ mensagem: 'Atualizado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -364,6 +376,16 @@ router.post('/:id/modulos/:modulo_id/pops', async (req, res) => {
         [uuidv4(), req.params.id, popId, ordem++, moduloId]);
       adicionados++;
     }
+
+    // Mesma propagação automática do PUT /:id: se isso é um MODELO, os POPs
+    // novos chegam também nos colaboradores já vinculados a ele.
+    if (adicionados > 0) {
+      const trilha = await get('SELECT eh_modelo FROM treinamentos WHERE id=$1 AND empresa_id=$2', [req.params.id, req.usuario.empresa_id]);
+      if (trilha && Number(trilha.eh_modelo) === 1) {
+        await sincronizarModeloComClones(req.params.id, req.usuario.empresa_id);
+      }
+    }
+
     res.json({ mensagem: 'Adicionado', modulo_id: moduloId, adicionados, ignorados: pop_ids.length - adicionados });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
@@ -752,6 +774,105 @@ async function clonarTrilha(origemId, empresaId, overrides = {}) {
 
   return novoId;
 }
+
+// ── SINCRONIZAR MODELO → CLONES ─────────────────────────────────────────────
+// Quando um MODELO (eh_modelo=1) ganha módulo/tópico novo depois que já foi
+// atribuído a colaboradores, os clones (eh_modelo=0, modelo_origem_id=modelo)
+// não recebem isso automaticamente — clonarTrilha só copia uma vez, na hora
+// de atribuir. Essa função soma nos clones o que falta, SEM apagar/tocar no
+// que já existe lá (progresso, status_pop, tempo_realizado, checklist_
+// marcado, datas reais — tudo preservado). Casamento módulo↔módulo é por
+// NOME (o id muda em cada clone); tópico↔tópico é por pop_id quando existe,
+// senão por título (tópico só-texto, sem POP).
+async function sincronizarModeloComClones(modeloId, empresaId) {
+  const clones = await all(
+    'SELECT id FROM treinamentos WHERE modelo_origem_id=$1 AND empresa_id=$2 AND excluido_em IS NULL',
+    [modeloId, empresaId]
+  );
+  if (!clones.length) return { clones: 0, modulosAdicionados: 0, itensAdicionados: 0 };
+
+  const modulosModelo = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1 ORDER BY ordem', [modeloId]);
+  const popsModelo = await all('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 ORDER BY ordem', [modeloId]);
+  const avaliacoesModelo = await all('SELECT * FROM treinamento_avaliacoes WHERE treinamento_id=$1 ORDER BY ordem', [modeloId]);
+
+  let modulosAdicionados = 0, itensAdicionados = 0;
+
+  for (const clone of clones) {
+    const modulosClone = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1', [clone.id]);
+    const modulosPorNome = new Map(modulosClone.map(m => [m.nome, m]));
+    const maxOrdemModulo = modulosClone.reduce((max, m) => Math.max(max, m.ordem || 0), -1);
+    const mapaModuloModeloParaClone = new Map(); // id do módulo no MODELO -> id do módulo no CLONE
+
+    // 1) Módulos que faltam no clone — cria mantendo o nome/ordem do modelo,
+    // sem tocar nos módulos que já existiam (não altera nome/ordem deles).
+    let proximaOrdem = maxOrdemModulo + 1;
+    for (const m of modulosModelo) {
+      let existente = modulosPorNome.get(m.nome);
+      if (!existente) {
+        const novoModuloId = uuidv4();
+        await run('INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem) VALUES ($1,$2,$3,$4)',
+          [novoModuloId, clone.id, m.nome, proximaOrdem++]);
+        modulosAdicionados++;
+        existente = { id: novoModuloId, nome: m.nome };
+        modulosPorNome.set(m.nome, existente);
+      }
+      mapaModuloModeloParaClone.set(m.id, existente.id);
+    }
+
+    // 2) Tópicos/POPs que faltam no clone, dentro do módulo correspondente —
+    // casamento por pop_id (quando tem POP) ou por título (tópico só-texto).
+    const popsClone = await all('SELECT pop_id, titulo, modulo_id FROM treinamento_pops WHERE treinamento_id=$1', [clone.id]);
+    const chavePop = p => p.pop_id ? `pop:${p.pop_id}` : `titulo:${p.titulo}`;
+    const chavesJaNoClone = new Set(popsClone.map(chavePop));
+    const maxOrdemPopPorModulo = new Map();
+    for (const p of popsClone) {
+      const atual = maxOrdemPopPorModulo.get(p.modulo_id) || -1;
+      maxOrdemPopPorModulo.set(p.modulo_id, Math.max(atual, p.ordem || 0));
+    }
+
+    for (const p of popsModelo) {
+      if (chavesJaNoClone.has(chavePop(p))) continue; // já existe nesse clone — não duplica, não altera
+      const moduloCloneId = p.modulo_id ? mapaModuloModeloParaClone.get(p.modulo_id) : null;
+      const proximaOrdemPop = (maxOrdemPopPorModulo.get(moduloCloneId) ?? -1) + 1;
+      maxOrdemPopPorModulo.set(moduloCloneId, proximaOrdemPop);
+      await run(`INSERT INTO treinamento_pops
+        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      `, [uuidv4(), clone.id, p.pop_id, proximaOrdemPop, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
+          p.data_prevista, moduloCloneId, p.titulo, p.descricao]);
+      itensAdicionados++;
+    }
+
+    // 3) Avaliações novas do modelo (de módulo ou de tópico) que faltam no clone.
+    const avaliacoesClone = await all('SELECT pop_id, modulo_id, titulo FROM treinamento_avaliacoes WHERE treinamento_id=$1', [clone.id]);
+    const chaveAval = a => `${a.modulo_id || ''}|${a.pop_id || ''}|${a.titulo}`;
+    const chavesAvalJaNoClone = new Set(avaliacoesClone.map(chaveAval));
+    for (const av of avaliacoesModelo) {
+      const moduloCloneId = av.modulo_id ? mapaModuloModeloParaClone.get(av.modulo_id) : null;
+      if (chavesAvalJaNoClone.has(chaveAval({ ...av, modulo_id: moduloCloneId }))) continue;
+      await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+        [uuidv4(), clone.id, av.pop_id, moduloCloneId, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
+    }
+  }
+
+  return { clones: clones.length, modulosAdicionados, itensAdicionados };
+}
+
+// POST /:id/sincronizar — força a sincronização de um MODELO com os clones já
+// atribuídos. Usada pra "destravar" trilhas que ficaram desatualizadas ANTES
+// dessa propagação automática existir (a sincronização automática no PUT/POST
+// de módulos cobre daqui pra frente; essa rota resolve o atraso que já
+// existe hoje nos vínculos antigos, tipo CALL CENTER).
+router.post('/:id/sincronizar', async (req, res) => {
+  try {
+    const modelo = await get('SELECT id, eh_modelo FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!modelo) return res.status(404).json({ erro: 'Modelo de trilha não encontrado' });
+    if (Number(modelo.eh_modelo) !== 1) return res.status(400).json({ erro: 'Só é possível sincronizar a partir de um modelo (Trilha de Aprendizagem)' });
+    const resultado = await sincronizarModeloComClones(req.params.id, req.usuario.empresa_id);
+    res.json({ mensagem: 'Sincronizado', ...resultado });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
 
 // ── DUPLICAR ──────────────────────────────────────────────────────────────────
 // Copia uma trilha JÁ ATRIBUÍDA pra treinar outra pessoa com o mesmo conteúdo.
