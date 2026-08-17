@@ -11,6 +11,8 @@
 //   HUBSOFT_CLIENT_SECRET=...
 //   HUBSOFT_USER=api@suaempresa.com.br
 //   HUBSOFT_PASSWORD=...
+//   HUBSOFT_PACOTES_USUARIO=...   (login dedicado, só p/ listarPacotesResumo)
+//   HUBSOFT_PACOTES_SENHA=...
 // ─────────────────────────────────────────────────────────────────────────────
 
 function baseUrl() {
@@ -116,6 +118,46 @@ async function getTokenPainel(empresaId) {
   }
   return _loginPainelEmAndamento;
 }
+
+// ── Login dedicado só para a consulta de Pacotes (listarPacotesResumo) ────
+// Usa um usuário/senha próprios (HUBSOFT_PACOTES_USUARIO/HUBSOFT_PACOTES_SENHA
+// no .env do servidor), isolado da conta de integração (HUBSOFT_USER/PASSWORD)
+// e do login painel compartilhado pelos outros relatórios (getTokenPainel) —
+// pedido explícito da usuária em 14/08/2026, não afeta as demais consultas.
+let _tokenPacotes = null, _expiraPacotes = 0, _loginPacotesEmAndamento = null;
+async function autenticarPacotes() {
+  const usuario = process.env.HUBSOFT_PACOTES_USUARIO;
+  const senha = process.env.HUBSOFT_PACOTES_SENHA;
+  if (!usuario || !senha) throw new Error('HUBSOFT_PACOTES_USUARIO/HUBSOFT_PACOTES_SENHA não configurados no .env');
+  const resp = await fetch(`${baseUrl()}/oauth/token`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+    body: JSON.stringify({
+      grant_type: 'password',
+      client_id: process.env.HUBSOFT_CLIENT_ID,
+      client_secret: process.env.HUBSOFT_CLIENT_SECRET,
+      username: usuario,
+      password: senha,
+    }),
+  });
+  if (!resp.ok) {
+    const t = await resp.text().catch(() => '');
+    throw new Error(`HubSoft pacotes: login recusado (${resp.status}) ${t.slice(0, 160)}`);
+  }
+  const d = await resp.json();
+  _tokenPacotes = d.access_token;
+  _expiraPacotes = Date.now() + Math.max(0, (Number(d.expires_in) || 3600) - 300) * 1000;
+  return _tokenPacotes;
+}
+
+async function getTokenPacotes() {
+  if (_tokenPacotes && Date.now() < _expiraPacotes) return _tokenPacotes;
+  if (!_loginPacotesEmAndamento) {
+    _loginPacotesEmAndamento = autenticarPacotes().finally(() => { _loginPacotesEmAndamento = null; });
+  }
+  return _loginPacotesEmAndamento;
+}
+
 
 // Relatório de Serviços do painel — a fonte com cidade, bairro, origem e status.
 // ATENÇÃO ao formato: tipo_data/order_by/order_by_key/origem são STRING;
@@ -716,9 +758,11 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 }
 
 // Lista geral de PACOTES (catálogo, todos cadastrados no HubSoft). Usa o
-// endpoint do painel `/configuracao/geral/pacote/paginado/3` (token de
-// painel). page-size=10 dava "exceção no sistema" consistente (testado em
-// 14/08/2026); page-size=3, testado manualmente no painel pela usuária, deu
+// endpoint do painel `/configuracao/geral/pacote/paginado/3`, autenticado com
+// login dedicado (getTokenPacotes()/HUBSOFT_PACOTES_USUARIO+SENHA no .env),
+// isolado da conta de integração e do painel compartilhado — pedido explícito
+// da usuária em 14/08/2026. page-size=10 dava "exceção no sistema" consistente
+// (testado em 14/08/2026); page-size=3, testado manualmente no painel pela usuária, deu
 // 200 OK — então esse é o tamanho confirmado funcionar pra ESSE endpoint
 // específico (o de Planos usa outro tamanho, não é o mesmo limite).
 // Pagina SEQUENCIALMENTE (nunca paralelo) e com uma pausa entre páginas —
@@ -732,23 +776,86 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 // Só é chamada pela rotina de madrugada (src/jobs/syncAnalisePacotes.js,
 // cron 4h30) — a tela "Análise de Pacotes" NUNCA dispara isso na hora do
 // clique, só lê o resultado já salvo em erp_pacotes_cache (ver erp.js).
+//
+// O retorno bruto do HubSoft traz cada pacote com pacote_composicao[] (itens
+// que compõem o pacote, com descrição de cobrança) e outros objetos pesados
+// (empresa, usuário, fiscal) que não interessam à tela — resumirPacote()
+// extrai só descrição/código/valor/ativo/composição antes de guardar no cache.
 const _esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+// Extrai só o que a tela precisa (descrição, código, valor, ativo e a
+// composição) — o retorno bruto do HubSoft traz cada pacote com objetos
+// fiscais/empresa/usuário completos aninhados (pacote_composicao,
+// pacote_historico, etc), pesando muito mais do que precisamos guardar no
+// cache. Os campos de composição mantidos são os mesmos usados pela tela
+// "Análise de Planos" (ItemComposicao em AnalisePlanos.jsx) pra reaproveitar
+// o mesmo componente visual de blocos Cadastro/ICMS/PIS/COFINS.
+function resumirComposicaoPacote(c) {
+  return {
+    descricao: c.descricao,
+    descricao_nota_fiscal: c.descricao_nota_fiscal,
+    representacao_percentual: c.representacao_percentual,
+    incluir_dici_anatel: c.incluir_dici_anatel,
+    incluir_nfcom: c.incluir_nfcom,
+    aplicar_partilha_icms: c.aplicar_partilha_icms,
+    icms: c.icms,
+    pis: c.pis,
+    cofins: c.cofins,
+    tipo_tributo: c.tipo_tributo,
+    tipo_bc_pis: c.tipo_bc_pis,
+    tipo_bc_cofins: c.tipo_bc_cofins,
+    plano_conta: c.plano_conta ? { descricao: c.plano_conta.descricao } : null,
+    tipo_documento_fiscal: c.tipo_documento_fiscal ? { descricao: c.tipo_documento_fiscal.descricao } : null,
+    tipo_servico: c.tipo_servico ? { descricao: c.tipo_servico.descricao } : null,
+    cst_tributacao: c.cst_tributacao ? { descricao: c.cst_tributacao.descricao } : null,
+    cst_pis: c.cst_pis ? { descricao: c.cst_pis.descricao } : null,
+    cst_cofins: c.cst_cofins ? { descricao: c.cst_cofins.descricao } : null,
+    tipo_utilizacao: c.tipo_utilizacao ? { descricao: c.tipo_utilizacao.descricao, codigo: c.tipo_utilizacao.codigo } : null,
+    classificacao_item_doc_fiscal: c.classificacao_item_doc_fiscal ? { descricao: c.classificacao_item_doc_fiscal.descricao, codigo: c.classificacao_item_doc_fiscal.codigo } : null,
+    cclass: c.cclass ? { descricao: c.cclass.descricao, codigo: c.cclass.codigo } : null,
+  };
+}
+function resumirPacote(p) {
+  const composicao = Array.isArray(p.pacote_composicao)
+    ? p.pacote_composicao.map(resumirComposicaoPacote)
+    : [];
+  return {
+    id_pacote: p.id_pacote,
+    codigo: p.codigo,
+    descricao: p.descricao,
+    display: p.display,
+    valor: p.valor,
+    ativo: p.ativo,
+    composicao,
+  };
+}
+
 async function listarPacotesResumo(empresaId) {
   async function chamarPaginaUmaVez(pagina, tentouRelogar = false) {
-    const token = await getTokenPainel(empresaId);
+    const token = await getTokenPacotes();
+    // O corpo da requisição precisa ir preenchido (quant/page/filtros) — o
+    // navegador manda {"quant":"20","page":1,"filtros":{"status":true}}, mas
+    // estávamos mandando corpo vazio {} até 14/08/2026 (o tamanho ia só na
+    // URL /paginado/N). filtros.status=true traz só pacotes ativos, como
+    // pedido pela usuária.
     const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/3?page=${pagina}`, {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
-      body: JSON.stringify({}),
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: 'application/json',
+        'Content-Type': 'application/json;charset=UTF-8',
+        Referer: 'https://lcvirtual.hubsoft.com.br/',
+        'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36',
+      },
+      body: JSON.stringify({ quant: '3', page: pagina, filtros: { status: true } }),
     });
     if (resp.status === 401 && !tentouRelogar) {
-      _tokenPainel = null; _expiraPainel = 0;
+      _tokenPacotes = null; _expiraPacotes = 0;
       return chamarPaginaUmaVez(pagina, true);
     }
     const j = await resp.json().catch(() => null);
     if (!j || j.status !== 'success') throw new Error(`HubSoft pacote/paginado: ${j?.msg || 'falha'}`);
-    const paginador = j.paginador || {};
-    const lista = paginador.data || j.pacotes || [];
+    const paginador = j.pacotes || j.paginador || {};
+    const lista = paginador.data || [];
     const ultimaPagina = paginador.last_page || paginador.ultima_pagina || 1;
     return { lista, ultimaPagina };
   }
@@ -768,12 +875,138 @@ async function listarPacotesResumo(empresaId) {
   let pagina = 1;
   while (true) {
     const { lista, ultimaPagina } = await chamarPagina(pagina);
-    todos.push(...lista);
+    todos.push(...lista.map(resumirPacote));
     if (pagina >= ultimaPagina) break;
     pagina++;
     await _esperar(1500); // pausa entre páginas, não insiste sem folga
   }
   return { pacotes: todos };
+}
+
+// Tabelas de tradução de id_exigibilidade_nfse/id_tipo_tributacao_nfse — o
+// cadastro do serviço (endpoint /configuracao/fiscal/servico_nfse) só traz o
+// ID interno do banco, sem texto, e esse ID NÃO é o mesmo "Código" mostrado
+// nas telas de listagem de Configurações → Fiscal (ex.: id_tipo_tributacao_
+// nfse=9 no cadastro do serviço corresponde ao código "6 - Tributável dentro
+// do município"). A tradução certa vem do endpoint auxiliar usado pela tela
+// "Editar Serviço de NFSE" quando abre — GET /configuracao/fiscal/
+// servico_nfse/create — que retorna os arrays exigibilidades_nfse e
+// tipos_tributacao_nfse com id_exigibilidade_nfse/id_tipo_tributacao_nfse
+// (mesmo ID do cadastro do serviço) + codigo (o número mostrado na tela) +
+// descricao. Capturado manualmente pela usuária em 17/08/2026 — se o HubSoft
+// adicionar/mudar opções, refazer essa captura.
+const EXIGIBILIDADE_NFSE = {
+  3: { codigo: '1', descricao: 'Exigível' },
+  4: { codigo: '2', descricao: 'Não incidência' },
+  5: { codigo: '3', descricao: 'Isenção' },
+  6: { codigo: '4', descricao: 'Exportação' },
+  7: { codigo: '5', descricao: 'Imunidade' },
+  8: { codigo: '6', descricao: 'Exigibilidade Suspensa por Decisão Judicial' },
+  9: { codigo: '7', descricao: 'Exigibilidade Suspensa por Processo Administrativo' },
+};
+const TIPO_TRIBUTACAO_NFSE = {
+  4: { codigo: '1', descricao: 'Isenta de ISS' },
+  5: { codigo: '2', descricao: 'Imune' },
+  6: { codigo: '3', descricao: 'Não Incidência no Município' },
+  7: { codigo: '4', descricao: 'Não Tributável' },
+  8: { codigo: '5', descricao: 'Retida' },
+  9: { codigo: '6', descricao: 'Tributável dentro do município' },
+  10: { codigo: '7', descricao: 'Tributável fora do município' },
+  11: { codigo: '8', descricao: 'Tributável dentro do município pelo tomador' },
+};
+function comCodigoENome(id, mapa) {
+  if (id === null || id === undefined || id === '') return null;
+  const traduzido = mapa[id];
+  return traduzido ? { codigo: traduzido.codigo, descricao: traduzido.descricao } : { codigo: id, descricao: null };
+}
+
+// Extrai só o que a tela precisa de cada serviço NFSe — o retorno bruto do
+// HubSoft traz objetos de CNAE/CST/classificação tributária completos
+// aninhados que não interessam à tela.
+function resumirServicoNfse(s) {
+  return {
+    // Informações do Serviço
+    id_servico_nfse: s.id_servico_nfse,
+    codigo: s.codigo,
+    descricao: s.descricao,
+    descricao_interna: s.descricao_interna,
+    display: s.display,
+    ativo: s.ativo,
+    cnae: s.cnae ? { codigo: s.cnae.codigo, descricao: s.cnae.nome } : null,
+    codigo_nbs: s.codigo_nbs,
+    codigo_tributacao: s.codigo_tributacao,
+    codigo_tributacao_nacional: s.codigo_tributacao_nacional,
+    codigo_obra: s.codigo_obra,
+    codigo_indicador_operacao_consumo: s.codigo_indicador_operacao_consumo,
+    id_tipo_tributacao_nfse: comCodigoENome(s.id_tipo_tributacao_nfse, TIPO_TRIBUTACAO_NFSE),
+    id_exigibilidade_nfse: comCodigoENome(s.id_exigibilidade_nfse, EXIGIBILIDADE_NFSE),
+    consumidor_final: s.consumidor_final,
+    // Tributação / Impostos
+    aliquota_iss: s.aliquota_iss,
+    aliquota_pis: s.aliquota_pis,
+    aliquota_cofins: s.aliquota_cofins,
+    aliquota_csll: s.aliquota_csll,
+    aliquota_inss: s.aliquota_inss,
+    aliquota_irrf: s.aliquota_irrf,
+    cst_pis: s.cst_pis,
+    cst_cofins: s.cst_cofins,
+    cst_pis_cofins: s.cst_pis_cofins,
+    valor_minimo_destacar_pis: s.valor_minimo_destacar_pis,
+    valor_minimo_destacar_cofins: s.valor_minimo_destacar_cofins,
+    valor_minimo_destacar_csll: s.valor_minimo_destacar_csll,
+    valor_minimo_destacar_irrf: s.valor_minimo_destacar_irrf,
+    valor_minimo_destacar_inss: s.valor_minimo_destacar_inss,
+    valor_minimo_retencao_pis: s.valor_minimo_retencao_pis,
+    valor_minimo_retencao_cofins: s.valor_minimo_retencao_cofins,
+    valor_minimo_retencao_csll: s.valor_minimo_retencao_csll,
+    valor_minimo_retencao_irrf: s.valor_minimo_retencao_irrf,
+    destacar_iss_pf: s.destacar_iss_pf,
+    destacar_iss_pj: s.destacar_iss_pj,
+    destacar_pis_pf: s.destacar_pis_pf,
+    destacar_pis_pj: s.destacar_pis_pj,
+    destacar_cofins_pf: s.destacar_cofins_pf,
+    destacar_cofins_pj: s.destacar_cofins_pj,
+    destacar_csll_pf: s.destacar_csll_pf,
+    destacar_csll_pj: s.destacar_csll_pj,
+    destacar_irrf_pf: s.destacar_irrf_pf,
+    destacar_irrf_pj: s.destacar_irrf_pj,
+    destacar_inss_pf: s.destacar_inss_pf,
+    destacar_inss_pj: s.destacar_inss_pj,
+    // IBS / CBS
+    aliquota_ibs_uf: s.aliquota_ibs_uf,
+    aliquota_ibs_mun: s.aliquota_ibs_mun,
+    aliquota_cbs: s.aliquota_cbs,
+    cst_ibs_cbs: s.cst_ibs_cbs ? { codigo: s.cst_ibs_cbs.codigo, descricao: s.cst_ibs_cbs.descricao } : null,
+    cclass_tributacao: s.cclass_tributacao ? { codigo: s.cclass_tributacao.codigo, descricao: s.cclass_tributacao.descricao } : null,
+  };
+}
+
+// Catálogo de Serviços NFSe (usado na emissão de nota fiscal de serviço) —
+// endpoint GET simples do painel, sem paginação (poucos registros, ~8 nessa
+// empresa). Usa o mesmo login dedicado de pacotes (HUBSOFT_PACOTES_USUARIO/
+// SENHA) por ser rota /configuracao/ do painel, igual pacote/paginado.
+// Só é chamada pela rotina de madrugada (src/jobs/syncAnaliseServicosNfse.js)
+// — a tela "Análise de Serviços (NFSe)" NUNCA dispara isso na hora do clique,
+// só lê o resultado já salvo em erp_servicos_nfse_cache (ver erp.js).
+async function listarServicosNfse(empresaId, tentouRelogar = false) {
+  const token = await getTokenPacotes();
+  const resp = await fetch(`${baseUrl()}/api/v1/configuracao/fiscal/servico_nfse?status=true`, {
+    method: 'GET',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      Accept: 'application/json',
+      Referer: 'https://lcvirtual.hubsoft.com.br/',
+      'User-Agent': 'Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/151.0.0.0 Mobile Safari/537.36',
+    },
+  });
+  if (resp.status === 401 && !tentouRelogar) {
+    _tokenPacotes = null; _expiraPacotes = 0;
+    return listarServicosNfse(empresaId, true);
+  }
+  const j = await resp.json().catch(() => null);
+  if (!j || j.status !== 'success') throw new Error(`HubSoft servico_nfse: ${j?.msg || 'falha'}`);
+  const lista = (j.servicos_nfse || []).map(resumirServicoNfse);
+  return { servicos: lista };
 }
 
 // Cadastro do PACOTE (add-on como Watch TV, HBO Max, roteador mesh, etc) por
@@ -857,5 +1090,5 @@ module.exports = {
   listarNfse, listarNfcom, listarNotaTelecom, listarNfe55, listarNotaEntrada,
   varrerNfse, varrerNfcom, varrerNotaTelecom, varrerNfe55,
   listarCaixasFinanceiro, listarMeiosPagamento,
-  listarPlanosResumo, detalhePlano, listarPacotesResumo,
+  listarPlanosResumo, detalhePlano, listarPacotesResumo, listarServicosNfse,
 };

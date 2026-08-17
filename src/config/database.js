@@ -1390,6 +1390,18 @@ async function initSchema() {
     )
   `);
 
+  // Cache dos Serviços NFSe (catálogo usado na emissão de nota fiscal de
+  // serviço) — mesmo padrão do erp_pacotes_cache: sem período, 1 linha por
+  // empresa, preenchido pelo cron de madrugada (syncAnaliseServicosNfse.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS erp_servicos_nfse_cache (
+      empresa_id TEXT PRIMARY KEY,
+      dados TEXT,
+      erro TEXT,
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Cache do financeiro mensal (recebido x a receber) — mesmo padrão.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS erp_financeiro_cache (

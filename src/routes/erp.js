@@ -1687,6 +1687,22 @@ async function sincronizarPacotes() {
 // GET /api/erp/pacotes — lê o catálogo de pacotes já sincronizado de
 // madrugada (erp_pacotes_cache). NUNCA consulta o HubSoft na hora do clique
 // — só a rotina de madrugada (syncAnalisePacotes.js) faz isso.
+// GET /api/erp/pacotes/pdf — PDF com todos os pacotes já salvos no cache
+// (mesmo dado da tela) — não consulta o HubSoft, só lê o que já está salvo.
+router.get('/pacotes/pdf', async (req, res) => {
+  try {
+    const linha = await db.get('SELECT dados, erro FROM erp_pacotes_cache WHERE empresa_id = ?', [req.usuario.empresa_id]);
+    if (linha?.erro) return res.status(400).json({ erro: linha.erro });
+    const pacotes = linha?.dados ? JSON.parse(linha.dados) : [];
+    if (!pacotes.length) return res.status(400).json({ erro: 'Nenhum pacote sincronizado ainda.' });
+    const { gerarPDFListaPacotes } = require('../utils/gerarPDFPacotes');
+    const pdf = await gerarPDFListaPacotes(pacotes);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="pacotes.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 router.get('/pacotes', async (req, res) => {
   try {
     const linha = await db.get('SELECT dados, erro, updated_at FROM erp_pacotes_cache WHERE empresa_id = ?', [req.usuario.empresa_id]);
@@ -1696,9 +1712,64 @@ router.get('/pacotes', async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// Sincroniza o catálogo de Serviços NFSe de TODAS as empresas — chamada pelo
+// cron das 4h45 (syncAnaliseServicosNfse.js), NUNCA pelo clique do usuário.
+async function sincronizarServicosNfse() {
+  const empresas = await db.all('SELECT id, nome FROM empresas');
+  for (const emp of empresas) {
+    try {
+      console.log(`[sync-servicos-nfse] ${emp.nome || emp.id}`);
+      const { servicos } = await hubsoft.listarServicosNfse(emp.id);
+      await db.run(
+        `INSERT INTO erp_servicos_nfse_cache (empresa_id, dados, erro, updated_at)
+         VALUES (?, ?, NULL, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+         ON CONFLICT (empresa_id) DO UPDATE SET dados = EXCLUDED.dados, erro = NULL, updated_at = EXCLUDED.updated_at`,
+        [emp.id, JSON.stringify(servicos)]
+      );
+    } catch (e) {
+      console.error(`[sync-servicos-nfse] falha ${emp.id}:`, e.message);
+      await db.run(
+        `INSERT INTO erp_servicos_nfse_cache (empresa_id, dados, erro, updated_at)
+         VALUES (?, NULL, ?, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+         ON CONFLICT (empresa_id) DO UPDATE SET erro = EXCLUDED.erro, updated_at = EXCLUDED.updated_at`,
+        [emp.id, e.message]
+      ).catch(() => {});
+    }
+  }
+}
+
+// GET /api/erp/servicos-nfse/pdf — PDF com todos os serviços já salvos no
+// cache (mesmo dado da tela) — não consulta o HubSoft, só lê o que já está salvo.
+router.get('/servicos-nfse/pdf', async (req, res) => {
+  try {
+    const linha = await db.get('SELECT dados, erro FROM erp_servicos_nfse_cache WHERE empresa_id = ?', [req.usuario.empresa_id]);
+    if (linha?.erro) return res.status(400).json({ erro: linha.erro });
+    const servicos = linha?.dados ? JSON.parse(linha.dados) : [];
+    if (!servicos.length) return res.status(400).json({ erro: 'Nenhum serviço NFSe sincronizado ainda.' });
+    const { gerarPDFListaServicosNfse } = require('../utils/gerarPDFServicosNfse');
+    const pdf = await gerarPDFListaServicosNfse(servicos);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="servicos-nfse.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/servicos-nfse — lê o catálogo de Serviços NFSe já sincronizado
+// de madrugada (erp_servicos_nfse_cache). NUNCA consulta o HubSoft na hora do
+// clique — só a rotina de madrugada (syncAnaliseServicosNfse.js) faz isso.
+router.get('/servicos-nfse', async (req, res) => {
+  try {
+    const linha = await db.get('SELECT dados, erro, updated_at FROM erp_servicos_nfse_cache WHERE empresa_id = ?', [req.usuario.empresa_id]);
+    if (!linha) return res.json({ servicos: [], atualizadoEm: null });
+    if (linha.erro) return res.status(400).json({ erro: linha.erro, atualizadoEm: linha.updated_at });
+    res.json({ servicos: linha.dados ? JSON.parse(linha.dados) : [], atualizadoEm: linha.updated_at });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;
 module.exports.sincronizarTodasFiscal = sincronizarTodasFiscal;
 module.exports.sincronizarPacotes = sincronizarPacotes;
 module.exports.sincronizarTodasFinanceiro = sincronizarTodasFinanceiro;
+module.exports.sincronizarServicosNfse = sincronizarServicosNfse;

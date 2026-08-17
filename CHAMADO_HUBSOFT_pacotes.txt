@@ -1,3 +1,8 @@
+[RESOLVIDO em 14/08/2026 — NÃO PRECISA MAIS SER ENVIADO AO SUPORTE]
+Causa raiz encontrada do nosso lado: estávamos enviando o corpo da requisição
+vazio ({}), quando o endpoint espera {"quant":"N","page":N,"filtros":{...}}.
+Corrigido — ver nota no final do arquivo.
+
 Assunto: Instabilidade intermitente — "Ocorreu uma exceção no sistema" ao consultar pacotes paginados (painel)
 
 Descrição do problema:
@@ -40,6 +45,12 @@ Linha do tempo das ocorrências (14/08/2026, horário de Brasília):
 | 15:11   | Integração backend               | 10        | Falha               | req_6a7f5a86cd5e1       |
 | 15:11   | Integração backend               | 10        | Falha               | req_6a7f5a9c43ef0       |
 | 15:12   | Integração backend               | 10        | Falha               | req_6a7f5a86cd5e1 (2ª tentativa) |
+| 16:58   | Integração backend (rotina cron) | 3         | Falha               | req_6a7f739278315       |
+| 16:59   | Integração backend (rotina cron) | 3         | Falha               | req_6a7f73a7e85ba       |
+| 17:14   | Integração backend (login dedicado, novo usuário) | 3 | Falha        | req_6a7f7743a796e       |
+| 17:15   | Integração backend (login dedicado, novo usuário) | 3 | Falha        | req_6a7f7759448b3       |
+| 17:18   | Integração backend (com User-Agent/Referer de navegador) | 3 | Falha  | req_6a7f7846c01a2       |
+| 17:19   | Integração backend (com User-Agent/Referer de navegador) | 3 | Falha  | req_6a7f785c4de3a       |
 
 Observação importante:
 Note que às 14:42 usamos exatamente o MESMO token JWT (RS256) que a usuária
@@ -50,6 +61,21 @@ como causa.
 Também verificamos se poderia ser bloqueio/rate-limit por IP de origem: o
 servidor da nossa integração e o navegador da usuária estão na MESMA rede/
 provedor (AS264042, mesmo ASN), então essa hipótese também está descartada.
+
+Testamos ainda com um TERCEIRO usuário/login do painel (dedicado, criado
+especificamente para este teste em 14/08/2026 ~17h) — a autenticação (login)
+foi aceita normalmente, mas a consulta seguinte ao endpoint de pacotes falhou
+com o mesmo erro genérico. Isso descarta definitivamente qualquer relação com
+o usuário/credencial usado — já testamos 3 logins diferentes (conta de
+integração, conta de painel compartilhada, e este novo dedicado), todos com
+o mesmo padrão de falha vindo da nossa origem.
+
+Também testamos replicar exatamente os headers HTTP usados pelo navegador
+(User-Agent de Chrome/Android, Referer apontando pro próprio painel
+lcvirtual.hubsoft.com.br) na chamada feita pelo nosso servidor — mesmo assim
+o erro se repetiu. Isso descarta a hipótese de bloqueio/tratamento diferente
+por falta de headers "de navegador" (ex.: alguma regra de WAF/anti-bot
+baseada em User-Agent ou Referer).
 
 O padrão de falha se repete independente de quem/onde faz a chamada,
 indicando instabilidade real no processamento do próprio endpoint no
@@ -72,3 +98,17 @@ listar o catálogo de pacotes cadastrados (add-ons como Watch TV, HBO Max,
 roteadores adicionais, etc.) de forma confiável, e esse é o único endpoint
 de listagem paginada disponível para essa finalidade (não documentado na
 API pública oficial).
+
+────────────────────────────────────────────────────────────────────────────
+RESOLUÇÃO (14/08/2026, ~17:20 Brasília):
+A usuária capturou o payload exato enviado pelo navegador nessa mesma
+chamada: {"quant":"20","page":1,"filtros":{"status":true}} no CORPO da
+requisição. Nosso backend estava enviando corpo vazio ({}), com o tamanho de
+página apenas na URL (/paginado/3). Corrigimos para enviar quant/page/filtros
+no corpo, igual ao navegador — testamos imediatamente após a correção e as
+DUAS empresas sincronizaram com sucesso, sem nenhuma falha, em ~14 segundos.
+
+Não era instabilidade do HubSoft: era um corpo de requisição incompleto do
+nosso lado. As pausas/retentativas continuam no código por precaução, mas
+não deveriam mais ser necessárias com o corpo correto. Chamado não precisa
+mais ser enviado ao suporte HubSoft.
