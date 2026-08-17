@@ -1599,6 +1599,20 @@ async function planosComClienteDetalhados(empresaId) {
   return detalhados;
 }
 
+// Mesmo critério "relevantes" já usado na tela (filtro padrão que esconde só
+// os inativos sem nenhum cliente) — usado pelo relatório de itens de
+// composição (fiscal), que precisa ver ativo E inativo-com-cliente.
+async function planosRelevantesDetalhados(empresaId) {
+  const resumo = await hubsoft.listarPlanosResumo(empresaId, {});
+  const relevantes = resumo.filter(p => p.ativo || (p.clientes_servicos_count ?? 0) > 0);
+  const detalhados = [];
+  for (const p of relevantes) {
+    const d = await hubsoft.detalhePlano(empresaId, p.id_servico);
+    detalhados.push({ ...d, clientes_servicos_count: p.clientes_servicos_count });
+  }
+  return detalhados;
+}
+
 // GET /api/erp/planos/pdf — PDF completo (todas as seções) de cada plano que
 // tem pelo menos 1 cliente ativo.
 router.get('/planos/pdf', async (req, res) => {
@@ -1621,6 +1635,44 @@ router.get('/planos/excel', async (req, res) => {
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', 'attachment; filename="planos.xlsx"');
     res.send(buf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/relatorio-ebooks-cst — planos com cliente ativo cujo
+// item de composição "LC+ Livros" (E-books SVA) tem CST ICMS, PIS ou COFINS
+// diferente de "Nenhum" (pedido pra achar cadastro fiscal fora do padrão
+// esperado desse item específico).
+router.get('/planos/relatorio-ebooks-cst', async (req, res) => {
+  try {
+    const planos = await planosComClienteDetalhados(req.usuario.empresa_id);
+    const { gerarPDFRelatorioEbooksCst } = require('../utils/gerarPDFEbooksCst');
+    const pdf = await gerarPDFRelatorioEbooksCst(planos);
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="planos-ebooks-cst.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/relatorio-ebooks-cst/json — mesmo filtro acima, mas em
+// JSON leve pra tela mostrar direto (sem precisar baixar PDF pra só olhar).
+router.get('/planos/relatorio-ebooks-cst/json', async (req, res) => {
+  try {
+    const planos = await planosComClienteDetalhados(req.usuario.empresa_id);
+    const { filtrarPlanosComCstForaDoPadrao, resumirEncontrados } = require('../utils/gerarPDFEbooksCst');
+    const encontrados = filtrarPlanosComCstForaDoPadrao(planos);
+    res.json({ planos: resumirEncontrados(encontrados) });
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// GET /api/erp/planos/itens-composicao — TODOS os itens de composição fiscal
+// (ICMS/PIS/COFINS/IBS/CBS/NFCom etc.) de cada plano ATIVO ou INATIVO COM
+// CLIENTE — 1 linha por item (não por plano). Alimenta a aba "Itens da
+// Composição (Fiscal)" da tela, com filtros combinados no frontend.
+router.get('/planos/itens-composicao', async (req, res) => {
+  try {
+    const planos = await planosRelevantesDetalhados(req.usuario.empresa_id);
+    const { listarItensComposicao } = require('../utils/itensComposicaoFiscal');
+    res.json({ itens: listarItensComposicao(planos) });
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
