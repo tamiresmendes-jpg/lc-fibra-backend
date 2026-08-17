@@ -508,6 +508,121 @@ async function initSchema() {
     -- vai pra uma pessoa diferente (colaborador_id de cada treinamento_modulos).
     ALTER TABLE treinamentos ADD COLUMN IF NOT EXISTS modo_repasse TEXT DEFAULT 'completa';
 
+    -- ── Catálogo de Trilhas reutilizável (17/08/2026, corrigido 18/08/2026) ─
+    -- "Trilha" (vocabulário da usuária) = o que HOJE é 1 treinamento modelo
+    -- inteiro (eh_modelo=1, ex. "TRILHA 4 – Atendimento Comercial") — NÃO é
+    -- o módulo. Cada Trilha tem vários MÓDULOS dentro (trilha_catalogo_
+    -- modulos), cada módulo com seus tópicos/POPs (trilha_catalogo_topicos).
+    -- Cadastrada 1x como conteúdo reutilizável, SEM instrutor nem colaborador
+    -- — só nome/descrição/módulos/tópicos + um responsável/supervisor que
+    -- acompanha o conteúdo (diferente de quem efetivamente ensina). Um
+    -- Treinamento (pasta, ex. CALL CENTER) escolhe quais Trilhas do catálogo
+    -- o compõem (treinamento_trilhas); ao vincular um colaborador, cada
+    -- MÓDULO da Trilha ganha um vínculo individual em treinamento_modulos
+    -- (que já existia, guarda o progresso real) — é lá que o instrutor de
+    -- fato é escolhido, podendo variar por colaborador/turma mesmo sendo o
+    -- mesmo conteúdo.
+    CREATE TABLE IF NOT EXISTS trilhas_catalogo (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      descricao TEXT,
+      responsavel_id TEXT,
+      ordem INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    ALTER TABLE trilhas_catalogo ADD COLUMN IF NOT EXISTS excluido_em TIMESTAMP;
+    ALTER TABLE trilhas_catalogo ADD COLUMN IF NOT EXISTS excluido_por TEXT;
+    ALTER TABLE trilhas_catalogo ADD COLUMN IF NOT EXISTS excluido_por_nome TEXT;
+    -- Marca de onde essa trilha do catálogo veio na migração inicial (o
+    -- treinamento modelo antigo) — só usado pra retro-preencher treinamento_
+    -- modulos uma vez; não é lido depois disso.
+    ALTER TABLE trilhas_catalogo ADD COLUMN IF NOT EXISTS migrado_de_treinamento_id TEXT;
+
+    -- Módulos dentro da Trilha do catálogo (ex.: "Módulo 1 - Cadastro de
+    -- Clientes" dentro da Trilha "TRILHA 4 – Atendimento Comercial").
+    CREATE TABLE IF NOT EXISTS trilha_catalogo_modulos (
+      id TEXT PRIMARY KEY,
+      trilha_catalogo_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      ordem INTEGER DEFAULT 0
+    );
+
+    -- Tópicos/POPs do TEMPLATE de cada módulo da trilha — conteúdo puro, sem
+    -- progresso (isso fica em treinamento_pops, por colaborador). Mesma
+    -- forma de tópico que já existe hoje (pop_id opcional, título/descrição
+    -- pra tópico só-texto).
+    CREATE TABLE IF NOT EXISTS trilha_catalogo_topicos (
+      id TEXT PRIMARY KEY,
+      trilha_catalogo_modulo_id TEXT NOT NULL,
+      pop_id TEXT,
+      titulo TEXT,
+      descricao TEXT,
+      ordem INTEGER DEFAULT 0,
+      tempo_estimado INTEGER DEFAULT 0,
+      topicos TEXT,
+      versao_pop TEXT
+    );
+    -- CREATE TABLE IF NOT EXISTS não altera uma tabela que já existia com
+    -- outro schema (ex.: criada por uma versão anterior desta migração) —
+    -- por isso os ALTER TABLE abaixo são explícitos e sempre rodam, garantindo
+    -- que a coluna nova existe e a antiga (de uma versão anterior, se houver)
+    -- não fica mais obrigatória. Já aconteceu: a v1 desta migração criou
+    -- trilha_catalogo_topicos com trilha_catalogo_id NOT NULL; ao trocar pra
+    -- trilha_catalogo_modulo_id na v2, a tabela já existente não foi
+    -- atualizada, causando crash loop em produção (INSERT falhando por
+    -- NOT NULL numa coluna que o código novo não preenche mais).
+    ALTER TABLE trilha_catalogo_topicos ADD COLUMN IF NOT EXISTS trilha_catalogo_modulo_id TEXT;
+    ALTER TABLE trilha_catalogo_topicos DROP COLUMN IF EXISTS trilha_catalogo_id;
+    ALTER TABLE trilha_catalogo_avaliacoes ADD COLUMN IF NOT EXISTS trilha_catalogo_modulo_id TEXT;
+    ALTER TABLE trilha_catalogo_avaliacoes DROP COLUMN IF EXISTS trilha_catalogo_id;
+
+    -- Composição do Treinamento (pasta, ex. CALL CENTER): quais Trilhas do
+    -- catálogo fazem parte dele. Ao inserir aqui, o sistema propaga a trilha
+    -- (todos os módulos dela) pros colaboradores já vinculados àquele
+    -- treinamento_principal_id (ver sincronizarTreinamentoComColaboradores
+    -- em treinamentos.js).
+    CREATE TABLE IF NOT EXISTS treinamento_trilhas (
+      id TEXT PRIMARY KEY,
+      treinamento_principal_id TEXT NOT NULL,
+      trilha_catalogo_id TEXT NOT NULL,
+      ordem INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      UNIQUE(treinamento_principal_id, trilha_catalogo_id)
+    );
+
+    -- Vínculo individual Colaborador↔Módulo: reaproveita treinamento_modulos
+    -- (já guarda todo o progresso real de quem já está treinando hoje) — só
+    -- ganha a referência de qual MÓDULO da trilha do catálogo ele representa
+    -- (trilha_catalogo_modulo_id — a Trilha em si é resolvida indiretamente
+    -- via trilha_catalogo_modulos.trilha_catalogo_id), e um soft-remove
+    -- (nunca DELETE físico se já tiver progresso, ver rota correspondente).
+    -- Fica NULL nos módulos "órfãos" (sem modelo de origem) — ficam como
+    -- legado até a usuária vincular manualmente na tela de cadastro de Trilha.
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS trilha_catalogo_modulo_id TEXT;
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS removido_em TIMESTAMP;
+    ALTER TABLE treinamento_modulos ADD COLUMN IF NOT EXISTS removido_por TEXT;
+    -- Referência de qual tópico do catálogo esse treinamento_pops representa
+    -- (pra futura reciclagem de conteúdo) — não usado pra progresso, que
+    -- continua 100% nas colunas próprias de treinamento_pops.
+    ALTER TABLE treinamento_pops ADD COLUMN IF NOT EXISTS trilha_catalogo_topico_id TEXT;
+
+    -- Avaliações cadastradas no TEMPLATE de cada módulo da Trilha — mesma
+    -- forma de treinamento_avaliacoes (módulo inteiro, tópico específico via
+    -- pop_id). Propagadas pra treinamento_avaliacoes (com IDs novos) quando
+    -- a Trilha é vinculada a um colaborador, junto com os tópicos.
+    CREATE TABLE IF NOT EXISTS trilha_catalogo_avaliacoes (
+      id TEXT PRIMARY KEY,
+      trilha_catalogo_modulo_id TEXT NOT NULL,
+      trilha_catalogo_topico_id TEXT,
+      titulo TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      perguntas TEXT NOT NULL,
+      obrigatorio INTEGER DEFAULT 1,
+      ordem INTEGER DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+
     CREATE TABLE IF NOT EXISTS feedbacks (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,
@@ -1945,6 +2060,107 @@ async function initSchema() {
     await pool.query(`UPDATE usuarios SET email = 'contato@lcvirtualnet.com.br', senha = '', primeiro_acesso = 1 WHERE email = 'admin@sistema.com' AND perfil = 'admin'`);
     await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('reset_senha_admins_v2', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
     console.log('✅ Migração reset_senha_admins_v2 executada');
+  }
+
+  // Popula o Catálogo de Trilhas a partir dos MODELOS já existentes hoje
+  // (eh_modelo=1) — cada MODELO INTEIRO se torna 1 Trilha reutilizável no
+  // catálogo (ex.: "TRILHA 4 – Atendimento Comercial"), com os MÓDULOS dele
+  // preservados dentro (trilha_catalogo_modulos), cada um com seus tópicos.
+  // v2 (18/08/2026): corrige v1, que tratava cada MÓDULO como se fosse 1
+  // trilha (26 trilhas em vez de 8) — v1 é apagada e refeita do zero aqui,
+  // só nas tabelas novas do catálogo (nenhum dado de colaborador é tocado).
+  // Depois, retro-preenche treinamento_modulos.trilha_catalogo_modulo_id em
+  // TODOS os clones (colaboradores reais já em treinamento) casando pelo
+  // modelo_origem_id + nome do módulo — preserva 100% do progresso já
+  // existente, só adiciona a referência. Módulos órfãos (sem modelo_origem_id)
+  // ficam de fora, como legado, pra usuária vincular manualmente depois.
+  // Executa uma única vez (idempotente).
+  const jaMigrouCatalogoTrilhasV1 = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'catalogo_trilhas_v1'`);
+  if (jaMigrouCatalogoTrilhasV1) {
+    // Desfaz a v1 (granularidade errada) antes de rodar a v2 — só tabelas do
+    // catálogo, novas, sem nenhum colaborador dependendo delas ainda.
+    await run(`UPDATE treinamento_modulos SET trilha_catalogo_modulo_id = NULL WHERE trilha_catalogo_modulo_id IS NOT NULL`);
+    await run(`DELETE FROM trilha_catalogo_avaliacoes`);
+    await run(`DELETE FROM treinamento_trilhas`);
+    await run(`DELETE FROM trilha_catalogo_topicos`);
+    await run(`DELETE FROM trilhas_catalogo`);
+    await run(`DELETE FROM migracoes_executadas WHERE nome = 'catalogo_trilhas_v1'`);
+    console.log('🔄 Migração catalogo_trilhas_v1 desfeita (granularidade errada) — refazendo como v2');
+  }
+  const jaMigrouCatalogoTrilhas = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'catalogo_trilhas_v2'`);
+  if (!jaMigrouCatalogoTrilhas) {
+    const { randomUUID } = require('crypto');
+    const modelos = await all(`SELECT id, empresa_id, titulo, responsavel_id, trilha_principal_id, ordem FROM treinamentos WHERE eh_modelo = 1 AND excluido_em IS NULL`);
+    for (const modelo of modelos) {
+      const trilhaCatalogoId = randomUUID();
+      await run(
+        `INSERT INTO trilhas_catalogo (id, empresa_id, nome, responsavel_id, ordem, migrado_de_treinamento_id)
+         VALUES ($1, $2, $3, $4, $5, $6)`,
+        [trilhaCatalogoId, modelo.empresa_id, modelo.titulo, modelo.responsavel_id, modelo.ordem, modelo.id]
+      );
+
+      const modulosModelo = await all(`SELECT * FROM treinamento_modulos WHERE treinamento_id = $1 ORDER BY ordem`, [modelo.id]);
+      const mapaModuloModeloParaCatalogo = new Map(); // treinamento_modulos.id (modelo) -> trilha_catalogo_modulos.id
+      for (const mod of modulosModelo) {
+        const moduloCatalogoId = randomUUID();
+        mapaModuloModeloParaCatalogo.set(mod.id, moduloCatalogoId);
+        await run(
+          `INSERT INTO trilha_catalogo_modulos (id, trilha_catalogo_id, nome, ordem) VALUES ($1, $2, $3, $4)`,
+          [moduloCatalogoId, trilhaCatalogoId, mod.nome, mod.ordem]
+        );
+
+        const topicosModulo = await all(`SELECT * FROM treinamento_pops WHERE treinamento_id = $1 AND modulo_id = $2 ORDER BY ordem`, [modelo.id, mod.id]);
+        const mapaPopIdParaCatalogo = new Map(); // treinamento_pops.pop_id (POP real, quando existe) -> trilha_catalogo_topicos.id
+        for (const topico of topicosModulo) {
+          const novoTopicoId = randomUUID();
+          if (topico.pop_id) mapaPopIdParaCatalogo.set(topico.pop_id, novoTopicoId);
+          await run(
+            `INSERT INTO trilha_catalogo_topicos (id, trilha_catalogo_modulo_id, pop_id, titulo, descricao, ordem, tempo_estimado, topicos, versao_pop)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
+            [novoTopicoId, moduloCatalogoId, topico.pop_id, topico.titulo, topico.descricao, topico.ordem, topico.tempo_estimado, topico.topicos, topico.versao_pop]
+          );
+        }
+        // Avaliações do módulo do modelo (modulo_id = mod.id) e as de tópico
+        // específico dentro dele (pop_id = id do POP real, casado acima).
+        const avaliacoesModulo = await all(`SELECT * FROM treinamento_avaliacoes WHERE treinamento_id = $1 AND modulo_id = $2`, [modelo.id, mod.id]);
+        for (const av of avaliacoesModulo) {
+          await run(
+            `INSERT INTO trilha_catalogo_avaliacoes (id, trilha_catalogo_modulo_id, trilha_catalogo_topico_id, titulo, tipo, perguntas, obrigatorio, ordem)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+            [randomUUID(), moduloCatalogoId, av.pop_id ? mapaPopIdParaCatalogo.get(av.pop_id) || null : null, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]
+          );
+        }
+
+        // Retro-preenche o próprio módulo do modelo (pra ficar consistente)
+        // e todos os módulos dos clones já criados a partir dele, casando por
+        // nome — mesma lógica de casamento já usada em sincronizarModeloComClones.
+        await run(`UPDATE treinamento_modulos SET trilha_catalogo_modulo_id = $1 WHERE id = $2`, [moduloCatalogoId, mod.id]);
+        await run(
+          `UPDATE treinamento_modulos SET trilha_catalogo_modulo_id = $1
+           WHERE nome = $2 AND trilha_catalogo_modulo_id IS NULL
+             AND treinamento_id IN (SELECT id FROM treinamentos WHERE modelo_origem_id = $3 AND eh_modelo = 0)`,
+          [moduloCatalogoId, mod.nome, modelo.id]
+        );
+      }
+
+      if (modelo.trilha_principal_id) {
+        await run(
+          `INSERT INTO treinamento_trilhas (id, treinamento_principal_id, trilha_catalogo_id, ordem)
+           VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
+          [randomUUID(), modelo.trilha_principal_id, trilhaCatalogoId, modelo.ordem]
+        );
+      }
+    }
+    const naoCasados = await get(
+      `SELECT COUNT(*)::int AS total FROM treinamento_modulos tm
+       JOIN treinamentos t ON t.id = tm.treinamento_id
+       WHERE t.eh_modelo = 0 AND t.modelo_origem_id IS NOT NULL AND tm.trilha_catalogo_modulo_id IS NULL`
+    );
+    if (naoCasados?.total > 0) {
+      console.warn(`⚠️  Migração catalogo_trilhas_v2: ${naoCasados.total} módulo(s) de colaboradores não casaram com nenhuma trilha do catálogo (nome diferente do módulo no modelo de origem) — revisar manualmente.`);
+    }
+    await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('catalogo_trilhas_v2', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+    console.log('✅ Migração catalogo_trilhas_v2 executada');
   }
 }
 

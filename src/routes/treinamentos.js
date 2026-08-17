@@ -127,16 +127,16 @@ router.get('/meus', async (req, res) => {
     // pra confundir "seu módulo pra ser treinado" com "você é o instrutor".
     const itens = await all(`
       SELECT z.*,
-        (z.colaborador_id = $3 OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.colaborador_id = $3)) AS sou_treinando,
+        (z.colaborador_id = $3 OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.colaborador_id = $3 AND tm.removido_em IS NULL)) AS sou_treinando,
         (z.responsavel_id = $3
-          OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = z.id AND tp.instrutor_id = $3)
-          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.instrutor_id = $3)
+          OR EXISTS (SELECT 1 FROM treinamento_pops tp JOIN treinamento_modulos tm2 ON tm2.id = tp.modulo_id WHERE tp.treinamento_id = z.id AND tp.instrutor_id = $3 AND (tp.modulo_id IS NULL OR tm2.removido_em IS NULL))
+          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = z.id AND tm.instrutor_id = $3 AND tm.removido_em IS NULL)
         ) AS sou_instrutor
       FROM (${SELECT_TREINAMENTO}
         WHERE t.empresa_id = $1 AND t.excluido_em IS NULL AND (
           $2 = 1 OR t.colaborador_id = $3 OR t.responsavel_id = $3
           OR EXISTS (SELECT 1 FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.instrutor_id = $3)
-          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = t.id AND (tm.colaborador_id = $3 OR tm.instrutor_id = $3))
+          OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.treinamento_id = t.id AND (tm.colaborador_id = $3 OR tm.instrutor_id = $3) AND tm.removido_em IS NULL)
         )
       ) z
       ORDER BY z.data_hora ASC
@@ -216,6 +216,264 @@ router.post('/', async (req, res) => {
     res.status(201).json({ id, titulo });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
+
+// ═══════════════════════════════════════════════════════════════════════════
+// ── CATÁLOGO DE TRILHAS (17/08/2026, corrigido 18/08/2026) ──────────────────
+// "Trilha" aqui é o conteúdo reutilizável de UM treinamento inteiro (nome,
+// descrição, MÓDULOS com seus tópicos/POPs) + um responsável/supervisor que
+// acompanha — SEM instrutor nem colaborador. Uma Trilha tem N módulos dentro
+// (trilha_catalogo_modulos), cada um com seus tópicos (trilha_catalogo_
+// topicos) — não confundir Trilha com Módulo. Um Treinamento (treinamento_
+// trilhas_principais, ex. CALL CENTER) escolhe quais Trilhas do catálogo o
+// compõem (treinamento_trilhas). Ao vincular um colaborador a uma Trilha
+// daquele Treinamento, cada MÓDULO da trilha ganha um vínculo individual em
+// treinamento_modulos (que já guarda todo o progresso) — só ali se define o
+// instrutor, que pode variar por colaborador/turma mesmo sendo a mesma
+// Trilha. Ver plano completo em cheerful-growing-micali.md.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// GET /api/treinamentos/trilhas-catalogo — lista o catálogo com contagem de
+// módulos e quantos Treinamentos usam cada trilha.
+router.get('/trilhas-catalogo', async (req, res) => {
+  try {
+    const linhas = await all(`
+      SELECT tc.*, r.nome AS responsavel_nome,
+        (SELECT COUNT(*) FROM trilha_catalogo_modulos tcm WHERE tcm.trilha_catalogo_id = tc.id) AS total_modulos,
+        (SELECT COUNT(*) FROM treinamento_trilhas tt WHERE tt.trilha_catalogo_id = tc.id) AS total_treinamentos
+      FROM trilhas_catalogo tc
+      LEFT JOIN usuarios r ON r.id = tc.responsavel_id
+      WHERE tc.empresa_id = $1 AND tc.excluido_em IS NULL
+      ORDER BY tc.ordem ASC, tc.nome ASC
+    `, [req.usuario.empresa_id]);
+    res.json(linhas);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// GET /api/treinamentos/trilhas-catalogo/:id — detalhe com módulos e tópicos.
+router.get('/trilhas-catalogo/:id', async (req, res) => {
+  try {
+    const trilha = await get(
+      `SELECT tc.*, r.nome AS responsavel_nome FROM trilhas_catalogo tc
+       LEFT JOIN usuarios r ON r.id = tc.responsavel_id
+       WHERE tc.id=$1 AND tc.empresa_id=$2 AND tc.excluido_em IS NULL`,
+      [req.params.id, req.usuario.empresa_id]
+    );
+    if (!trilha) return res.status(404).json({ erro: 'Trilha não encontrada' });
+    const modulos = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1 ORDER BY ordem', [req.params.id]);
+    for (const mod of modulos) {
+      mod.topicos = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [mod.id]);
+      mod.avaliacoes = await all(`
+        SELECT tca.*, tct.pop_id FROM trilha_catalogo_avaliacoes tca
+        LEFT JOIN trilha_catalogo_topicos tct ON tct.id = tca.trilha_catalogo_topico_id
+        WHERE tca.trilha_catalogo_modulo_id=$1 ORDER BY tca.ordem
+      `, [mod.id]);
+    }
+    trilha.modulos = modulos;
+    res.json(trilha);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+async function salvarTopicosCatalogo(moduloCatalogoId, topicos) {
+  await run('DELETE FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [moduloCatalogoId]);
+  if (!Array.isArray(topicos)) return;
+  for (const [i, item] of topicos.entries()) {
+    await run(`INSERT INTO trilha_catalogo_topicos
+      (id, trilha_catalogo_modulo_id, pop_id, titulo, descricao, ordem, tempo_estimado, topicos, versao_pop)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT versao FROM pops WHERE id = $3))
+    `, [uuidv4(), moduloCatalogoId, item.pop_id || null, item.titulo || null, item.descricao || null, i, item.tempo_estimado || 0, item.topicos || null]);
+  }
+}
+
+// Avaliação do módulo do catálogo referencia o tópico por pop_id (id do POP
+// real) — igual à convenção já usada em treinamento_avaliacoes.pop_id.
+async function salvarAvaliacoesCatalogo(moduloCatalogoId, avaliacoes) {
+  await run('DELETE FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1', [moduloCatalogoId]);
+  if (!Array.isArray(avaliacoes)) return;
+  const topicos = await all('SELECT id, pop_id FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [moduloCatalogoId]);
+  for (const [i, av] of avaliacoes.entries()) {
+    const topico = av.pop_id ? topicos.find(t => t.pop_id === av.pop_id) : null;
+    await run(`INSERT INTO trilha_catalogo_avaliacoes (id, trilha_catalogo_modulo_id, trilha_catalogo_topico_id, titulo, tipo, perguntas, obrigatorio, ordem)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8)`,
+      [uuidv4(), moduloCatalogoId, topico?.id || null, av.titulo, av.tipo, JSON.stringify(av.perguntas), av.obrigatorio !== false ? 1 : 0, i]);
+  }
+}
+
+// Substitui TODOS os módulos da Trilha do catálogo — mesmo padrão de
+// salvarModulos() usado pro modelo antigo (DELETE + recria do zero).
+async function salvarModulosCatalogo(trilhaCatalogoId, modulos) {
+  const antigos = await all('SELECT id FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1', [trilhaCatalogoId]);
+  for (const m of antigos) {
+    await run('DELETE FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1', [m.id]);
+    await run('DELETE FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [m.id]);
+  }
+  await run('DELETE FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1', [trilhaCatalogoId]);
+  if (!Array.isArray(modulos)) return;
+  for (const [i, mod] of modulos.entries()) {
+    const moduloCatalogoId = uuidv4();
+    await run('INSERT INTO trilha_catalogo_modulos (id, trilha_catalogo_id, nome, ordem) VALUES ($1,$2,$3,$4)',
+      [moduloCatalogoId, trilhaCatalogoId, mod.nome, i]);
+    await salvarTopicosCatalogo(moduloCatalogoId, mod.topicos);
+    await salvarAvaliacoesCatalogo(moduloCatalogoId, mod.avaliacoes);
+  }
+}
+
+// POST /api/treinamentos/trilhas-catalogo — cria uma Trilha no catálogo,
+// com seus módulos (cada um com topicos[]/avaliacoes[] dentro).
+router.post('/trilhas-catalogo', async (req, res) => {
+  try {
+    const { nome, descricao, responsavel_id, modulos, ordem } = req.body;
+    if (!nome) return res.status(400).json({ erro: 'Nome da trilha é obrigatório' });
+    const id = uuidv4();
+    await run(`INSERT INTO trilhas_catalogo (id, empresa_id, nome, descricao, responsavel_id, ordem)
+      VALUES ($1,$2,$3,$4,$5,$6)`,
+      [id, req.usuario.empresa_id, nome, descricao || null, responsavel_id || null, Number(ordem) || 0]);
+    await salvarModulosCatalogo(id, modulos);
+    res.status(201).json({ id, mensagem: 'Trilha criada' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// PUT /api/treinamentos/trilhas-catalogo/:id — edita a Trilha; se os módulos
+// mudarem, propaga o que for novo pra todos os Treinamentos que já usam essa
+// trilha (mesma lógica de sincronizarTreinamentoComColaboradores).
+router.put('/trilhas-catalogo/:id', async (req, res) => {
+  try {
+    const trilha = await get('SELECT id FROM trilhas_catalogo WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!trilha) return res.status(404).json({ erro: 'Trilha não encontrada' });
+    const { nome, descricao, responsavel_id, modulos, ordem } = req.body;
+    await run(`UPDATE trilhas_catalogo SET nome=$1, descricao=$2, responsavel_id=$3, ordem=COALESCE($4, ordem) WHERE id=$5 AND empresa_id=$6`,
+      [nome, descricao || null, responsavel_id || null, ordem !== undefined && ordem !== '' ? Number(ordem) : null, req.params.id, req.usuario.empresa_id]);
+    if (Array.isArray(modulos)) {
+      await salvarModulosCatalogo(req.params.id, modulos);
+      const usosNessaTrilha = await all('SELECT treinamento_principal_id FROM treinamento_trilhas WHERE trilha_catalogo_id=$1', [req.params.id]);
+      for (const uso of usosNessaTrilha) {
+        await sincronizarTreinamentoComColaboradores(uso.treinamento_principal_id, req.params.id, req.usuario.empresa_id);
+      }
+    }
+    res.json({ mensagem: 'Atualizada' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// DELETE /api/treinamentos/trilhas-catalogo/:id — soft delete. Bloqueia se
+// ainda estiver em uso por algum Treinamento (precisa remover a composição
+// primeiro) — evita apagar conteúdo que colaboradores já estão realizando.
+router.delete('/trilhas-catalogo/:id', async (req, res) => {
+  try {
+    const emUso = await get('SELECT 1 FROM treinamento_trilhas WHERE trilha_catalogo_id=$1', [req.params.id]);
+    if (emUso) return res.status(400).json({ erro: 'Essa trilha está em uso por um ou mais Treinamentos — remova-a da composição deles antes de excluir.' });
+    await run(`UPDATE trilhas_catalogo SET excluido_em=NOW(), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4`,
+      [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]);
+    res.json({ mensagem: 'Removida' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── COMPOSIÇÃO: Treinamento (pasta) ↔ Trilhas do catálogo ──────────────────
+
+// GET /api/treinamentos/treinamentos-principais/:id/trilhas — trilhas que
+// compõem esse Treinamento.
+router.get('/treinamentos-principais/:id/trilhas', async (req, res) => {
+  try {
+    const linhas = await all(`
+      SELECT tt.id AS vinculo_id, tc.* FROM treinamento_trilhas tt
+      JOIN trilhas_catalogo tc ON tc.id = tt.trilha_catalogo_id
+      WHERE tt.treinamento_principal_id = $1 AND tc.excluido_em IS NULL
+      ORDER BY tt.ordem ASC
+    `, [req.params.id]);
+    res.json(linhas);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// POST /api/treinamentos/treinamentos-principais/:id/trilhas — adiciona uma
+// Trilha do catálogo à composição do Treinamento. Dispara a propagação
+// automática: colaboradores já vinculados a esse Treinamento recebem o
+// vínculo da trilha nova (status "não iniciada"), sem afetar o que já tinham.
+router.post('/treinamentos-principais/:id/trilhas', async (req, res) => {
+  try {
+    const { trilha_catalogo_id } = req.body;
+    if (!trilha_catalogo_id) return res.status(400).json({ erro: 'Selecione uma trilha do catálogo' });
+    const maxOrdem = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_trilhas WHERE treinamento_principal_id=$1', [req.params.id]);
+    await run(`INSERT INTO treinamento_trilhas (id, treinamento_principal_id, trilha_catalogo_id, ordem)
+      VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING`,
+      [uuidv4(), req.params.id, trilha_catalogo_id, (maxOrdem?.m ?? -1) + 1]);
+    const resultado = await sincronizarTreinamentoComColaboradores(req.params.id, trilha_catalogo_id, req.usuario.empresa_id);
+    res.status(201).json({ mensagem: 'Trilha adicionada ao treinamento', ...resultado });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// DELETE /api/treinamentos/treinamentos-principais/:id/trilhas/:trilha_catalogo_id
+// Remove a trilha da composição — NÃO afeta colaboradores já vinculados a
+// ela (só impede que colaboradores futuros a recebam automaticamente).
+router.delete('/treinamentos-principais/:id/trilhas/:trilha_catalogo_id', async (req, res) => {
+  try {
+    await run('DELETE FROM treinamento_trilhas WHERE treinamento_principal_id=$1 AND trilha_catalogo_id=$2',
+      [req.params.id, req.params.trilha_catalogo_id]);
+    res.json({ mensagem: 'Removida da composição do treinamento' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Copia os tópicos e avaliações do TEMPLATE de UM módulo do catálogo
+// (trilha_catalogo_topicos / trilha_catalogo_avaliacoes daquele módulo) pro
+// vínculo individual (treinamento_pops / treinamento_avaliacoes) recém-criado
+// — usado tanto pela propagação automática (sincronizarTreinamentoComColaboradores)
+// quanto pela vinculação manual de 1 colaborador (POST /:treinamento_id/trilhas-colaborador).
+async function propagarTopicosEAvaliacoes(moduloCatalogoId, treinamentoId, moduloId, instrutorId) {
+  const topicosCatalogo = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
+  for (const [i, topico] of topicosCatalogo.entries()) {
+    await run(`INSERT INTO treinamento_pops
+      (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, modulo_id, titulo, descricao, trilha_catalogo_topico_id)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+    `, [uuidv4(), treinamentoId, topico.pop_id, i, instrutorId || null, topico.tempo_estimado, topico.topicos, topico.versao_pop, moduloId, topico.titulo, topico.descricao, topico.id]);
+  }
+  const avaliacoesCatalogo = await all('SELECT * FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
+  for (const av of avaliacoesCatalogo) {
+    // av.trilha_catalogo_topico_id referencia trilha_catalogo_topicos.id; a
+    // avaliação em treinamento_avaliacoes usa pop_id = id do POP real (mesma
+    // convenção já usada em treinamento_avaliacoes.pop_id) — resolve olhando
+    // o pop_id do tópico do catálogo correspondente.
+    const topicoCatalogo = topicosCatalogo.find(t => t.id === av.trilha_catalogo_topico_id);
+    await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
+      [uuidv4(), treinamentoId, topicoCatalogo?.pop_id || null, moduloId, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
+  }
+}
+
+// Propaga uma Trilha do catálogo (TODOS os módulos dela) pros colaboradores
+// já vinculados ao Treinamento (treinamento_principal_id) — cria 1 vínculo
+// (treinamento_modulos com trilha_catalogo_modulo_id, sem instrutor, status
+// "não iniciada") POR MÓDULO da trilha + copia os tópicos/avaliações do
+// catálogo, SEM progresso. Nunca toca em quem já tem o vínculo daquele módulo.
+async function sincronizarTreinamentoComColaboradores(treinamentoPrincipalId, trilhaCatalogoId, empresaId) {
+  const trilha = await get('SELECT * FROM trilhas_catalogo WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [trilhaCatalogoId, empresaId]);
+  if (!trilha) return { colaboradores: 0, vinculosNovos: 0 };
+  const modulosCatalogo = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1 ORDER BY ordem', [trilhaCatalogoId]);
+
+  const colaboradoresTreinamento = await all(
+    `SELECT id FROM treinamentos WHERE trilha_principal_id=$1 AND eh_modelo=0 AND excluido_em IS NULL`,
+    [treinamentoPrincipalId]
+  );
+
+  let vinculosNovos = 0;
+  for (const clone of colaboradoresTreinamento) {
+    let algumModuloAdicionado = false;
+    for (const modCat of modulosCatalogo) {
+      const jaTem = await get(
+        'SELECT id FROM treinamento_modulos WHERE treinamento_id=$1 AND trilha_catalogo_modulo_id=$2',
+        [clone.id, modCat.id]
+      );
+      if (jaTem) continue; // já tem esse módulo vinculado — não duplica, não altera
+
+      const maxOrdemModulo = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_modulos WHERE treinamento_id=$1', [clone.id]);
+      const moduloId = uuidv4();
+      await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, trilha_catalogo_modulo_id)
+        VALUES ($1,$2,$3,$4,$5)`,
+        [moduloId, clone.id, modCat.nome, (maxOrdemModulo?.m ?? -1) + 1, modCat.id]);
+
+      await propagarTopicosEAvaliacoes(modCat.id, clone.id, moduloId, null);
+      algumModuloAdicionado = true;
+    }
+    if (algumModuloAdicionado) vinculosNovos++;
+  }
+  return { colaboradores: colaboradoresTreinamento.length, vinculosNovos };
+}
 
 router.get('/:id', async (req, res) => {
   try {
@@ -909,6 +1167,111 @@ router.post('/:id/atribuir', async (req, res) => {
       if (novoId) criados.push(novoId);
     }
     res.status(201).json({ criados, mensagem: `Trilha atribuída a ${criados.length} colaborador(es)` });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+
+// ── VÍNCULO INDIVIDUAL: Colaborador ↔ Trilha (instrutor definido aqui) ─────
+
+// GET /api/treinamentos/:treinamento_id/trilhas-colaborador — "Editar
+// trilhas" desse colaborador: lista os vínculos (treinamento_modulos) com
+// trilha, instrutor, status e progresso. Ignora vínculos removidos.
+// Cada linha aqui é um MÓDULO vinculado (não a Trilha inteira) — inclui
+// trilha_catalogo_id/trilha_nome pra o frontend poder agrupar visualmente os
+// módulos da mesma Trilha juntos (ex.: "TRILHA 4" com seus 6 módulos abaixo).
+router.get('/:treinamento_id/trilhas-colaborador', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.treinamento_id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const linhas = await all(`
+      SELECT tm.*, tcm.trilha_catalogo_id, tc.nome AS trilha_nome, tc.descricao AS trilha_descricao, i.nome AS instrutor_nome,
+        (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.modulo_id = tm.id) AS total_topicos,
+        (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.modulo_id = tm.id AND tp.concluido = 1) AS topicos_concluidos
+      FROM treinamento_modulos tm
+      LEFT JOIN trilha_catalogo_modulos tcm ON tcm.id = tm.trilha_catalogo_modulo_id
+      LEFT JOIN trilhas_catalogo tc ON tc.id = tcm.trilha_catalogo_id
+      LEFT JOIN usuarios i ON i.id = tm.instrutor_id
+      WHERE tm.treinamento_id = $1 AND tm.removido_em IS NULL
+      ORDER BY tm.ordem ASC
+    `, [req.params.treinamento_id]);
+    res.json(linhas);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// POST /api/treinamentos/:treinamento_id/trilhas-colaborador — adiciona uma
+// Trilha do catálogo a ESSE colaborador especificamente, já com o instrutor
+// escolhido (pode ser diferente do instrutor da mesma trilha noutro colaborador).
+// Adiciona TODOS os módulos da Trilha do catálogo escolhida a esse
+// colaborador especificamente, já com o instrutor escolhido (mesmo instrutor
+// pra todos os módulos da trilha nesse momento — pode ser trocado por módulo
+// depois via PUT). Pode ser uma trilha com 1 módulo só (ex.: TRILHA 8) ou
+// vários (ex.: TRILHA 4, com 6 módulos).
+router.post('/:treinamento_id/trilhas-colaborador', async (req, res) => {
+  try {
+    const treinamento = await trDaEmpresa(req.params.treinamento_id, req.usuario.empresa_id);
+    if (!treinamento) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const { trilha_catalogo_id, instrutor_id } = req.body;
+    if (!trilha_catalogo_id) return res.status(400).json({ erro: 'Selecione uma trilha do catálogo' });
+
+    const trilha = await get('SELECT * FROM trilhas_catalogo WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [trilha_catalogo_id, req.usuario.empresa_id]);
+    if (!trilha) return res.status(404).json({ erro: 'Trilha não encontrada no catálogo' });
+
+    const modulosCatalogo = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1 ORDER BY ordem', [trilha_catalogo_id]);
+    if (!modulosCatalogo.length) return res.status(400).json({ erro: 'Essa trilha ainda não tem nenhum módulo cadastrado' });
+
+    const jaTem = await get(
+      `SELECT tm.id FROM treinamento_modulos tm
+       JOIN trilha_catalogo_modulos tcm ON tcm.id = tm.trilha_catalogo_modulo_id
+       WHERE tm.treinamento_id=$1 AND tcm.trilha_catalogo_id=$2 AND tm.removido_em IS NULL LIMIT 1`,
+      [req.params.treinamento_id, trilha_catalogo_id]
+    );
+    if (jaTem) return res.status(400).json({ erro: 'Esse colaborador já tem essa trilha vinculada' });
+
+    const idsCriados = [];
+    for (const modCat of modulosCatalogo) {
+      const maxOrdem = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_modulos WHERE treinamento_id=$1', [req.params.treinamento_id]);
+      const moduloId = uuidv4();
+      await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, trilha_catalogo_modulo_id, instrutor_id)
+        VALUES ($1,$2,$3,$4,$5,$6)`,
+        [moduloId, req.params.treinamento_id, modCat.nome, (maxOrdem?.m ?? -1) + 1, modCat.id, instrutor_id || null]);
+      await propagarTopicosEAvaliacoes(modCat.id, req.params.treinamento_id, moduloId, instrutor_id || null);
+      idsCriados.push(moduloId);
+    }
+    res.status(201).json({ ids: idsCriados, mensagem: 'Trilha adicionada' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// PUT /api/treinamentos/:treinamento_id/trilhas-colaborador/:modulo_id —
+// troca só o instrutor daquele vínculo específico (não afeta outros
+// colaboradores com a mesma trilha).
+router.put('/:treinamento_id/trilhas-colaborador/:modulo_id', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.treinamento_id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const { instrutor_id } = req.body;
+    await run('UPDATE treinamento_modulos SET instrutor_id=$1 WHERE id=$2 AND treinamento_id=$3',
+      [instrutor_id || null, req.params.modulo_id, req.params.treinamento_id]);
+    res.json({ mensagem: 'Instrutor atualizado' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// DELETE /api/treinamentos/:treinamento_id/trilhas-colaborador/:modulo_id —
+// remove o vínculo. Sem progresso registrado: DELETE físico. Com progresso
+// (algum tópico concluído ou com tempo realizado): soft-remove, preservando
+// histórico/relatórios — só deixa de aparecer na lista ativa.
+router.delete('/:treinamento_id/trilhas-colaborador/:modulo_id', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.treinamento_id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const temProgresso = await get(
+      `SELECT 1 FROM treinamento_pops WHERE modulo_id=$1 AND (concluido = 1 OR COALESCE(tempo_realizado,0) > 0) LIMIT 1`,
+      [req.params.modulo_id]
+    );
+    if (temProgresso) {
+      await run('UPDATE treinamento_modulos SET removido_em=NOW(), removido_por=$1 WHERE id=$2 AND treinamento_id=$3',
+        [req.usuario.id, req.params.modulo_id, req.params.treinamento_id]);
+      return res.json({ mensagem: 'Trilha removida (histórico preservado, já havia progresso registrado)', tipo: 'soft_remove' });
+    }
+    await run('DELETE FROM treinamento_pops WHERE modulo_id=$1', [req.params.modulo_id]);
+    await run('DELETE FROM treinamento_modulos WHERE id=$1 AND treinamento_id=$2', [req.params.modulo_id, req.params.treinamento_id]);
+    res.json({ mensagem: 'Trilha removida', tipo: 'excluida' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
