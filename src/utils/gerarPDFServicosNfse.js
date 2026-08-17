@@ -13,29 +13,49 @@ function fmtEscalar(chave, v) {
 function rotulo(k) {
   return String(k || '').replace(/^id_/, '').replace(/_/g, ' ').replace(/^./, c => c.toUpperCase());
 }
+function valorCampo(obj, chave) {
+  const v = obj[chave];
+  if (v === null || v === undefined || v === '') return null;
+  return typeof v === 'object'
+    ? (v.codigo != null ? (v.descricao ? `${v.codigo} - ${v.descricao}` : String(v.codigo)) : (v.descricao || '—'))
+    : fmtEscalar(chave, v);
+}
 function grupo(titulo, obj, campos) {
-  const presentes = campos.filter(([chave]) => obj[chave] !== null && obj[chave] !== undefined && obj[chave] !== '');
+  const presentes = campos.filter(([chave]) => valorCampo(obj, chave) !== null);
   if (!presentes.length) return '';
-  const kv = presentes.map(([chave, rot]) => {
-    const v = obj[chave];
-    const texto = typeof v === 'object'
-      ? (v.codigo != null ? (v.descricao ? `${v.codigo} - ${v.descricao}` : String(v.codigo)) : (v.descricao || '—'))
-      : fmtEscalar(chave, v);
-    return `<div class="kv"><span class="kvk">${esc(rot)}</span><span class="kvv">${esc(texto)}</span></div>`;
-  }).join('');
+  const kv = presentes.map(([chave, rot]) =>
+    `<div class="kv"><span class="kvk">${esc(rot)}</span><span class="kvv">${esc(valorCampo(obj, chave))}</span></div>`
+  ).join('');
   return `<div class="grupo"><span class="grupo-titulo">${esc(titulo)}</span><div class="kvgrid">${kv}</div></div>`;
 }
+// Cada linha é uma combinação FIXA de campos lado a lado, igual à tela
+// "Editar Serviço de NFSE" do painel HubSoft (Descrição+Descrição Interna /
+// Código+Cód.Tributação Município+Cód.Tributação Nacional / etc.) — em vez
+// da grade auto-fill genérica, que embaralhava campos curtos e longos juntos.
+// Campo ausente no serviço só não aparece; a linha inteira só desaparece se
+// NENHUM campo dela estiver presente.
+function linhaFixa(campos, obj) {
+  const presentes = campos.filter(([chave]) => valorCampo(obj, chave) !== null);
+  if (!presentes.length) return '';
+  return `<div class="linhafixa">${presentes.map(([chave, rot]) =>
+    `<div class="kv"><span class="kvk">${esc(rot)}</span><span class="kvv">${esc(valorCampo(obj, chave))}</span></div>`
+  ).join('')}</div>`;
+}
+function grupoLinhasFixas(titulo, obj, linhas) {
+  const html = linhas.map(l => linhaFixa(l, obj)).filter(Boolean).join('');
+  if (!html) return '';
+  return `<div class="grupo"><span class="grupo-titulo">${esc(titulo)}</span>${html}</div>`;
+}
 
-// Mesmos rótulos e agrupamento da tela AnaliseServicosNfse.jsx (espelhando a
-// tela "Editar Serviço de NFSE" do painel HubSoft).
-const INFO_SERVICO = [
-  ['descricao', 'Descrição'], ['descricao_interna', 'Descrição Interna'],
-  ['codigo', 'Código'], ['codigo_tributacao', 'Código Tributação Município'],
-  ['codigo_tributacao_nacional', 'Código Tributação Nacional'],
-  ['codigo_obra', 'Código Obra'], ['codigo_nbs', 'Código NBS'],
-  ['codigo_indicador_operacao_consumo', 'Código Indicador das Operações de Consumo'],
-  ['id_tipo_tributacao_nfse', 'Tipo de Tributação NFSe'], ['id_exigibilidade_nfse', 'Exigibilidade da NFSe'],
-  ['cnae', 'CNAE do ISS'], ['consumidor_final', 'Consumidor Final'], ['ativo', 'Ativo'],
+// Mesma ordem/agrupamento LINHA A LINHA da tela "Editar Serviço de NFSE" do
+// painel HubSoft (aba Informações do Serviço) — confirmado por print da
+// usuária em 17/08/2026. "Ativo" não existe nesse formulário (é campo nosso,
+// extra) — fica só no título do serviço, não repetido aqui.
+const INFO_SERVICO_LINHAS = [
+  [['descricao', 'Descrição'], ['descricao_interna', 'Descrição Interna']],
+  [['codigo', 'Código'], ['codigo_tributacao', 'Código Tributação Município'], ['codigo_tributacao_nacional', 'Código Tributação Nacional']],
+  [['codigo_obra', 'Código Obra'], ['codigo_nbs', 'Código NBS'], ['codigo_indicador_operacao_consumo', 'Código Indicador das Operações de Consumo']],
+  [['id_tipo_tributacao_nfse', 'Tipo de Tributação NFSe'], ['id_exigibilidade_nfse', 'Exigibilidade da NFSe'], ['cnae', 'CNAE do ISS'], ['consumidor_final', 'Consumidor Final']],
 ];
 const TRIBUTACAO_IMPOSTOS = [
   ['aliquota_iss', 'Alíquota ISS'], ['aliquota_pis', 'Alíquota PIS'], ['aliquota_cofins', 'Alíquota COFINS'],
@@ -67,7 +87,7 @@ const DESTACAR = [...DESTACAR_PF, ...DESTACAR_PJ];
 
 function corpoServico(s) {
   return `
-    ${grupo('Informações do Serviço', s, INFO_SERVICO)}
+    ${grupoLinhasFixas('Informações do Serviço', s, INFO_SERVICO_LINHAS)}
     <div class="grupolinha">${grupo('Impostos', s, TRIBUTACAO_IMPOSTOS)}${grupo('IBS / CBS', s, IBS_CBS)}</div>
     <div class="grupolinha">${grupo('Valores Mínimos para Destacar', s, VALORES_MINIMOS_DESTACAR)}${grupo('Valores Mínimos para Reter', s, VALORES_MINIMOS_RETER)}</div>
     ${grupo('Destacar Impostos (PF/PJ)', s, DESTACAR)}
@@ -86,6 +106,9 @@ const ESTILO = `
     .servico-titulo{background:#eef2ff;color:#4f46e5;padding:3px 8px;margin-bottom:3px;font-size:11px;font-weight:700;border-radius:3px}
     .servico-titulo .status{font-size:8px;font-weight:400;margin-left:6px;text-transform:uppercase;color:#64748b}
     .kvgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(75px,1fr));gap:1px 8px}
+    .linhafixa{display:flex;gap:8px;margin-top:2px}
+    .linhafixa:first-of-type{margin-top:0}
+    .linhafixa .kv{flex:1;min-width:0}
     .kv{display:flex;flex-direction:column;padding:0 0 1px;border-bottom:1px solid #f1f5f9;overflow:hidden;page-break-inside:avoid}
     .kvk{font-size:6.5px;color:#94a3b8;text-transform:uppercase}
     .kvv{font-size:8.5px;word-break:break-word;overflow-wrap:anywhere}
