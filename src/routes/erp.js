@@ -873,6 +873,15 @@ async function calcularFiscal(dataInicio, dataFim) {
           if (String(n.status || '').includes('cancel')) tipos[tipoNota].cancelada++;
           tipos[tipoNota].valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
           somaImpostos(tipos[tipoNota], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
+
+          // Para comodato, guarda também a filial (remetente) com CNPJ
+          if (isComodato) {
+            const filial = n.emitente?.nome || n.remetente?.nome || n.filial || 'Sem filial';
+            const cnpj = n.emitente?.cnpj || n.remetente?.cnpj || n.cnpj_emitente || '';
+            const chaveFilial = `${filial}|${cnpj}`;
+            if (!tipos[tipoNota].filiais) tipos[tipoNota].filiais = {};
+            tipos[tipoNota].filiais[chaveFilial] = (tipos[tipoNota].filiais[chaveFilial] || 0) + 1;
+          }
         }
       });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
