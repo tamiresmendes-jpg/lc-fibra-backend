@@ -914,14 +914,14 @@ async function processarCacheFiscal(id, dataInicio, dataFim) {
   }
 }
 
-// GET /api/erp/fiscal — status: 'pronto' | 'processando' | 'erro'
+// GET /api/erp/fiscal — OTIMIZADO: SÓ LEÊ CACHE (nunca consulta ERP por clique do usuário)
+// Evita sobrecarga do ERP. Dados são atualizados via cron (8h e 17h).
 router.get('/fiscal', async (req, res) => {
   try {
     const hoje = new Date();
     const iso = (d) => d.toISOString().slice(0, 10);
     const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
     const dataFim = req.query.data_fim || iso(hoje);
-    const forcar = req.query.forcar === '1';
     const empresaId = req.usuario.empresa_id;
 
     const cache = await db.get(
@@ -929,25 +929,25 @@ router.get('/fiscal', async (req, res) => {
       [empresaId, dataInicio, dataFim]
     );
 
-    if (cache && cache.status === 'pronto' && !forcar) {
+    // Cache pronto: retorna na hora (não consulta ERP)
+    if (cache && cache.status === 'pronto') {
       return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
     }
-    if (cache && cache.status === 'processando' && !forcar) {
-      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 15 * 60 * 1000;
-      if (!velho) return res.json({ status: 'processando' });
+
+    // Cache não existe ou está velho: avisa para usar cron (não dispara consulta aqui)
+    if (!cache) {
+      return res.json({
+        status: 'sem_dados',
+        mensagem: 'Dados não disponíveis. Serão carregados automaticamente às 8h e 17h.',
+        periodo: { data_inicio: dataInicio, data_fim: dataFim }
+      });
     }
 
-    const id = cache?.id || uuidv4();
-    if (cache) {
-      await db.run(`UPDATE erp_fiscal_cache SET status='processando', erro=NULL, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$1`, [id]);
-    } else {
-      await db.run(`INSERT INTO erp_fiscal_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')`, [id, empresaId, dataInicio, dataFim]);
-    }
-    processarCacheFiscal(id, dataInicio, dataFim); // sem await (background)
-    res.json({ status: 'processando' });
+    // Cache em processamento: retorna status
+    return res.json({ status: 'processando' });
   } catch (e) {
     console.error('Erro /erp/fiscal:', e.message);
-    res.status(500).json({ erro: 'Erro ao analisar dados fiscais: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+    res.status(500).json({ erro: 'Erro ao buscar dados fiscais: ' + e.message });
   }
 });
 
