@@ -876,8 +876,23 @@ async function calcularFiscal(dataInicio, dataFim) {
 
           // Para comodato, guarda também a filial (remetente) com CNPJ
           if (isComodato) {
-            const filial = n.emitente?.nome || n.remetente?.nome || n.filial || 'Sem filial';
-            const cnpj = n.emitente?.cnpj || n.remetente?.cnpj || n.cnpj_emitente || '';
+            // Tenta vários caminhos possíveis para nome e CNPJ da filial
+            const filial =
+              n.emitente?.nome ||
+              n.remetente?.nome ||
+              n.nome_emitente ||
+              n.filial ||
+              n.nome_filial ||
+              'Sem filial';
+
+            const cnpj =
+              n.emitente?.cnpj ||
+              n.remetente?.cnpj ||
+              n.cnpj_emitente ||
+              n.cnpj_remetente ||
+              n.cnpj ||
+              '';
+
             const chaveFilial = `${filial}|${cnpj}`;
             if (!tipos[tipoNota].filiais) tipos[tipoNota].filiais = {};
             tipos[tipoNota].filiais[chaveFilial] = (tipos[tipoNota].filiais[chaveFilial] || 0) + 1;
