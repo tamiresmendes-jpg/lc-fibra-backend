@@ -951,6 +951,114 @@ router.get('/fiscal', async (req, res) => {
   }
 });
 
+// ── GET /api/erp/fiscal-mes — mês atual (sempre), com histórico de meses anteriores guardado ──
+// Exibe sempre SÓ O MÊS ATUAL, mas guarda um histórico de meses passados para referência.
+router.get('/fiscal-mes', async (req, res) => {
+  try {
+    const hoje = new Date();
+    const iso = (d) => d.toISOString().slice(0, 10);
+    const mesAtual = `${hoje.getFullYear()}-${String(hoje.getMonth() + 1).padStart(2, '0')}`;
+    const dataInicio = iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
+    const dataFim = iso(hoje);
+    const empresaId = req.usuario.empresa_id;
+
+    const empresas = await db.all('SELECT id, nome, cnpj FROM empresas');
+    const porEmpresa = [];
+    const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+
+    for (const emp of empresas) {
+      const documento = (emp.cnpj || '').replace(/\D/g, '');
+      if (documento.length !== 14) {
+        porEmpresa.push({ empresa: emp.nome, cnpj: emp.cnpj, indisponivel: true, motivo: 'CNPJ não cadastrado ou inválido' });
+        continue;
+      }
+
+      const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+      let erroEmpresa = null;
+
+      try {
+        await hubsoft.varrerNfse({ documento, dataInicio, dataFim }, async (lote) => {
+          for (const n of lote) {
+            tipos.nfse.total++;
+            if (n.status === 'cancelado') tipos.nfse.cancelada++;
+            tipos.nfse.valor_total += num(n.valor);
+            somaImpostos(tipos.nfse, n, { iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', inss: 'valor_inss', irrf: 'valor_irrf' });
+          }
+        });
+      } catch (e) { erroEmpresa = e.message; }
+
+      try {
+        await hubsoft.varrerNfcom({ documento, dataInicio, dataFim }, async (lote) => {
+          for (const n of lote) {
+            tipos.nfcom.total++;
+            if (n.status === 'cancelada') tipos.nfcom.cancelada++;
+            tipos.nfcom.valor_total += num(n.valor_nota);
+            somaImpostos(tipos.nfcom, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', fust: 'valor_fust', funttel: 'valor_funttel' });
+          }
+        });
+      } catch (e) { erroEmpresa = erroEmpresa || e.message; }
+
+      for (const [chave, modelo] of [['telecom0', '0'], ['telecom21', '21'], ['telecom22', '22']]) {
+        try {
+          await hubsoft.varrerNotaTelecom({ documento, dataInicio, dataFim, modelo }, async (lote) => {
+            for (const n of lote) {
+              tipos[chave].total++;
+              if (n.situacao === 'C' || String(n.status || '').includes('cancel')) tipos[chave].cancelada++;
+              tipos[chave].valor_total += num(n.valor_nota ?? n.valor);
+              somaImpostos(tipos[chave], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', irrf: 'valor_irrf', fust: 'valor_fust', funttel: 'valor_funttel' });
+            }
+          });
+        } catch (e) { erroEmpresa = erroEmpresa || e.message; }
+      }
+
+      try {
+        await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
+          for (const n of lote) {
+            tipos.nfe55.total++;
+            if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
+            tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
+            somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
+          }
+        });
+      } catch (e) { erroEmpresa = erroEmpresa || e.message; }
+
+      for (const chave of Object.keys(geral)) {
+        for (const campo of Object.keys(geral[chave])) geral[chave][campo] += tipos[chave][campo];
+      }
+
+      porEmpresa.push({ empresa: emp.nome, cnpj: emp.cnpj, tipos, erro: erroEmpresa });
+    }
+
+    const totalGeral = notaVazia();
+    for (const chave of Object.keys(geral)) {
+      for (const campo of Object.keys(totalGeral)) totalGeral[campo] += geral[chave][campo];
+    }
+
+    const resultado = {
+      status: 'pronto',
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      mes: mesAtual,
+      total_geral: totalGeral,
+      por_tipo: geral,
+      por_empresa: porEmpresa,
+      gerado_em: new Date().toISOString(),
+    };
+
+    // Salva este mês no histórico (sem acumular — cada mês é independente)
+    const historicoKey = `fiscal_mes_${mesAtual}`;
+    await db.run(
+      `INSERT INTO erp_cache_historico (empresa_id, chave, dados, updated_at) VALUES ($1, $2, $3, NOW())
+       ON CONFLICT (empresa_id, chave) DO UPDATE SET dados=$3, updated_at=NOW()`,
+      [empresaId, historicoKey, JSON.stringify(resultado)]
+    ).catch(() => {});
+
+    res.json(resultado);
+  } catch (e) {
+    console.error('Erro /erp/fiscal-mes:', e.message);
+    res.status(500).json({ erro: 'Erro ao analisar dados fiscais do mês: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
 // ── GET /api/erp/financeiro — faturas por vencimento + totais ──
 router.get('/financeiro', async (req, res) => {
   try {
