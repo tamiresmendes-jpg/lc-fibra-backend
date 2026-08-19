@@ -808,7 +808,7 @@ function notaVazia() {
 async function calcularFiscal(dataInicio, dataFim) {
   const empresas = await db.all('SELECT id, nome, cnpj FROM empresas');
   const porEmpresa = [];
-  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia(), nfe55_comodato: notaVazia() };
 
   for (const emp of empresas) {
     const documento = (emp.cnpj || '').replace(/\D/g, '');
@@ -817,7 +817,7 @@ async function calcularFiscal(dataInicio, dataFim) {
       continue;
     }
 
-    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
+    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia(), nfe55_comodato: notaVazia() };
     let erroEmpresa = null;
 
     // Processa cada página assim que chega e descarta — nunca guarda a lista
@@ -865,10 +865,14 @@ async function calcularFiscal(dataInicio, dataFim) {
     try {
       await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
         for (const n of lote) {
-          tipos.nfe55.total++;
-          if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
-          tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
-          somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
+          // Separa por natureza da operação: comodato vs vendas
+          const isComodato = String(n.natureza_operacao || n.nat_op || '').toLowerCase().includes('comodato');
+          const tipoNota = isComodato ? 'nfe55_comodato' : 'nfe55';
+
+          tipos[tipoNota].total++;
+          if (String(n.status || '').includes('cancel')) tipos[tipoNota].cancelada++;
+          tipos[tipoNota].valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
+          somaImpostos(tipos[tipoNota], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
         }
       });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
