@@ -810,6 +810,9 @@ async function calcularFiscal(dataInicio, dataFim) {
   const porEmpresa = [];
   const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia(), nfe55_comodato: notaVazia() };
 
+  // CNPJs das filiais de comodato (LC Virtual Net - raiz 08407644)
+  const cnpjsComodato = new Set(['08407644000100', '08407644000291', '08407644000372', '08407644000453', '08407644000534', '08407644000615', '08407644000704', '08407644000887', '08407644000968'].map(c => c.replace(/\D/g, '')));
+
   for (const emp of empresas) {
     const documento = (emp.cnpj || '').replace(/\D/g, '');
     if (documento.length !== 14) {
@@ -865,8 +868,9 @@ async function calcularFiscal(dataInicio, dataFim) {
     try {
       await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
         for (const n of lote) {
-          // Separa por natureza da operação: comodato vs vendas
-          const isComodato = String(n.natureza_operacao || n.nat_op || '').toLowerCase().includes('comodato');
+          // Separa por CNPJ do remetente: se está na lista de filiais, é comodato
+          const cnpjRemetente = String(n.emitente?.cnpj || n.remetente?.cnpj || n.cnpj_emitente || n.cnpj_remetente || n.cnpj || '').replace(/\D/g, '');
+          const isComodato = cnpjsComodato.has(cnpjRemetente);
           const tipoNota = isComodato ? 'nfe55_comodato' : 'nfe55';
 
           tipos[tipoNota].total++;
@@ -885,15 +889,7 @@ async function calcularFiscal(dataInicio, dataFim) {
               n.nome_filial ||
               'Sem filial';
 
-            const cnpj =
-              n.emitente?.cnpj ||
-              n.remetente?.cnpj ||
-              n.cnpj_emitente ||
-              n.cnpj_remetente ||
-              n.cnpj ||
-              '';
-
-            const chaveFilial = `${filial}|${cnpj}`;
+            const chaveFilial = `${filial}|${cnpjRemetente}`;
             if (!tipos[tipoNota].filiais) tipos[tipoNota].filiais = {};
             tipos[tipoNota].filiais[chaveFilial] = (tipos[tipoNota].filiais[chaveFilial] || 0) + 1;
           }
@@ -913,7 +909,14 @@ async function calcularFiscal(dataInicio, dataFim) {
     for (const campo of Object.keys(totalGeral)) totalGeral[campo] += geral[chave][campo];
   }
 
-  return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, total_geral: totalGeral, por_tipo: geral, por_empresa: porEmpresa };
+  // Filtra empresas que têm pelo menos uma nota em qualquer tipo
+  const porEmpresaComDados = porEmpresa.filter(e => {
+    if (e.indisponivel || e.erro) return true; // Mantém empresas com erro (pode ser CNPJ inválido)
+    const totalNotas = Object.values(e.tipos || {}).reduce((sum, t) => sum + (t.total || 0), 0);
+    return totalNotas > 0;
+  });
+
+  return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, total_geral: totalGeral, por_tipo: geral, por_empresa: porEmpresaComDados };
 }
 
 // Sincroniza UM período específico da Análise Fiscal (usado pela rotina diária
@@ -1060,7 +1063,16 @@ async function calcularFinanceiroMensal(empresaId, dataInicio, dataFim) {
   const dataInicioISO = `${dataInicio}T00:00:00.000Z`;
   const dataFimISO = `${dataFim}T23:59:59.999Z`;
 
+  let _amostraSalva = false;
   await hubsoft.varrerContaReceber({ empresaId, dataInicio: dataInicioISO, dataFim: dataFimISO }, async (lote) => {
+    if (!_amostraSalva && lote.length) {
+      _amostraSalva = true;
+      require('fs').writeFile(
+        require('path').join(__dirname, '../../debug-fatura-sample.json'),
+        JSON.stringify(lote[0], null, 2),
+        () => {}
+      );
+    }
     for (const f of lote) {
       const venc = dataBRParaChaveMes(f.data_vencimento);
       if (!venc) continue;
