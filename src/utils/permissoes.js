@@ -28,12 +28,29 @@ function _scalarRank(v) {
   if (v === 'visualizar') return 2;
   return null; // é objeto (permissões por item)
 }
+// Nível de um item, aceitando o formato antigo (string/bool) e o novo
+// ({ nivel, acoes }). Sempre devolve string/bool, nunca o objeto.
+function _nivelItem(itemVal) {
+  if (itemVal && typeof itemVal === 'object') return itemVal.nivel;
+  return itemVal;
+}
+
 // Rank de um item específico dentro de um valor de módulo.
 // Item não listado num objeto = bloqueado (consistente com temPermissaoServer).
 function _itemRank(v, item) {
   const s = _scalarRank(v);
   if (s !== null) return s; // módulo escalar libera todos os itens no mesmo nível
-  return _rank(v?.itens?.[item]);
+  return _rank(_nivelItem(v?.itens?.[item]));
+}
+
+// Ação bloqueada explicitamente (acoes[acao] === false) para o item, se o
+// valor do módulo usa o formato novo. Ausente = não opina (não bloqueia).
+function _acaoBloqueada(v, item, acao) {
+  const s = _scalarRank(v);
+  if (s !== null) return false; // módulo escalar não tem acoes
+  const itemVal = v?.itens?.[item];
+  if (!itemVal || typeof itemVal !== 'object' || !itemVal.acoes) return false;
+  return itemVal.acoes[acao] === false;
 }
 
 // Interseção (mais restritiva) entre dois valores de módulo já definidos.
@@ -48,7 +65,20 @@ function _interseccaoModulo(va, vb) {
   ]);
   const itens = {};
   for (const it of chaves) {
-    itens[it] = _nivelDeRank(Math.min(_itemRank(va, it), _itemRank(vb, it)));
+    const nivel = _nivelDeRank(Math.min(_itemRank(va, it), _itemRank(vb, it)));
+    // Ação bloqueada em QUALQUER fonte permanece bloqueada (mais restritivo vence).
+    const acoesA = (typeof va === 'object' ? va.itens?.[it] : null)?.acoes;
+    const acoesB = (typeof vb === 'object' ? vb.itens?.[it] : null)?.acoes;
+    if (acoesA || acoesB) {
+      const chavesAcoes = new Set([...Object.keys(acoesA || {}), ...Object.keys(acoesB || {})]);
+      const acoes = {};
+      for (const ak of chavesAcoes) {
+        acoes[ak] = (acoesA?.[ak] === false || acoesB?.[ak] === false) ? false : true;
+      }
+      itens[it] = { nivel, acoes };
+    } else {
+      itens[it] = nivel;
+    }
   }
   return { enabled: true, itens };
 }
@@ -106,7 +136,12 @@ async function buscarPermsEfetivas(usuarioId, empresaId, permModulos) {
 
 // Verifica permissão a partir de um objeto de perms já resolvido.
 // chave: 'pop' | 'pop.dashboard' | 'equipe.ferias' ...   nivel: 'visualizar' | 'editar'
-function temPermissaoServer(perms, chave, nivel = 'visualizar') {
+// acao (opcional): nome de uma ação sensível (ex. 'excluir', 'aprovar', 'exportar').
+// Quando informada, além do nível normal, checa se essa ação foi bloqueada
+// explicitamente pelo grupo (itens[item] = { nivel, acoes: { [acao]: false } }).
+// Ausência de 'acoes' ou de uma chave dentro dele = ação liberada (retrocompatível
+// com todo grupo configurado antes desse recurso existir).
+function temPermissaoServer(perms, chave, nivel = 'visualizar', acao = null) {
   if (!perms) return true; // sem restrição → acesso total
   const [modulo, item] = chave.split('.');
   const permModulo = perms[modulo];
@@ -119,11 +154,13 @@ function temPermissaoServer(perms, chave, nivel = 'visualizar') {
   if (typeof permModulo === 'object') {
     if (permModulo.enabled === false) return false;
     if (!permModulo.itens) return true;
-    const nivelItem = permModulo.itens[item];
+    const itemVal = permModulo.itens[item];
+    const nivelItem = _nivelItem(itemVal);
     if (!nivelItem || nivelItem === false) return false;
-    if (nivelItem === true || nivelItem === 'editar') return true;
-    if (nivelItem === 'visualizar') return nivel === 'visualizar';
-    return false;
+    const nivelOk = (nivelItem === true || nivelItem === 'editar') ? true : (nivelItem === 'visualizar' ? nivel === 'visualizar' : false);
+    if (!nivelOk) return false;
+    if (acao && _acaoBloqueada(permModulo, item, acao)) return false;
+    return true;
   }
   return false;
 }
@@ -187,6 +224,7 @@ const MAPA_PERMISSAO = [
   // Gestão extra — a rota real é /api/gestao (montada em server.js); o prefixo antigo
   // '/api/gestao-extra' nunca casava, deixando o módulo sem verificação no servidor.
   ['/api/gestao/meta-comercial',       'gestao.meta-comercial'],
+  ['/api/gestao/meta-cobranca',        'gestao.meta-cobranca'],
   ['/api/gestao/metas',                'gestao.metas'],
   ['/api/gestao/okrs',                 'gestao.okrs'],
   ['/api/gestao',                      'gestao.indicadores'],
@@ -209,6 +247,30 @@ function ehModuloOptIn(chave) {
 function resolverPermissao(path) {
   for (const [prefixo, chave] of MAPA_PERMISSAO) {
     if (path === prefixo || path.startsWith(prefixo + '/')) return chave;
+  }
+  return null;
+}
+
+// Sufixos de rota que representam uma AÇÃO sensível (não um recurso normal),
+// avaliados sobre o path já sem query string. Usado pelo middleware para checar
+// itens[item].acoes[acao] além do nível normal do submódulo.
+const SUFIXOS_ACAO = [
+  [/\/aprovar\/?$/,          'aprovar'],
+  [/\/rejeitar\/?$/,         'rejeitar'],
+  [/\/exportar\/?$/,         'exportar'],
+  [/\/pdf\/?$/,              'exportar'],
+  [/\/docx\/?$/,             'exportar'],
+  [/\/sync\/?$/,             'sincronizar'],
+  [/\/sincronizar\/?$/,      'sincronizar'],
+  [/\/senha\/?$/,            'resetar-senha'],
+  [/\/resetar-turno\/?$/,    'resetar-turno'],
+  [/\/bulk[a-z-]*\/?$/,      'acoes-em-massa'],
+  [/\/analise(\/|$)/,        'analise-geral'],
+];
+
+function resolverAcao(path) {
+  for (const [re, acao] of SUFIXOS_ACAO) {
+    if (re.test(path)) return acao;
   }
   return null;
 }
@@ -240,6 +302,7 @@ const ROTAS_PESSOAIS = [
   /^\/api\/pop-comentarios\/?$/,                                 // criar comentário
   /^\/api\/pop-comentarios\/[^/]+\/reagir\/?$/,                  // curtir/reagir
   /^\/api\/pop-comentarios\/[^/]+\/?$/,                          // excluir o próprio comentário (DELETE valida dono)
+  /^\/api\/auditoria-solicitacoes\/?$/,                          // solicitar auditoria de um POP/processo (POST; solicitante_id = próprio usuário)
 ];
 
 function ehRotaPessoal(path) {
@@ -290,6 +353,7 @@ module.exports = {
   buscarPermsEfetivas,
   temPermissaoServer,
   resolverPermissao,
+  resolverAcao,
   ehRotaPessoal,
   ehLeituraDeApoio,
   ehModuloOptIn,
