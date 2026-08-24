@@ -629,7 +629,13 @@ async function sincronizarTodasFiscal() {
   const ano = hoje.getFullYear();
   const mesAtual = hoje.getMonth();
   const periodos = [];
-  for (let m = 0; m <= mesAtual; m++) periodos.push([new Date(ano, m, 1), new Date(ano, m + 1, 0)]);
+  for (let m = 0; m <= mesAtual; m++) {
+    // Mês atual: fim = hoje, pois é essa a janela padrão que a tela pede
+    // (dia 1 até hoje). Usar o fim do mês faria a chave do cache nunca
+    // coincidir com a consulta da tela.
+    const fim = m === mesAtual ? hoje : new Date(ano, m + 1, 0);
+    periodos.push([new Date(ano, m, 1), fim]);
+  }
   periodos.reverse(); // mês atual primeiro, depois vai voltando (histórico mais antigo por último)
   const empresas = await db.all('SELECT id, nome FROM empresas');
   for (const emp of empresas) {
@@ -946,7 +952,7 @@ async function processarCacheFiscal(id, dataInicio, dataFim) {
 }
 
 // GET /api/erp/fiscal — OTIMIZADO: SÓ LEÊ CACHE (nunca consulta ERP por clique do usuário)
-// Evita sobrecarga do ERP. Dados são atualizados via cron (8h e 17h).
+// Evita sobrecarga do ERP. Dados são atualizados via cron de madrugada (syncAnaliseFiscal.js).
 router.get('/fiscal', async (req, res) => {
   try {
     const hoje = new Date();
@@ -969,7 +975,7 @@ router.get('/fiscal', async (req, res) => {
     if (!cache) {
       return res.json({
         status: 'sem_dados',
-        mensagem: 'Dados não disponíveis. Serão carregados automaticamente às 8h e 17h.',
+        mensagem: 'Dados não disponíveis para esse período ainda. Assim que a sincronização automática rodar, ficam disponíveis aqui direto.',
         periodo: { data_inicio: dataInicio, data_fim: dataFim }
       });
     }
@@ -1120,10 +1126,9 @@ async function processarCacheFinanceiroMensal(id, empresaId, dataInicio, dataFim
 }
 
 // ── GET /api/erp/financeiro-mensal — recebido x a receber, mês a mês (por vencimento) ──
-// Por padrão só o mês atual — mas aceita data_inicio/data_fim explícitos pra
-// consultar outro mês, o ano inteiro, ou uma janela de N meses. Roda em
-// segundo plano com cache (mesmo padrão da Análise Fiscal), porque janelas de
-// vários meses envolvem dezenas de milhares de faturas.
+// OTIMIZADO: SÓ LÊ CACHE (nunca consulta ERP por clique do usuário) — mesmo
+// padrão da Análise Fiscal. Dados são atualizados via cron de madrugada
+// (syncFinanceiroMensal.js).
 router.get('/financeiro-mensal', async (req, res) => {
   try {
     const hoje = new Date();
@@ -1132,7 +1137,6 @@ router.get('/financeiro-mensal', async (req, res) => {
     const fimMesAtual = new Date(hoje.getFullYear(), hoje.getMonth() + 1, 0);
     const dataInicio = req.query.data_inicio || iso(inicioMesAtual);
     const dataFim = req.query.data_fim || iso(fimMesAtual);
-    const forcar = req.query.forcar === '1';
     const empresaId = req.usuario.empresa_id;
 
     const cache = await db.get(
@@ -1140,22 +1144,22 @@ router.get('/financeiro-mensal', async (req, res) => {
       [empresaId, dataInicio, dataFim]
     );
 
-    if (cache && cache.status === 'pronto' && !forcar) {
+    // Cache pronto: retorna na hora (não consulta ERP)
+    if (cache && cache.status === 'pronto') {
       return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
     }
-    if (cache && cache.status === 'processando' && !forcar) {
-      const velho = cache.updated_at && (Date.now() - new Date(cache.updated_at.replace(' ', 'T')).getTime()) > 15 * 60 * 1000;
-      if (!velho) return res.json({ status: 'processando' });
+
+    // Cache não existe: avisa para usar cron (não dispara consulta aqui)
+    if (!cache) {
+      return res.json({
+        status: 'sem_dados',
+        mensagem: 'Dados não disponíveis para esse período ainda. Assim que a sincronização automática rodar, ficam disponíveis aqui direto.',
+        periodo: { data_inicio: dataInicio, data_fim: dataFim }
+      });
     }
 
-    const id = cache?.id || uuidv4();
-    if (cache) {
-      await db.run(`UPDATE erp_financeiro_cache SET status='processando', erro=NULL, updated_at=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS') WHERE id=$1`, [id]);
-    } else {
-      await db.run(`INSERT INTO erp_financeiro_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')`, [id, empresaId, dataInicio, dataFim]);
-    }
-    processarCacheFinanceiroMensal(id, empresaId, dataInicio, dataFim); // sem await (background)
-    res.json({ status: 'processando' });
+    // Cache em processamento (rodando pelo cron agora): retorna status
+    return res.json({ status: 'processando' });
   } catch (e) {
     console.error('Erro /erp/financeiro-mensal:', e.message);
     res.status(500).json({ erro: 'Erro ao buscar financeiro mensal: ' + e.message.replace('HUBSOFT', 'HubSoft') });
