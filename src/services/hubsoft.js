@@ -766,10 +766,11 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 // 200 OK — então esse é o tamanho confirmado funcionar pra ESSE endpoint
 // específico (o de Planos usa outro tamanho, não é o mesmo limite).
 // Pagina SEQUENCIALMENTE (nunca paralelo) e com uma pausa entre páginas —
-// esse endpoint específico já causou "exceção no sistema" no HubSoft antes
-// (ver buscarPacotePorId abaixo, que por isso usa outro endpoint pra busca
-// individual); aqui não há alternativa documentada de listagem, então damos
-// mais folga: pausa de 1.5s entre páginas e até 2 retentativas espaçadas
+// esse endpoint específico já causou "exceção no sistema" no HubSoft antes;
+// por isso ele só corre na rotina de madrugada, nunca sob demanda (ver
+// mesclarPacotes abaixo, que reaproveita esse cache pra montar o cadastro
+// de pacotes na tela de Planos). Aqui não há alternativa documentada de
+// listagem, então damos mais folga: pausa de 1.5s entre páginas e até 2 retentativas espaçadas
 // (5s, depois 15s) se o HubSoft devolver "exceção no sistema" — nunca
 // insiste imediatamente/repetidamente.
 //
@@ -1012,37 +1013,43 @@ async function listarServicosNfse(empresaId, tentouRelogar = false) {
 // Cadastro do PACOTE (add-on como Watch TV, HBO Max, roteador mesh, etc) por
 // id — o plano só guarda id/valor/degustação/obrigatório do pacote vinculado
 // (sem descrição/código/ativo soltos), então buscamos o cadastro completo à
-// parte pra juntar (ver mesclarPacotes). Usa o endpoint OFICIAL documentado
-// /api/v1/integracao/pacote/consultar (token de Integração, não de painel —
-// o endpoint do painel usado antes travava o HubSoft com "exceção no
-// sistema"). Esse endpoint busca por CLIENTE que tem aquele pacote (exige
-// tipo_busca=id_pacote + termo_busca), mas cada resultado já traz o objeto
-// `pacote` com o cadastro completo — é só pegar o primeiro. Cacheado por id,
-// 30min (é cadastro, não muda a cada segundo).
-const _pacotePorId = new Map(); // id_pacote -> { pacote, expiraEm }
-async function buscarPacotePorId(idPacote) {
-  const cache = _pacotePorId.get(idPacote);
-  if (cache && Date.now() < cache.expiraEm) return cache.pacote;
+// parte pra juntar (ver mesclarPacotes).
+//
+// Antes isso vinha de /api/v1/integracao/pacote/consultar (busca por CLIENTE
+// que tem aquele pacote) — mas se NENHUM cliente ativo estiver com aquele
+// pacote específico, a busca não acha nada e o pacote aparece na tela sem
+// Código/Descrição/Display/Ativo (foi o caso relatado do add-on "IP
+// DEDICADO"). Agora lemos do catálogo já sincronizado de madrugada em
+// erp_pacotes_cache (mesma fonte da tela "Análise de Pacotes",
+// listarPacotesResumo/resumirPacote em erp.js) — tem TODOS os pacotes
+// cadastrados, com ou sem cliente vinculado. Cacheado em memória por 5min
+// por empresa pra não bater no banco em todo pacote de todo plano expandido.
+const _catalogoPacotes = new Map(); // empresa_id -> { porId: Map, expiraEm }
+async function catalogoPacotesDaEmpresa(empresaId) {
+  const cache = _catalogoPacotes.get(empresaId);
+  if (cache && Date.now() < cache.expiraEm) return cache.porId;
 
-  const j = await apiGet('/api/v1/integracao/pacote/consultar', {
-    pagina: 0, itens_por_pagina: 1, tipo_busca: 'id_pacote', termo_busca: idPacote,
-  }).catch(e => { console.warn(`[hubsoft] pacote/consultar (id ${idPacote}):`, e.message); return null; });
-
-  const pacote = j?.pacotes?.[0]?.pacote || null;
-  _pacotePorId.set(idPacote, { pacote, expiraEm: Date.now() + 30 * 60 * 1000 });
-  return pacote;
+  const { get } = require('../config/database');
+  const linha = await get('SELECT dados FROM erp_pacotes_cache WHERE empresa_id = $1', [empresaId]);
+  const pacotes = linha?.dados ? JSON.parse(linha.dados) : [];
+  const porId = new Map(pacotes.map(p => [String(p.id_pacote), p]));
+  _catalogoPacotes.set(empresaId, { porId, expiraEm: Date.now() + 5 * 60 * 1000 });
+  return porId;
 }
 
 // Junta, em cada pacote vinculado ao plano, o cadastro completo (Código,
 // Descrição, Ativo, Display) — o plano só tem id/valor/degustação/obrigatório.
-async function mesclarPacotes(servicoPacote) {
+async function mesclarPacotes(empresaId, servicoPacote) {
   if (!Array.isArray(servicoPacote) || !servicoPacote.length) return servicoPacote;
-  return Promise.all(servicoPacote.map(async item => {
+  const porId = await catalogoPacotesDaEmpresa(empresaId).catch(e => {
+    console.warn('[hubsoft] falha ao ler catálogo de pacotes do cache:', e.message);
+    return new Map();
+  });
+  return servicoPacote.map(item => {
     const idPacote = item.id_pacote ?? item.pacote?.id_pacote ?? item.pacote_id;
-    if (!idPacote) return item;
-    const doCatalogo = await buscarPacotePorId(idPacote);
+    const doCatalogo = idPacote != null ? porId.get(String(idPacote)) : null;
     return doCatalogo ? { ...doCatalogo, ...item } : item;
-  }));
+  });
 }
 
 // Detalhe completo de UM plano (composição, contrato, desconto, taxa de
@@ -1062,7 +1069,7 @@ async function detalhePlano(empresaId, idServico, tentouRelogar = false) {
   const servico = j.servico;
   if (servico?.servico_pacote?.length) {
     try {
-      servico.servico_pacote = await mesclarPacotes(servico.servico_pacote);
+      servico.servico_pacote = await mesclarPacotes(empresaId, servico.servico_pacote);
     } catch (e) { console.warn('[hubsoft] falha ao buscar catálogo de pacotes:', e.message); }
   }
   return servico;
