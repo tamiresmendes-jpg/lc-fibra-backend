@@ -4,6 +4,7 @@ const {
   buscarPermsEfetivas,
   temPermissaoServer,
   resolverPermissao,
+  resolverAcao,
   ehRotaPessoal,
   ehLeituraDeApoio,
   ehModuloOptIn,
@@ -85,15 +86,20 @@ async function verificarPermissao(req, res, next) {
 
     if (!perms) return next(); // sem restrição configurada → acesso total
 
+    // Ação sensível (aprovar, excluir, exportar, sincronizar...) detectada pelo
+    // sufixo da rota: além do nível do submódulo, checa se o grupo bloqueou
+    // especificamente essa ação. Rota sem sufixo conhecido não é afetada.
+    const acao = resolverAcao(path) || (req.method === 'DELETE' ? 'excluir' : null);
+
     // Leitura exige 'visualizar'; alteração exige 'editar'
     if (!ehMutacao) {
-      if (temPermissaoServer(perms, chave, 'visualizar')) return next();
+      if (temPermissaoServer(perms, chave, 'visualizar', acao)) return next();
       return res.status(403).json({ erro: 'Este módulo não está liberado para o seu grupo.' });
     }
 
-    if (temPermissaoServer(perms, chave, 'editar')) return next();
+    if (temPermissaoServer(perms, chave, 'editar', acao)) return next();
 
-    return res.status(403).json({ erro: 'Você não tem permissão de edição neste módulo.' });
+    return res.status(403).json({ erro: acao ? 'Você não tem permissão para esta ação.' : 'Você não tem permissão de edição neste módulo.' });
   } catch (e) {
     // Fail-closed: em erro inesperado, NEGAR a operação (segurança > disponibilidade)
     return res.status(500).json({ erro: 'Erro ao verificar permissão.' });

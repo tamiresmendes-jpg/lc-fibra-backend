@@ -21,6 +21,26 @@ function baseUrl() {
   return `https://${host.replace(/^https?:\/\//, '').replace(/\/$/, '')}`;
 }
 
+const _esperar = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// A partir de 01/09/2026 o HubSoft passa a aplicar rate limit por IP (oAuth:
+// 30 req/min, burst 20; integração: 20 req/s, burst 200). Ao exceder, devolve
+// HTTP 429 com { policy, retry_after } no corpo (retry_after em segundos) — a
+// própria doc pede pra respeitar esse tempo antes de tentar de novo, em vez de
+// insistir na hora. Usado em TODA chamada à API (oauth/token e endpoints).
+const MAX_TENTATIVAS_429 = 4;
+async function fetchComBackoff(url, opts = {}) {
+  for (let tentativa = 1; ; tentativa++) {
+    const resp = await fetch(url, opts);
+    if (resp.status !== 429 || tentativa >= MAX_TENTATIVAS_429) return resp;
+    const corpo = await resp.clone().json().catch(() => null);
+    const policy = resp.headers.get('x-ratelimit-policy') || corpo?.policy || '?';
+    const esperaSeg = Number(corpo?.retry_after) || 5;
+    console.warn(`[hubsoft] 429 rate limit (política "${policy}") — aguardando ${esperaSeg}s (tentativa ${tentativa}/${MAX_TENTATIVAS_429})`);
+    await _esperar(esperaSeg * 1000);
+  }
+}
+
 // ── Cache do token em memória ──────────────────────────────────────────────
 let _token = null;        // access_token atual
 let _expiraEm = 0;        // timestamp (ms) em que o token expira
@@ -38,7 +58,7 @@ async function autenticar() {
     if (!v) throw new Error(`HUBSOFT: variável ${k} ausente no .env`);
   }
 
-  const resp = await fetch(`${baseUrl()}/oauth/token`, {
+  const resp = await fetchComBackoff(`${baseUrl()}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify(body),
@@ -90,7 +110,7 @@ async function credenciaisPainel(empresaId) {
 async function autenticarPainel(empresaId) {
   const cred = await credenciaisPainel(empresaId);
   if (!cred) throw new Error('Cadastre o usuário e a senha do painel HubSoft em Configurações → Integrações.');
-  const resp = await fetch(`${baseUrl()}/oauth/token`, {
+  const resp = await fetchComBackoff(`${baseUrl()}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
@@ -129,7 +149,7 @@ async function autenticarPacotes() {
   const usuario = process.env.HUBSOFT_PACOTES_USUARIO;
   const senha = process.env.HUBSOFT_PACOTES_SENHA;
   if (!usuario || !senha) throw new Error('HUBSOFT_PACOTES_USUARIO/HUBSOFT_PACOTES_SENHA não configurados no .env');
-  const resp = await fetch(`${baseUrl()}/oauth/token`, {
+  const resp = await fetchComBackoff(`${baseUrl()}/oauth/token`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
     body: JSON.stringify({
@@ -173,7 +193,7 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
     // devolve sempre a primeira página, o que fazia o enriquecimento repetir 15 registros.
     origem, limit, pagina, page: pagina, per_page: limit, itens_por_pagina: limit,
   };
-  const chamar = async (token) => fetch(`${baseUrl()}/api/v1/relatorio/cliente_servico`, {
+  const chamar = async (token) => fetchComBackoff(`${baseUrl()}/api/v1/relatorio/cliente_servico`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
     body: JSON.stringify(corpo),
@@ -206,7 +226,7 @@ async function varrerContaReceber({ empresaId, dataInicio, dataFim, tipoData = '
     grupos_clientes_servicos: [], meio_pagamento: [], servico: [], servico_status: [], tipo_servico: [],
     usuario_recebimento: [], caixa_financeiro: [], criterios: [],
   };
-  const chamar = async (token, page) => fetch(`${baseUrl()}/api/v1/relatorio/conta_receber`, {
+  const chamar = async (token, page) => fetchComBackoff(`${baseUrl()}/api/v1/relatorio/conta_receber`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json;charset=UTF-8' },
     body: JSON.stringify({ ...corpoBase, page }),
@@ -244,7 +264,7 @@ function parseValorBR(v) {
 // para todo mundo nesse campo (não é confiável); este endpoint devolve o campo
 // `aceito` (true/false) direto, sem ambiguidade. Sem contrato = array vazio.
 async function statusContrato(empresaId, idClienteServico) {
-  const chamar = async (token) => fetch(`${baseUrl()}/api/v1/cliente/servico/contrato/${idClienteServico}?status=true`, {
+  const chamar = async (token) => fetchComBackoff(`${baseUrl()}/api/v1/cliente/servico/contrato/${idClienteServico}?status=true`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
   let resp = await chamar(await getTokenPainel(empresaId));
@@ -266,7 +286,7 @@ async function apiGet(caminho, params = {}) {
   }
 
   const fazer = async (token) =>
-    fetch(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
+    fetchComBackoff(url, { headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' } });
 
   let resp = await fazer(await getToken());
   if (resp.status === 401) {
@@ -468,7 +488,7 @@ async function buscarTiposOSPorId(ids = [], deveCancelar) {
       .join('\n');
     const query = `query { ${campos} }`;
     try {
-      const resp = await fetch(url, {
+      const resp = await fetchComBackoff(url, {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json', Accept: 'application/json' },
         body: JSON.stringify({ query }),
@@ -738,7 +758,7 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 
   async function chamar(tentouRelogar = false) {
     const token = await getTokenPainel(empresaId);
-    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/servico/consultar`, {
+    const resp = await fetchComBackoff(`${baseUrl()}/api/v1/configuracao/geral/servico/consultar`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}`, Accept: 'application/json', 'Content-Type': 'application/json' },
       body: JSON.stringify({}),
@@ -782,7 +802,6 @@ async function listarPlanosResumo(empresaId, { forcar = false } = {}) {
 // que compõem o pacote, com descrição de cobrança) e outros objetos pesados
 // (empresa, usuário, fiscal) que não interessam à tela — resumirPacote()
 // extrai só descrição/código/valor/ativo/composição antes de guardar no cache.
-const _esperar = (ms) => new Promise((r) => setTimeout(r, ms));
 // Extrai só o que a tela precisa (descrição, código, valor, ativo e a
 // composição) — o retorno bruto do HubSoft traz cada pacote com objetos
 // fiscais/empresa/usuário completos aninhados (pacote_composicao,
@@ -838,7 +857,7 @@ async function listarPacotesResumo(empresaId) {
     // estávamos mandando corpo vazio {} até 14/08/2026 (o tamanho ia só na
     // URL /paginado/N). filtros.status=true traz só pacotes ativos, como
     // pedido pela usuária.
-    const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/3?page=${pagina}`, {
+    const resp = await fetchComBackoff(`${baseUrl()}/api/v1/configuracao/geral/pacote/paginado/3?page=${pagina}`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
@@ -991,7 +1010,7 @@ function resumirServicoNfse(s) {
 // só lê o resultado já salvo em erp_servicos_nfse_cache (ver erp.js).
 async function listarServicosNfse(empresaId, tentouRelogar = false) {
   const token = await getTokenPacotes();
-  const resp = await fetch(`${baseUrl()}/api/v1/configuracao/fiscal/servico_nfse?status=true`, {
+  const resp = await fetchComBackoff(`${baseUrl()}/api/v1/configuracao/fiscal/servico_nfse?status=true`, {
     method: 'GET',
     headers: {
       Authorization: `Bearer ${token}`,
@@ -1057,7 +1076,7 @@ async function mesclarPacotes(empresaId, servicoPacote) {
 // expande aquele plano na tela. Não cacheado (é 1 chamada leve por clique).
 async function detalhePlano(empresaId, idServico, tentouRelogar = false) {
   const token = await getTokenPainel(empresaId);
-  const resp = await fetch(`${baseUrl()}/api/v1/configuracao/geral/servico/${idServico}`, {
+  const resp = await fetchComBackoff(`${baseUrl()}/api/v1/configuracao/geral/servico/${idServico}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
   if (resp.status === 401 && !tentouRelogar) {

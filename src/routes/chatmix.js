@@ -8,6 +8,19 @@ const { buscarPermsEfetivas, temPermissaoServer } = require('../utils/permissoes
 
 router.use(autenticar);
 
+// Mapa único departamento (nome real no Chatmix) -> chave de permissão. Usado tanto
+// pela Meta de Atendimento quanto pelo monitoramento em tempo real (Status ao Vivo
+// etc.) — todo departamento novo do Chatmix precisa entrar aqui pra alguém além do
+// "meta-geral" conseguir ver os próprios dados.
+const DEPTO_PERM_KEYS = {
+  'Financeiro': 'atendimentos.meta-financeiro',
+  'Suporte': 'atendimentos.meta-callcenter',
+  'Comercial': 'atendimentos.meta-comercial',
+  'Cobrança': 'atendimentos.meta-cobranca',
+  'NOC': 'atendimentos.meta-noc',
+  'Recepção': 'atendimentos.meta-recepcao',
+};
+
 // A Meta de Atendimento mostra satisfação e bônus por pessoa — cada departamento só
 // pode ser visto por quem tem a permissão DAQUELE departamento, ou "meta-geral"
 // (concedida à mão para quem deve ver todos). Sem isso, ANY usuário logado
@@ -21,8 +34,7 @@ async function podeVerMetaAtendimento(req, departamento) {
   } catch { /* usa só os grupos */ }
   const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
   if (temPermissaoServer(perms, 'atendimentos.meta-geral', 'visualizar')) return true;
-  const chave = departamento === 'Suporte' ? 'atendimentos.meta-callcenter'
-    : departamento === 'Financeiro' ? 'atendimentos.meta-financeiro' : null;
+  const chave = DEPTO_PERM_KEYS[departamento] || null;
   return chave ? temPermissaoServer(perms, chave, 'visualizar') : false;
 }
 function exigirVerMetaAtendimento(origemDepto) {
@@ -57,9 +69,9 @@ async function departamentosPermitidosAoVivo(req) {
   } catch { /* usa só os grupos */ }
   const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
   if (temPermissaoServer(perms, 'atendimentos.meta-geral', 'visualizar')) return { geral: true };
-  const deps = [];
-  if (temPermissaoServer(perms, 'atendimentos.meta-financeiro', 'visualizar')) deps.push('Financeiro');
-  if (temPermissaoServer(perms, 'atendimentos.meta-callcenter', 'visualizar')) deps.push('Suporte');
+  const deps = Object.entries(DEPTO_PERM_KEYS)
+    .filter(([, chave]) => temPermissaoServer(perms, chave, 'visualizar'))
+    .map(([nome]) => nome);
   return { geral: false, deps };
 }
 function exigirEFiltrarDepartamentoAoVivo(campo = 'departamento') {

@@ -45,13 +45,13 @@ async function logHist(solId, req, acao, detalhe) {
     );
   } catch {}
 }
-async function notificar(empresaId, usuarioId, titulo, texto) {
+async function notificar(empresaId, usuarioId, titulo, texto, link) {
   if (!usuarioId) return;
   try {
     await run(
       `INSERT INTO notificacoes (id, empresa_id, usuario_id, tipo, titulo, texto, link)
-       VALUES (?,?,?, 'chat', ?,?, '/kronos-chat')`,
-      [uuidv4(), empresaId, usuarioId, titulo, texto || null]
+       VALUES (?,?,?, 'chat', ?,?,?)`,
+      [uuidv4(), empresaId, usuarioId, titulo, texto || null, link || '/kronos-chat']
     );
   } catch {}
 }
@@ -122,11 +122,12 @@ router.get('/colaboradores', async (req, res) => {
 // ── Fila de solicitações ───────────────────────────────────────
 router.get('/', async (req, res) => {
   try {
-    const { status, grupo_id, escopo } = req.query;
+    const { status, grupo_id, escopo, cliente_codigo } = req.query;
     let sql = `${SEL} WHERE s.empresa_id = ?`;
     const params = [eid(req)];
     if (status) { sql += ` AND s.status = ?`; params.push(status); }
     if (grupo_id) { sql += ` AND s.grupo_id = ?`; params.push(grupo_id); }
+    if (cliente_codigo) { sql += ` AND s.cliente_codigo = ?`; params.push(cliente_codigo); }
     if (escopo === 'minhas') { sql += ` AND (s.criado_por = ? OR s.responsavel_id = ?)`; params.push(uid(req), uid(req)); }
     sql += ` ORDER BY CASE WHEN s.status IN ('concluida','cancelada') THEN 1 ELSE 0 END, s.updated_at DESC`;
     res.json(await all(sql, params));
@@ -414,28 +415,35 @@ router.delete('/grupos/:id/topicos/:tid', soAdmin, async (req, res) => {
 
 // ── Canais de Departamento — DEVE vir antes de /:id ──────────
 
-// Verifica se usuário tem acesso ao canal (depto ou membro individual)
+// Verifica se usuário tem acesso ao canal (depto ou membro individual).
+// Gestor/admin NÃO têm bypass automático — só enxergam canal de outro
+// departamento se forem adicionados como membro individual.
 async function temAcessoCanal(req, canal) {
-  if (ehGestor(req)) return true;
   if (req.usuario.departamento_id === canal.departamento_id) return true;
   const m = await get('SELECT 1 FROM chat_canal_membros WHERE canal_id = ? AND usuario_id = ?', [canal.id, uid(req)]);
   return !!m;
 }
 
-// Lista os canais acessíveis ao usuário
+// Lista todos os canais da empresa (metadados só, sem conversa) — uso exclusivo
+// do painel de Administração pra gerenciar (criar/excluir/adicionar membro).
+// DEVE vir antes de /canais/:id se algum dia existir uma rota assim.
+router.get('/canais/admin', soAdmin, async (req, res) => {
+  try {
+    const canais = await all(
+      `SELECT c.*, d.nome AS departamento_nome
+         FROM chat_canais c
+         LEFT JOIN departamentos d ON d.id = c.departamento_id
+        WHERE c.empresa_id = ? ORDER BY d.nome`,
+      [eid(req)]
+    );
+    res.json(canais);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Lista os canais acessíveis ao usuário (próprio departamento + onde for
+// membro individual). Vale pra todo mundo, inclusive gestor/admin.
 router.get('/canais', async (req, res) => {
   try {
-    if (ehGestor(req)) {
-      const canais = await all(
-        `SELECT c.*, d.nome AS departamento_nome
-           FROM chat_canais c
-           LEFT JOIN departamentos d ON d.id = c.departamento_id
-          WHERE c.empresa_id = ? ORDER BY d.nome`,
-        [eid(req)]
-      );
-      return res.json(canais);
-    }
-
     const deptoId = req.usuario.departamento_id;
     // Auto-cria canal do próprio depto se ainda não existe
     if (deptoId) {
@@ -663,6 +671,86 @@ router.post('/verificar-prazos', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ── DM privada entre colaboradores — DEVE vir antes de /:id ───
+// Estritamente entre os 2 participantes: sem bypass de gestor/admin em
+// nenhuma rota abaixo (auditável só via banco, nunca pela API/tela).
+
+// Lista de conversas do usuário logado (outro participante, última mensagem, não lidas)
+router.get('/dm', async (req, res) => {
+  try {
+    const conversas = await all(
+      `SELECT
+         CASE WHEN remetente_id = ? THEN destinatario_id ELSE remetente_id END AS outro_id,
+         MAX(created_at) AS ultima_em,
+         (ARRAY_AGG(texto ORDER BY created_at DESC))[1] AS ultimo_texto,
+         (ARRAY_AGG(anexo_nome ORDER BY created_at DESC))[1] AS ultimo_anexo_nome,
+         SUM(CASE WHEN destinatario_id = ? AND lida = 0 THEN 1 ELSE 0 END) AS nao_lidas
+       FROM chat_dm_mensagens
+       WHERE empresa_id = ? AND (remetente_id = ? OR destinatario_id = ?)
+       GROUP BY outro_id
+       ORDER BY ultima_em DESC`,
+      [uid(req), uid(req), eid(req), uid(req), uid(req)]
+    );
+    if (!conversas.length) return res.json([]);
+    const ids = conversas.map(c => c.outro_id);
+    const placeholders = ids.map(() => '?').join(',');
+    const usuarios = await all(`SELECT id, nome, avatar FROM usuarios WHERE id IN (${placeholders})`, ids);
+    const mapa = {};
+    usuarios.forEach(u => { mapa[u.id] = u; });
+    res.json(conversas.map(c => ({
+      usuario_id: c.outro_id,
+      nome: mapa[c.outro_id]?.nome || 'Usuário',
+      avatar: mapa[c.outro_id]?.avatar || null,
+      ultima_em: c.ultima_em,
+      ultimo_texto: c.ultimo_texto,
+      ultimo_anexo_nome: c.ultimo_anexo_nome,
+      nao_lidas: Number(c.nao_lidas || 0),
+    })));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Mensagens entre mim e :outroId (marca como lidas ao abrir)
+router.get('/dm/:outroId/mensagens', async (req, res) => {
+  try {
+    const outroId = req.params.outroId;
+    const msgs = await all(
+      `SELECT * FROM chat_dm_mensagens
+        WHERE empresa_id = ?
+          AND ((remetente_id = ? AND destinatario_id = ?) OR (remetente_id = ? AND destinatario_id = ?))
+        ORDER BY created_at ASC`,
+      [eid(req), uid(req), outroId, outroId, uid(req)]
+    );
+    await run(
+      `UPDATE chat_dm_mensagens SET lida = 1 WHERE empresa_id = ? AND destinatario_id = ? AND remetente_id = ? AND lida = 0`,
+      [eid(req), uid(req), outroId]
+    );
+    res.json(msgs);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Enviar DM (texto e/ou anexo)
+router.post('/dm/:outroId/mensagens', async (req, res) => {
+  try {
+    const outroId = req.params.outroId;
+    if (outroId === uid(req)) return res.status(400).json({ erro: 'Não é possível enviar mensagem para si mesmo' });
+    const destino = await get('SELECT id, nome FROM usuarios WHERE id = ? AND empresa_id = ? AND ativo = 1', [outroId, eid(req)]);
+    if (!destino) return res.status(404).json({ erro: 'Usuário não encontrado' });
+    const { texto, anexo, anexo_nome, anexo_tipo } = req.body;
+    const temAnexo = anexo && typeof anexo === 'string' && anexo.startsWith('data:');
+    if (!(texto && texto.trim()) && !temAnexo) return res.status(400).json({ erro: 'Mensagem vazia' });
+    if (temAnexo && anexo.length > 5_500_000) return res.status(400).json({ erro: 'Anexo muito grande (máx. ~4MB).' });
+    const id = uuidv4();
+    await run(
+      `INSERT INTO chat_dm_mensagens (id, empresa_id, remetente_id, destinatario_id, texto, anexo, anexo_nome, anexo_tipo)
+       VALUES (?,?,?,?,?,?,?,?)`,
+      [id, eid(req), uid(req), outroId, texto?.trim() || null, temAnexo ? anexo : null, temAnexo ? (anexo_nome || 'anexo') : null, temAnexo ? (anexo_tipo || null) : null]
+    );
+    await notificar(eid(req), outroId, `Mensagem de ${unome(req)}`, texto?.trim() ? texto.trim().slice(0, 80) : '📎 enviou um anexo', `/kronos-chat?dm=${uid(req)}`);
+    await enviarPush(eid(req), outroId, { titulo: `Mensagem de ${unome(req)}`, corpo: texto?.trim() || '📎 anexo', solId: '' });
+    res.status(201).json(await get('SELECT * FROM chat_dm_mensagens WHERE id = ?', [id]));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── Detalhe da solicitação (deve vir depois de /grupos e /canais) ──
 router.get('/:id', async (req, res) => {
   try {
@@ -674,33 +762,51 @@ router.get('/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Criar solicitação (+ distribuição automática pelo grupo)
+// Criar solicitação (+ distribuição automática pelo grupo, ou direcionada a uma pessoa específica)
 router.post('/', async (req, res) => {
   try {
-    const { titulo, descricao, categoria, grupo_id, topico_id, topico_nome, prioridade, anexo, anexo_nome, anexo_tipo } = req.body;
+    const {
+      titulo, descricao, categoria, grupo_id, topico_id, topico_nome, prioridade,
+      anexo, anexo_nome, anexo_tipo, responsavel_id, cliente_codigo, servico_codigo,
+    } = req.body;
     if (!titulo || !titulo.trim()) return res.status(400).json({ erro: 'Título é obrigatório' });
     if (!grupo_id) return res.status(400).json({ erro: 'Selecione um grupo' });
     const id = uuidv4();
 
-    const resp = await distribuir(eid(req), grupo_id);
+    let resp = null;
+    let direcionada = false;
+    if (responsavel_id) {
+      resp = await get('SELECT id, nome FROM usuarios WHERE id = ? AND empresa_id = ? AND ativo = 1', [responsavel_id, eid(req)]);
+      if (!resp) return res.status(404).json({ erro: 'Colaborador não encontrado' });
+      direcionada = true;
+    } else {
+      resp = await distribuir(eid(req), grupo_id);
+    }
     const status = resp ? 'distribuida' : 'nova';
 
     await run(
       `INSERT INTO chat_solicitacoes
-        (id, empresa_id, titulo, descricao, categoria, grupo_id, topico_id, topico_nome, prioridade, status, criado_por, criado_por_nome, responsavel_id, responsavel_nome)
-       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+        (id, empresa_id, titulo, descricao, categoria, grupo_id, topico_id, topico_nome, prioridade, status, criado_por, criado_por_nome, responsavel_id, responsavel_nome, cliente_codigo, servico_codigo)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
       [id, eid(req), titulo.trim(), descricao || null, categoria || 'geral', grupo_id, topico_id || null, topico_nome || null,
-       prioridade || 'media', status, uid(req), unome(req), resp?.id || null, resp?.nome || null]
+       prioridade || 'media', status, uid(req), unome(req), resp?.id || null, resp?.nome || null,
+       cliente_codigo?.trim() || null, servico_codigo?.trim() || null]
     );
     await logHist(id, req, 'criada', 'Solicitação aberta');
     if (resp) {
-      await run(
-        `UPDATE chat_solicitacoes SET alerta_visto=0, aceite_prazo=${ACEITE_PRAZO_SQL}, aceite_tentativas=1 WHERE id=?`,
-        [id]
-      );
-      await logHist(id, req, 'distribuida', `Distribuída automaticamente para ${resp.nome}`);
-      await notificar(eid(req), resp.id, 'Nova solicitação', `"${titulo.trim()}" foi atribuída a você`);
-      await enviarPush(eid(req), resp.id, { titulo: 'Nova demanda para você', corpo: titulo.trim(), solId: id });
+      // Direcionamento manual pra si mesmo não precisa de prazo de aceite (mesma regra do PATCH /:id/responsavel)
+      const semPrazo = direcionada && resp.id === uid(req);
+      if (!semPrazo) {
+        await run(
+          `UPDATE chat_solicitacoes SET alerta_visto=0, aceite_prazo=${ACEITE_PRAZO_SQL}, aceite_tentativas=1 WHERE id=?`,
+          [id]
+        );
+      }
+      await logHist(id, req, 'distribuida', direcionada ? `Direcionada manualmente para ${resp.nome}` : `Distribuída automaticamente para ${resp.nome}`);
+      if (!semPrazo) {
+        await notificar(eid(req), resp.id, 'Nova solicitação', `"${titulo.trim()}" foi atribuída a você`);
+        await enviarPush(eid(req), resp.id, { titulo: 'Nova demanda para você', corpo: titulo.trim(), solId: id });
+      }
     }
     // Mensagem inicial opcional (anexo enviado na abertura)
     const temAnexo = anexo && typeof anexo === 'string' && anexo.startsWith('data:');

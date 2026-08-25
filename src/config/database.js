@@ -462,6 +462,26 @@ async function initSchema() {
       UNIQUE(avaliacao_id, colaborador_id)
     );
 
+    -- Uma "prova" pode ser dividida em várias sub-avaliações (treinamento_avaliacoes)
+    -- que precisam ser respondidas em sequência (ex.: 17 partes de um teste
+    -- avaliativo). Isso guarda o resultado COMBINADO dessa sequência inteira
+    -- pra 1 colaborador, com um portão de aprovação: a nota fica escondida
+    -- da pessoa até o responsável revisar e liberar (ela só vê "aguardando
+    -- liberação" nesse meio-tempo).
+    CREATE TABLE IF NOT EXISTS avaliacao_tentativas (
+      id TEXT PRIMARY KEY,
+      treinamento_id TEXT NOT NULL,
+      colaborador_id TEXT NOT NULL,
+      pontos_obtidos REAL DEFAULT 0,
+      pontos_totais REAL DEFAULT 0,
+      perguntas_abertas INTEGER DEFAULT 0,
+      status TEXT DEFAULT 'pendente',
+      concluido_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      liberado_em TEXT,
+      liberado_por TEXT,
+      UNIQUE(treinamento_id, colaborador_id)
+    );
+
     CREATE TABLE IF NOT EXISTS treinamento_anotacoes (
       id TEXT PRIMARY KEY,
       treinamento_id TEXT NOT NULL,
@@ -1266,6 +1286,8 @@ async function initSchema() {
     );
     -- Premiação do supervisor = % do salário dele, quando SUPERA a meta na faixa (ex.: 15% acima = 115%)
     ALTER TABLE meta_comercial_supervisor ADD COLUMN IF NOT EXISTS salario REAL DEFAULT 0;
+    -- ID do Discord do supervisor, pra mandar o relatório GERAL (todos os vendedores) por DM
+    ALTER TABLE meta_comercial_supervisor ADD COLUMN IF NOT EXISTS discord_id TEXT;
     CREATE TABLE IF NOT EXISTS meta_comercial_venda_sync (
       empresa_id TEXT NOT NULL,
       data_cadastro DATE,
@@ -1305,6 +1327,15 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS meta_comercial_analise_layout (
       empresa_id TEXT PRIMARY KEY,
       layout JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
+    -- Texto da DM que o bot manda pra cada vendedor (botão "Enviar análise no
+    -- Discord"). Editável por admin/gestor/líder, com placeholders tipo {nome}
+    -- — sem registro, usa o texto padrão do código.
+    CREATE TABLE IF NOT EXISTS meta_comercial_mensagem_discord (
+      empresa_id TEXT PRIMARY KEY,
+      titulo TEXT,
+      corpo TEXT,
       atualizado_em TIMESTAMP DEFAULT NOW()
     );
     -- Quem, além de admin/gestor/líder, pode ver TODOS os colaboradores de uma
@@ -1832,6 +1863,9 @@ async function initSchema() {
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS ultimo_lembrete TEXT`);
   // Re-alerta quando responsável pediu para aguardar
   await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS re_alertar_em TEXT`);
+  // Códigos estruturados de cliente/serviço (evita expor CPF/nome na solicitação)
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS cliente_codigo TEXT`);
+  await pool.query(`ALTER TABLE chat_solicitacoes ADD COLUMN IF NOT EXISTS servico_codigo TEXT`);
   // Inscrições de Web Push (notificação com a aba fechada)
   await pool.query(`
     CREATE TABLE IF NOT EXISTS chat_push_subs (
@@ -1889,6 +1923,23 @@ async function initSchema() {
       PRIMARY KEY (canal_id, usuario_id)
     )
   `);
+
+  // ── DM privada entre colaboradores — estritamente entre os 2 participantes ──
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS chat_dm_mensagens (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      remetente_id TEXT NOT NULL,
+      destinatario_id TEXT NOT NULL,
+      texto TEXT,
+      anexo TEXT,
+      anexo_nome TEXT,
+      anexo_tipo TEXT,
+      lida INT DEFAULT 0,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_chat_dm_par ON chat_dm_mensagens(empresa_id, remetente_id, destinatario_id)`);
 
   // ── Módulo de Tarefas (Kanban / Delegação) ──
   // status: a_fazer | em_execucao | aguardando_aprovacao | concluido

@@ -42,16 +42,31 @@ echo "==> Sintaxe OK no servidor. Reiniciando kronos-backend..."
 ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" \
   "pm2 restart kronos-backend --update-env"
 
+# "status: online" sozinho nao basta: um processo em loop de crash tambem
+# aparece "online" por uma fracao de segundo entre uma queda e outra (o PM2
+# reinicia sozinho). Ja aconteceu de o script dizer "deploy concluido" com o
+# processo caindo em loop (ReferenceError num require de topo, por exemplo).
+# Por isso: mede o contador de reinicios (restart_time) duas vezes, com uma
+# espera de verdade no meio — se ele SUBIU nesse intervalo, e crash loop, nao
+# deploy estavel, mesmo que a leitura final diga "online".
 echo "==> Aguardando o processo estabilizar..."
-sleep 4
+sleep 3
+INFO_1=$(ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" \
+  "pm2 jlist | node -e \"const p=JSON.parse(require('fs').readFileSync(0)).find(x=>x.name==='kronos-backend'); console.log(p.pm2_env.status+' '+p.pm2_env.restart_time)\"")
+RESTARTS_1=$(echo "$INFO_1" | awk '{print $2}')
 
-STATUS=$(ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" \
-  "pm2 jlist | node -e \"const p=JSON.parse(require('fs').readFileSync(0)).find(x=>x.name==='kronos-backend'); console.log(p.pm2_env.status)\"")
+sleep 8
+INFO_2=$(ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" \
+  "pm2 jlist | node -e \"const p=JSON.parse(require('fs').readFileSync(0)).find(x=>x.name==='kronos-backend'); console.log(p.pm2_env.status+' '+p.pm2_env.restart_time)\"")
+STATUS_2=$(echo "$INFO_2" | awk '{print $1}')
+RESTARTS_2=$(echo "$INFO_2" | awk '{print $2}')
 
-if [ "$STATUS" != "online" ]; then
-  echo "!!! kronos-backend nao ficou online (status: $STATUS). Verifique os logs:"
-  echo "    ssh -i $CHAVE $SERVIDOR \"pm2 logs kronos-backend --lines 50 --nostream\""
+if [ "$STATUS_2" != "online" ] || [ "$RESTARTS_2" -gt "$RESTARTS_1" ]; then
+  echo "!!! kronos-backend NAO ficou estavel (status: $STATUS_2, reinicios $RESTARTS_1 -> $RESTARTS_2 em 8s)."
+  echo "!!! Isso indica crash loop (provavel erro ao carregar algum arquivo). Ultimas linhas do log de erro:"
+  ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" "tail -n 25 /root/.pm2/logs/kronos-backend-error.log"
+  echo "!!! O processo antigo NAO volta sozinho — ele fica no ar do jeito que ficou. Corrija o codigo e rode o deploy de novo."
   exit 1
 fi
 
-echo "==> Deploy concluido. kronos-backend esta online."
+echo "==> Deploy concluido. kronos-backend esta online e estavel (sem reinicios em 8s)."

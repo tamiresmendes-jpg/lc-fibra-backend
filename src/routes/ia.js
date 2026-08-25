@@ -11,6 +11,51 @@ function getClient() {
   return new Anthropic({ apiKey: key });
 }
 
+// POST /ia/comparar-resposta — usado na correção de perguntas dissertativas
+// de avaliação: compara a resposta do colaborador com a resposta esperada
+// cadastrada pelo responsável, por CONCEITO (não texto literal), pra marcar
+// em verde o que está alinhado e em vermelho o que fugiu do esperado.
+router.post('/comparar-resposta', async (req, res) => {
+  try {
+    const { pergunta, resposta_esperada, resposta_dada } = req.body;
+    if (!resposta_esperada?.trim() || !resposta_dada?.trim()) {
+      return res.status(400).json({ erro: 'resposta_esperada e resposta_dada são obrigatórias' });
+    }
+    const system = `Você corrige respostas dissertativas comparando o CONCEITO da resposta do colaborador com o conceito da resposta esperada — não exige texto igual, só que a ideia esteja correta.
+
+Divida a resposta do colaborador em trechos (frases ou partes de frase) e classifique CADA trecho como:
+- "alinhado": true — se o trecho está dentro do conceito da resposta esperada
+- "alinhado": false — se o trecho está errado, incompleto de forma relevante, ou fugiu do conceito esperado
+
+Junte TODOS os trechos na ordem original — a concatenação dos "texto" de cada trecho deve reconstituir a resposta do colaborador exatamente (mesmos espaços/pontuação), pra dar pra pintar por cima sem perder nada.
+
+Retorne EXCLUSIVAMENTE um JSON válido, sem markdown, nesta estrutura:
+{"trechos":[{"texto":"...","alinhado":true},{"texto":"...","alinhado":false}],"percentual_alinhamento":0,"resumo":"1-2 frases explicando o que faltou ou o que fugiu do conceito, se houver"}`;
+
+    const prompt = `Pergunta: ${pergunta || '(sem texto)'}\n\nResposta esperada (conceito de referência):\n${resposta_esperada.trim()}\n\nResposta do colaborador (a analisar):\n${resposta_dada.trim()}`;
+
+    const client = getClient();
+    const msg = await client.messages.create({
+      model: 'claude-haiku-4-5-20251001',
+      max_tokens: 1500,
+      system,
+      messages: [{ role: 'user', content: prompt }],
+    });
+    let txt = (msg.content[0]?.text || '').trim().replace(/^```(json)?/i, '').replace(/```$/, '').trim();
+    const ini = txt.indexOf('{'), fim = txt.lastIndexOf('}');
+    if (ini >= 0 && fim > ini) txt = txt.slice(ini, fim + 1);
+    let dados;
+    try { dados = JSON.parse(txt); } catch { return res.status(502).json({ erro: 'A IA não retornou uma comparação válida. Tente novamente.' }); }
+    res.json({
+      trechos: Array.isArray(dados.trechos) ? dados.trechos : [{ texto: resposta_dada, alinhado: null }],
+      percentual_alinhamento: typeof dados.percentual_alinhamento === 'number' ? dados.percentual_alinhamento : null,
+      resumo: dados.resumo || '',
+    });
+  } catch (e) {
+    res.status(500).json({ erro: e.message.includes('ANTHROPIC') ? 'IA não configurada no servidor.' : 'Erro ao comparar resposta: ' + e.message });
+  }
+});
+
 const CAMPOS_DESC = {
   objetivo: 'Objetivo do POP (o que este procedimento visa alcançar)',
   escopo: 'Escopo de aplicação (onde e a quem se aplica)',

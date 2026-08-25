@@ -12,14 +12,23 @@ const SELECT_TREINAMENTO = `
     r.nome AS responsavel_nome,
     c.nome AS colaborador_nome,
     tpz.nome AS trilha_principal_nome,
-    (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS total_pops,
-    (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.concluido = 1) AS pops_concluidos,
-    (SELECT COALESCE(SUM(tp.tempo_estimado),0) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS tempo_total_estimado,
-    (SELECT COALESCE(SUM(tp.tempo_realizado),0) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS tempo_total_realizado,
+    (SELECT COUNT(*) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS total_pops,
+    (SELECT COUNT(*) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND tp.concluido = 1 AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS pops_concluidos,
+    (SELECT COALESCE(SUM(tp.tempo_estimado),0) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS tempo_total_estimado,
+    (SELECT COALESCE(SUM(tp.tempo_realizado),0) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS tempo_total_realizado,
     (SELECT COUNT(*) FROM treinamento_pops tp
       JOIN pops p ON p.id = tp.pop_id
       WHERE tp.treinamento_id = t.id AND tp.versao_pop IS NOT NULL AND tp.versao_pop != p.versao
-    ) AS alertas_reciclagem
+        AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS alertas_reciclagem
   FROM treinamentos t
   LEFT JOIN departamentos d ON d.id = t.departamento_id
   LEFT JOIN usuarios r ON r.id = t.responsavel_id
@@ -162,26 +171,90 @@ router.get('/alertas-reciclagem', async (req, res) => {
 });
 
 // Salva os módulos de uma trilha (e os pops/sub-módulos de cada um). Usado
-// tanto na criação quanto na edição — sempre substitui tudo do zero, é mais
-// simples e evita ordem/id dessincronizados entre módulos e pops.
+// tanto na criação quanto na edição.
+//
+// CUIDADO: isto NÃO pode ser um DELETE+recria do zero — um módulo/tópico que
+// já existe carrega progresso real (concluido, tempo_realizado, status_pop,
+// checklist_marcado, data_inicio_real/fim_real, anotações e avaliações
+// vinculadas por pop_id/modulo_id). Recriar com um UUID novo perde esse
+// progresso mesmo que a edição fosse só, por exemplo, trocar o responsável
+// da trilha (bug real: 18/08/2026, zerou o progresso de 100% de uma trilha
+// inteira ao salvar um campo não relacionado, incluindo casos em que o
+// próprio NOME do módulo mudou — por isso o casamento de tópico NÃO pode
+// depender de casar o módulo certo primeiro).
+//
+// Estratégia: casa cada TÓPICO recebido, em TODO o treinamento (não só
+// dentro do módulo "correspondente"), por pop_id (quando tem POP — é um id
+// estável e único) ou por titulo (quando é tópico-texto sem POP). Um tópico
+// com pop_id sobrevive a qualquer reorganização de módulo/nome. Só depois
+// disso resolve o módulo (por nome, com fallback de posição) — e se o
+// tópico já existia só migra ele de módulo, nunca perde o progresso.
 async function salvarModulos(treinamentoId, modulos) {
-  await run(`DELETE FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id IS NOT NULL`, [treinamentoId]);
-  await run(`DELETE FROM treinamento_modulos WHERE treinamento_id=$1`, [treinamentoId]);
   if (!Array.isArray(modulos)) return;
+
+  const modulosExistentes = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1', [treinamentoId]);
+  const topicosExistentes = await all('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id IS NOT NULL', [treinamentoId]);
+  const modulosVistoIds = new Set();
+  const topicosVistoIds = new Set();
+
   for (const [mi, mod] of modulos.entries()) {
-    const moduloId = uuidv4();
-    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id, data_prevista) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null]);
-    for (const [pi, item] of (mod.pops || []).entries()) {
-      // Sub-módulo pode ser só um tópico em texto (sem POP) — titulo/descricao
-      // valem nesse caso; com POP, o título vem do próprio POP, mas a
-      // descrição (texto explicando o tópico) continua podendo ser usada.
-      await run(`INSERT INTO treinamento_pops
-        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9,$10,$11)
-        ON CONFLICT DO NOTHING
-      `, [uuidv4(), treinamentoId, item.pop_id || null, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId, item.titulo || null, item.descricao || null]);
+    // Casa o módulo por nome primeiro; se não achar (nome mudou), casa pela
+    // MESMA POSIÇÃO (mi) entre os módulos ainda não vistos — cobre o caso
+    // comum de só renomear o módulo sem reordenar nada.
+    let existente = modulosExistentes.find(m => m.nome === mod.nome && !modulosVistoIds.has(m.id));
+    if (!existente) {
+      const naoVistos = modulosExistentes.filter(m => !modulosVistoIds.has(m.id));
+      existente = naoVistos[mi] || naoVistos[0] || null;
     }
+    let moduloId;
+    if (existente) {
+      moduloId = existente.id;
+      modulosVistoIds.add(moduloId);
+      await run(`UPDATE treinamento_modulos SET nome=$1, ordem=$2, colaborador_id=$3, instrutor_id=$4, data_prevista=$5, removido_em=NULL, removido_por=NULL WHERE id=$6`,
+        [mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null, moduloId]);
+    } else {
+      moduloId = uuidv4();
+      modulosVistoIds.add(moduloId);
+      await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id, data_prevista) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null]);
+    }
+
+    for (const [pi, item] of (mod.pops || []).entries()) {
+      const existenteTopico = topicosExistentes.find(t =>
+        !topicosVistoIds.has(t.id) && (
+          (item.pop_id && t.pop_id === item.pop_id) ||
+          (!item.pop_id && !t.pop_id && t.titulo === item.titulo)
+        )
+      );
+      if (existenteTopico) {
+        topicosVistoIds.add(existenteTopico.id);
+        // Só atualiza campos de CONTEÚDO — nunca toca em concluido,
+        // tempo_realizado, status_pop, checklist_marcado, datas reais.
+        // modulo_id É atualizado: o tópico segue seu pop_id, não o módulo
+        // antigo, então se ele mudou de módulo/nome isso migra corretamente.
+        await run(`UPDATE treinamento_pops SET
+          ordem=$1, instrutor_id=$2, tempo_estimado=$3, topicos=$4, data_prevista=$5, titulo=$6, descricao=$7, modulo_id=$8
+          WHERE id=$9`,
+          [pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, item.titulo || null, item.descricao || null, moduloId, existenteTopico.id]);
+      } else {
+        const novoId = uuidv4();
+        topicosVistoIds.add(novoId);
+        await run(`INSERT INTO treinamento_pops
+          (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9,$10,$11)
+          ON CONFLICT DO NOTHING
+        `, [novoId, treinamentoId, item.pop_id || null, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId, item.titulo || null, item.descricao || null]);
+      }
+    }
+  }
+  // Módulos que existiam mas não vieram mais no payload: marca como
+  // removido (soft, reversível) em vez de DELETE — preserva o progresso.
+  // Tópicos cujo pop_id não veio mais no payload também não são tocados
+  // (continuam com seu modulo_id antigo); se esse módulo foi removido, o
+  // tópico fica junto — nunca é apagado, só deixa de aparecer.
+  const modulosParaRemover = modulosExistentes.filter(m => !modulosVistoIds.has(m.id) && !m.removido_em);
+  for (const m of modulosParaRemover) {
+    await run(`UPDATE treinamento_modulos SET removido_em=NOW(), removido_por='edicao-preserva-progresso' WHERE id=$1`, [m.id]);
   }
 }
 
@@ -239,6 +312,9 @@ router.get('/trilhas-catalogo', async (req, res) => {
     const linhas = await all(`
       SELECT tc.*, r.nome AS responsavel_nome,
         (SELECT COUNT(*) FROM trilha_catalogo_modulos tcm WHERE tcm.trilha_catalogo_id = tc.id) AS total_modulos,
+        (SELECT COUNT(*) FROM trilha_catalogo_topicos tct
+          JOIN trilha_catalogo_modulos tcm ON tcm.id = tct.trilha_catalogo_modulo_id
+          WHERE tcm.trilha_catalogo_id = tc.id) AS total_topicos,
         (SELECT COUNT(*) FROM treinamento_trilhas tt WHERE tt.trilha_catalogo_id = tc.id) AS total_treinamentos
       FROM trilhas_catalogo tc
       LEFT JOIN usuarios r ON r.id = tc.responsavel_id
@@ -250,6 +326,20 @@ router.get('/trilhas-catalogo', async (req, res) => {
 });
 
 // GET /api/treinamentos/trilhas-catalogo/:id — detalhe com módulos e tópicos.
+// PUT /api/treinamentos/trilhas-catalogo/reordenar — troca a ordem das
+// Trilhas do catálogo entre si (dentro da mesma pasta ou soltas). Precisa vir
+// antes de PUT '/trilhas-catalogo/:id', senão "reordenar" seria lido como id.
+router.put('/trilhas-catalogo/reordenar', async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids)) return res.status(400).json({ erro: 'ids deve ser array' });
+    for (const [i, id] of ids.entries()) {
+      await run('UPDATE trilhas_catalogo SET ordem=$1 WHERE id=$2 AND empresa_id=$3', [i + 1, id, req.usuario.empresa_id]);
+    }
+    res.json({ mensagem: 'Reordenado' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/trilhas-catalogo/:id', async (req, res) => {
   try {
     const trilha = await get(
@@ -261,7 +351,14 @@ router.get('/trilhas-catalogo/:id', async (req, res) => {
     if (!trilha) return res.status(404).json({ erro: 'Trilha não encontrada' });
     const modulos = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1 ORDER BY ordem', [req.params.id]);
     for (const mod of modulos) {
-      mod.topicos = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [mod.id]);
+      // Tópico com pop_id não guarda título/código próprios — vêm do POP de
+      // verdade (evita duplicar/desatualizar o texto quando o POP é editado).
+      mod.topicos = await all(`
+        SELECT tct.*, COALESCE(tct.titulo, p.titulo) AS titulo, p.codigo
+        FROM trilha_catalogo_topicos tct
+        LEFT JOIN pops p ON p.id = tct.pop_id
+        WHERE tct.trilha_catalogo_modulo_id=$1 ORDER BY tct.ordem
+      `, [mod.id]);
       mod.avaliacoes = await all(`
         SELECT tca.*, tct.pop_id FROM trilha_catalogo_avaliacoes tca
         LEFT JOIN trilha_catalogo_topicos tct ON tct.id = tca.trilha_catalogo_topico_id
@@ -418,9 +515,14 @@ router.delete('/treinamentos-principais/:id/trilhas/:trilha_catalogo_id', async 
 async function propagarTopicosEAvaliacoes(moduloCatalogoId, treinamentoId, moduloId, instrutorId) {
   const topicosCatalogo = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
   for (const [i, topico] of topicosCatalogo.entries()) {
+    // ON CONFLICT: dois saves quase simultâneos da mesma Trilha (duplo clique,
+    // duas abas) podem disparar essa propagação em paralelo pro mesmo colaborador
+    // — sem isso, o segundo INSERT batia na constraint única (treinamento_id,
+    // pop_id) e derrubava a requisição inteira com 500 (bug real, 25/08/2026).
     await run(`INSERT INTO treinamento_pops
       (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, modulo_id, titulo, descricao, trilha_catalogo_topico_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      ON CONFLICT (treinamento_id, pop_id) DO NOTHING
     `, [uuidv4(), treinamentoId, topico.pop_id, i, instrutorId || null, topico.tempo_estimado, topico.topicos, topico.versao_pop, moduloId, topico.titulo, topico.descricao, topico.id]);
   }
   const avaliacoesCatalogo = await all('SELECT * FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
@@ -455,11 +557,15 @@ async function sincronizarTreinamentoComColaboradores(treinamentoPrincipalId, tr
   for (const clone of colaboradoresTreinamento) {
     let algumModuloAdicionado = false;
     for (const modCat of modulosCatalogo) {
+      // Inclui removido_em aqui: um módulo já vinculado antes (mesmo que
+      // soft-removido depois) não pode ser recriado — reinserir os mesmos
+      // pop_id em treinamento_pops bateria na constraint única
+      // (treinamento_id, pop_id), já que as linhas antigas continuam lá.
       const jaTem = await get(
-        'SELECT id FROM treinamento_modulos WHERE treinamento_id=$1 AND trilha_catalogo_modulo_id=$2',
+        'SELECT id, removido_em FROM treinamento_modulos WHERE treinamento_id=$1 AND trilha_catalogo_modulo_id=$2',
         [clone.id, modCat.id]
       );
-      if (jaTem) continue; // já tem esse módulo vinculado — não duplica, não altera
+      if (jaTem) continue; // já tem esse módulo vinculado (ativo ou removido) — não duplica, não altera
 
       const maxOrdemModulo = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_modulos WHERE treinamento_id=$1', [clone.id]);
       const moduloId = uuidv4();
@@ -474,6 +580,24 @@ async function sincronizarTreinamentoComColaboradores(treinamentoPrincipalId, tr
   }
   return { colaboradores: colaboradoresTreinamento.length, vinculosNovos };
 }
+
+// Lista todas as tentativas pendentes de liberação da empresa (tela do
+// responsável revisar e autorizar) — precisa vir ANTES de GET /:id, senão a
+// rota genérica captura "/tentativas-pendentes" como se fosse um id de
+// treinamento.
+router.get('/tentativas-pendentes', async (req, res) => {
+  try {
+    const lista = await all(`
+      SELECT at.*, t.titulo AS treinamento_titulo, u.nome AS colaborador_nome
+      FROM avaliacao_tentativas at
+      JOIN treinamentos t ON t.id = at.treinamento_id
+      JOIN usuarios u ON u.id = at.colaborador_id
+      WHERE t.empresa_id = $1 AND at.status = 'pendente'
+      ORDER BY at.concluido_em ASC
+    `, [req.usuario.empresa_id]);
+    res.json(lista);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
 
 router.get('/:id', async (req, res) => {
   try {
@@ -521,7 +645,7 @@ router.get('/:id', async (req, res) => {
       FROM treinamento_modulos m
       LEFT JOIN usuarios u ON u.id = m.colaborador_id
       LEFT JOIN usuarios ui ON ui.id = m.instrutor_id
-      WHERE m.treinamento_id = $1 ORDER BY m.ordem ASC
+      WHERE m.treinamento_id = $1 AND m.removido_em IS NULL ORDER BY m.ordem ASC
     `, [req.params.id]);
     const modulos = modulosRaw.map(m => {
       const popsDoModulo = pops.filter(p => p.modulo_id === m.id);
@@ -558,15 +682,19 @@ router.put('/:id/status', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos, trilha_principal_id, ordem } = req.body;
-    // trilha_principal_id e ordem usam COALESCE: quando a chamada não manda
-    // esses campos (ex.: os PUTs "minimalistas" que só mudam status/tempo),
-    // mantém o valor já salvo em vez de apagar/zerar.
+    // trilha_principal_id, ordem e status_agenda usam COALESCE: quando a
+    // chamada não manda esses campos (ex.: edições feitas por telas que só
+    // mudam responsável/observações, sem saber o status atual do progresso),
+    // mantém o valor já salvo em vez de resetar pra "agendado" e apagar que a
+    // trilha já estava em andamento/concluída.
     await run(`UPDATE treinamentos SET
-      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8, modo_repasse=$9,
+      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7,
+      status_agenda=COALESCE($8, status_agenda),
+      modo_repasse=$9,
       trilha_principal_id=COALESCE($12, trilha_principal_id),
       ordem=COALESCE($13, ordem)
       WHERE id=$10 AND empresa_id=$11
-    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null, ordem !== undefined && ordem !== '' ? Number(ordem) : null]);
+    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || null, modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null, ordem !== undefined && ordem !== '' ? Number(ordem) : null]);
 
     if (Array.isArray(modulos)) {
       await salvarModulos(req.params.id, modulos);
@@ -797,7 +925,7 @@ router.post('/:id/avaliacoes/:av_id/responder', async (req, res) => {
     // Compara a resposta do colaborador com o gabarito de cada tipo de questão.
     // Tipos sem gabarito objetivo (aberta, prática, leitura, checklist) não geram nota.
     function acertou(p, resposta) {
-      if (av.tipo === 'multipla_escolha' || av.tipo === 'verdadeiro_falso') {
+      if (av.tipo === 'multipla_escolha' || av.tipo === 'unica_escolha' || av.tipo === 'verdadeiro_falso') {
         return String(resposta) === String(p.resposta_correta);
       }
       if (av.tipo === 'multiplas_respostas') {
@@ -816,10 +944,17 @@ router.post('/:id/avaliacoes/:av_id/responder', async (req, res) => {
       return null;
     }
 
-    if (['multipla_escolha', 'verdadeiro_falso', 'multiplas_respostas', 'associacao', 'lacunas'].includes(av.tipo)) {
-      let acertos = 0;
-      perguntas.forEach((p, i) => { if (acertou(p, respostas[i])) acertos++; });
-      nota = perguntas.length > 0 ? Math.round((acertos / perguntas.length) * 10 * 10) / 10 : 0;
+    if (['multipla_escolha', 'unica_escolha', 'verdadeiro_falso', 'multiplas_respostas', 'associacao', 'lacunas'].includes(av.tipo)) {
+      // p.pontos é o peso da pergunta dentro da avaliação (ex.: prova com
+      // questões de valores diferentes) — ausente/antigo vale 1, pra não
+      // quebrar avaliações já respondidas antes desse campo existir.
+      let pontosObtidos = 0, pontosTotais = 0;
+      perguntas.forEach((p, i) => {
+        const peso = p.pontos || 1;
+        pontosTotais += peso;
+        if (acertou(p, respostas[i])) pontosObtidos += peso;
+      });
+      nota = pontosTotais > 0 ? Math.round((pontosObtidos / pontosTotais) * 10 * 10) / 10 : 0;
     }
 
     const id = uuidv4();
@@ -829,6 +964,101 @@ router.post('/:id/avaliacoes/:av_id/responder', async (req, res) => {
     `, [id, req.params.av_id, req.params.id, req.usuario.id, JSON.stringify(respostas), nota]);
 
     res.json({ nota, mensagem: 'Avaliação registrada' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── TENTATIVA DE PROVA EM SEQUÊNCIA (várias sub-avaliações, 1 resultado só) ─
+// Ao terminar a ÚLTIMA sub-avaliação de uma sequência, o frontend soma os
+// pontos das partes objetivas e chama aqui — a nota fica com status
+// "pendente" até o responsável liberar (ver PUT .../liberar). A pessoa NÃO
+// vê a nota antes disso.
+router.post('/:id/tentativa', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const { pontos_obtidos, pontos_totais, perguntas_abertas } = req.body;
+    const id = uuidv4();
+    await run(`INSERT INTO avaliacao_tentativas (id, treinamento_id, colaborador_id, pontos_obtidos, pontos_totais, perguntas_abertas, status, concluido_em, liberado_em, liberado_por)
+      VALUES ($1,$2,$3,$4,$5,$6,'pendente',TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),NULL,NULL)
+      ON CONFLICT(treinamento_id, colaborador_id) DO UPDATE SET
+        pontos_obtidos=excluded.pontos_obtidos, pontos_totais=excluded.pontos_totais,
+        perguntas_abertas=excluded.perguntas_abertas, status='pendente',
+        concluido_em=excluded.concluido_em, liberado_em=NULL, liberado_por=NULL
+    `, [id, req.params.id, req.usuario.id, pontos_obtidos || 0, pontos_totais || 0, perguntas_abertas || 0]);
+    res.status(201).json({ mensagem: 'Prova enviada, aguardando liberação do responsável.' });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Checa se EU (usuário logado) já tenho uma tentativa registrada pra essa
+// prova, e se já foi liberada — usado antes de deixar a pessoa refazer.
+router.get('/:id/tentativa', async (req, res) => {
+  try {
+    if (!(await trDaEmpresa(req.params.id, req.usuario.empresa_id))) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    const tentativa = await get('SELECT * FROM avaliacao_tentativas WHERE treinamento_id=$1 AND colaborador_id=$2', [req.params.id, req.usuario.id]);
+    res.json(tentativa || null);
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Detalhe de uma tentativa pra revisão manual: traz cada pergunta
+// dissertativa/prática da sequência, com a resposta certa cadastrada e a
+// resposta que o colaborador realmente deu — pra o responsável comparar
+// (e opcionalmente usar a IA em /ia/comparar-resposta) antes de liberar.
+router.get('/tentativas/:tentativa_id/detalhe', async (req, res) => {
+  try {
+    const tentativa = await get(`
+      SELECT at.* FROM avaliacao_tentativas at
+      JOIN treinamentos t ON t.id = at.treinamento_id
+      WHERE at.id=$1 AND t.empresa_id=$2
+    `, [req.params.tentativa_id, req.usuario.empresa_id]);
+    if (!tentativa) return res.status(404).json({ erro: 'Tentativa não encontrada' });
+
+    const avaliacoes = await all(
+      `SELECT * FROM treinamento_avaliacoes WHERE treinamento_id=$1 ORDER BY ordem`,
+      [tentativa.treinamento_id]
+    );
+    const dissertativas = [];
+    for (const av of avaliacoes) {
+      if (['multipla_escolha', 'unica_escolha', 'verdadeiro_falso', 'multiplas_respostas', 'associacao', 'lacunas'].includes(av.tipo)) continue;
+      const resp = await get(
+        'SELECT respostas FROM treinamento_respostas WHERE avaliacao_id=$1 AND colaborador_id=$2',
+        [av.id, tentativa.colaborador_id]
+      );
+      if (!resp) continue;
+      const perguntas = JSON.parse(av.perguntas);
+      const respostas = JSON.parse(resp.respostas);
+      perguntas.forEach((p, i) => {
+        dissertativas.push({
+          avaliacao_titulo: av.titulo,
+          pergunta: p.texto,
+          resposta_esperada: p.resposta_correta || p.criterio || null,
+          resposta_dada: respostas[i] || '',
+          pontos_max: p.pontos || 1,
+        });
+      });
+    }
+    res.json({ tentativa, dissertativas });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Libera a nota pra pessoa ver. Pode receber pontos das dissertativas
+// corrigidas manualmente (após revisão, com ou sem apoio da IA) — eles se
+// somam aos pontos das objetivas já calculados automaticamente.
+router.put('/tentativas/:tentativa_id/liberar', async (req, res) => {
+  try {
+    const tentativa = await get(`
+      SELECT at.* FROM avaliacao_tentativas at
+      JOIN treinamentos t ON t.id = at.treinamento_id
+      WHERE at.id=$1 AND t.empresa_id=$2
+    `, [req.params.tentativa_id, req.usuario.empresa_id]);
+    if (!tentativa) return res.status(404).json({ erro: 'Tentativa não encontrada' });
+
+    const { pontos_dissertativas_obtidos, pontos_dissertativas_totais } = req.body;
+    const novoObtidos = tentativa.pontos_obtidos + (pontos_dissertativas_obtidos || 0);
+    const novoTotais = tentativa.pontos_totais + (pontos_dissertativas_totais || 0);
+
+    await run(`UPDATE avaliacao_tentativas SET status='liberado', pontos_obtidos=$1, pontos_totais=$2,
+      liberado_em=TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'), liberado_por=$3
+      WHERE id=$4`, [novoObtidos, novoTotais, req.usuario.id, req.params.tentativa_id]);
+    res.json({ mensagem: 'Liberado' });
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -879,6 +1109,14 @@ router.delete('/:id', async (req, res) => {
   try {
     const tr = await get('SELECT titulo FROM treinamentos WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
     if (!tr) return res.status(404).json({ erro: 'Treinamento não encontrado' });
+    // Trilha já com progresso (algo concluído ou tempo registrado) não pode
+    // ser removida — por segurança, pra não perder histórico de treinamento
+    // real por engano (ex.: desmarcar checkbox na tela de editar trilhas).
+    const temProgresso = await get(
+      `SELECT 1 FROM treinamento_pops WHERE treinamento_id=$1 AND (concluido = 1 OR COALESCE(tempo_realizado,0) > 0) LIMIT 1`,
+      [req.params.id]
+    );
+    if (temProgresso) return res.status(400).json({ erro: 'Essa trilha já tem progresso registrado e não pode ser removida.' });
     await run(
       `UPDATE treinamentos SET excluido_em=NOW(), excluido_por=$1, excluido_por_nome=$2 WHERE id=$3 AND empresa_id=$4`,
       [req.usuario.id, req.usuario.nome, req.params.id, req.usuario.empresa_id]
@@ -903,7 +1141,7 @@ router.get('/:id/pdf', async (req, res) => {
     // diferentes no PDF — precisa ordenar pelo módulo primeiro.
     const pops = await all(`
       SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.tempo_estimado, tp.tempo_realizado,
-             tp.topicos, tp.data_prevista, tp.modulo_id, tp.descricao,
+             tp.topicos, tp.data_prevista, tp.data_inicio_real, tp.data_fim_real, tp.modulo_id, tp.descricao,
              COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo ${camposPop ? ', ' + camposPop : ''}, u.nome AS instrutor_nome
       FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
       LEFT JOIN usuarios u ON u.id = tp.instrutor_id
@@ -957,6 +1195,7 @@ router.get('/trilhas-principais/:id/pdf', async (req, res) => {
     for (const t of trilhasBase) {
       const pops = await all(`
         SELECT tp.id, tp.pop_id, tp.concluido, tp.ordem, tp.modulo_id, tp.data_prevista,
+               tp.tempo_realizado, tp.data_inicio_real, tp.data_fim_real,
                COALESCE(p.titulo, tp.titulo) AS titulo, p.codigo, u.nome AS instrutor_nome
         FROM treinamento_pops tp LEFT JOIN pops p ON p.id = tp.pop_id
         LEFT JOIN usuarios u ON u.id = tp.instrutor_id
@@ -1093,12 +1332,18 @@ async function sincronizarModeloComClones(modeloId, empresaId) {
       const moduloCloneId = p.modulo_id ? mapaModuloModeloParaClone.get(p.modulo_id) : null;
       const proximaOrdemPop = (maxOrdemPopPorModulo.get(moduloCloneId) ?? -1) + 1;
       maxOrdemPopPorModulo.set(moduloCloneId, proximaOrdemPop);
-      await run(`INSERT INTO treinamento_pops
+      // ON CONFLICT: dois saves quase simultâneos do MESMO modelo (duplo clique
+      // em "Salvar", ou duas abas editando) disparam essa sincronização em
+      // paralelo — sem isso, o segundo INSERT do mesmo pop_id pro mesmo clone
+      // batia na constraint única (treinamento_id, pop_id) e derrubava a
+      // requisição inteira com 500 (bug real, 25/08/2026, trilha Call Center).
+      const resultado = await run(`INSERT INTO treinamento_pops
         (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT (treinamento_id, pop_id) DO NOTHING
       `, [uuidv4(), clone.id, p.pop_id, proximaOrdemPop, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
           p.data_prevista, moduloCloneId, p.titulo, p.descricao]);
-      itensAdicionados++;
+      if (resultado.changes > 0) itensAdicionados++;
     }
 
     // 3) Avaliações novas do modelo (de módulo ou de tópico) que faltam no clone.

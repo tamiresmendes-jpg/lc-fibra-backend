@@ -170,12 +170,9 @@ async function exigirVerMetaComercial(req, res, next) {
     const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
     if (await podeVerTudoNaMeta(u, 'comercial')) return next();
 
-    // Vendedor com cadastro vinculado (meta_comercial_vendedor.usuario_id) SEMPRE
-    // trava na própria linha — mesmo que o grupo dele tenha a permissão de módulo
-    // "visualizar" (essa permissão só abre a TELA, não dá direito de ver os colegas,
-    // supervisor ou os cortes gerais da Análise).
-    const proprio = await vendedorVinculado(req).catch(() => null);
-    if (proprio) { req.somenteVendedorId = proprio.id; return next(); }
+    // Vendedor com cadastro vinculado NÃO entra aqui: a aba Meta (com salário do
+    // supervisor e bônus de todo mundo) fica restrita a quem tem a permissão de
+    // módulo — só a aba Análise é liberada pro vínculo próprio (exigirVerAnaliseMetaComercial).
 
     let ownPerms = null;
     try {
@@ -189,6 +186,22 @@ async function exigirVerMetaComercial(req, res, next) {
   } catch {
     return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); // fail-closed
   }
+}
+
+// Aba Análise: além de quem já vê a Meta inteira, o vendedor com cadastro vinculado
+// (meta_comercial_vendedor.usuario_id) também entra, mas travado na PRÓPRIA linha.
+async function exigirVerAnaliseMetaComercial(req, res, next) {
+  const u = req.usuario;
+  if (u.perfil === 'admin') return next();
+  try {
+    const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+    if (await podeVerTudoNaMeta(u, 'comercial')) return next();
+  } catch { /* segue pra próxima checagem */ }
+
+  const proprio = await vendedorVinculado(req).catch(() => null);
+  if (proprio) { req.somenteVendedorId = proprio.id; return next(); }
+
+  return exigirVerMetaComercial(req, res, next);
 }
 
 function mesRefDe(query) {
@@ -424,7 +437,7 @@ router.put('/meta-comercial/vendedor/:id/mes/:mes', autenticar, async (req, res)
 
 // ─── Layout dos painéis da Análise (ordem e tamanho) ─────────────────────────
 // Ajuste é de admin/gestor e vale para todo mundo que abre a tela — não é por usuário.
-router.get('/meta-comercial/analise/layout', autenticar, exigirVerMetaComercial, async (req, res) => {
+router.get('/meta-comercial/analise/layout', autenticar, exigirVerAnaliseMetaComercial, async (req, res) => {
   try {
     const row = await get('SELECT layout FROM meta_comercial_analise_layout WHERE empresa_id=$1', [req.usuario.empresa_id]);
     res.json({ layout: row?.layout || null });
@@ -449,7 +462,13 @@ router.put('/meta-comercial/analise/layout', autenticar, async (req, res) => {
 // Mesma ideia, pro layout da Análise da Meta de Cobrança.
 router.get('/meta-cobranca/analise/layout', autenticar, async (req, res) => {
   try {
-    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    // PODE_EDITAR_META_COMERCIAL (admin/gestor/líder) é genérico demais aqui: um líder de
+    // OUTRO setor (Call Center, Comercial, Financeiro) caía nele e via a Análise de Cobrança
+    // inteira. Só quem tem visão de tudo NESSE setor (podeVerTudoNaMeta) pode ver.
+    const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+    if (req.usuario.perfil !== 'admin' && !(await podeVerTudoNaMeta(req.usuario, 'cobranca'))) {
+      return res.status(403).json({ erro: 'Sem permissão' });
+    }
     const row = await get('SELECT layout FROM meta_cobranca_analise_layout WHERE empresa_id=$1', [req.usuario.empresa_id]);
     res.json({ layout: row?.layout || null });
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -656,7 +675,13 @@ router.get('/meta-cobranca/pdf', autenticar, async (req, res) => {
 
 router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
   try {
-    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    // Mesmo motivo do /analise/layout: líder de outro setor não pode entrar aqui.
+    // A Análise é visão AGREGADA (motivos, cidade, equipamentos) — não existe uma versão
+    // "só a própria linha" pra um cobrador comum, então quem não vê tudo não vê nada.
+    const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+    if (req.usuario.perfil !== 'admin' && !(await podeVerTudoNaMeta(req.usuario, 'cobranca'))) {
+      return res.status(403).json({ erro: 'Você não tem permissão para ver a Análise de Cobrança.' });
+    }
     const mesRef = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
@@ -666,11 +691,41 @@ router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async (req, res) => {
-  try {
+// Dias úteis do mês pra dividir a meta mensal em meta diária — comercial trabalha
+// de segunda a sábado, só domingo não conta (conferido com o setor em 20/08/2026).
+function diasUteisDoMes(ano, mes) {
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  let uteis = 0;
+  for (let d = 1; d <= ultimoDia; d++) {
+    if (new Date(ano, mes - 1, d).getDay() !== 0) uteis++;
+  }
+  return uteis;
+}
+// Quantos desses dias úteis já passaram até `ateDia` (inclusive) — usado pra saber
+// quanto da meta já deveria ter sido vendido "no ritmo" até hoje.
+function diasUteisAte(ano, mes, ateDia) {
+  let uteis = 0;
+  for (let d = 1; d <= ateDia; d++) {
+    if (new Date(ano, mes - 1, d).getDay() !== 0) uteis++;
+  }
+  return uteis;
+}
+
+// Monta os dados da aba "Acompanhamento e Análise" — extraído à parte pra ser
+// reaproveitado tanto pelo endpoint JSON (tela) quanto pelo PDF (mesmo filtro,
+// mesmos números, nunca diverge entre os dois).
+async function montarAnaliseMetaComercial(req) {
+  {
     const eid = req.usuario.empresa_id;
     const mes = /^\d{4}-\d{2}$/.test(req.query.mes || '') ? req.query.mes : new Date().toISOString().slice(0, 7);
     const setor = (req.query.setor || 'todos').toLowerCase(); // todos | comercial | pap | escritorio
+    // Data específica (opcional): "AAAA-MM-DD" dentro do mês selecionado. Quando
+    // vem preenchida, todos os cortes passam a olhar só aquele dia, não o mês inteiro.
+    const [anoMes, mesMes] = mes.split('-').map(Number);
+    const ultimoDiaMesRef = new Date(anoMes, mesMes, 0).getDate();
+    const dataParam = (req.query.data || '').match(/^\d{4}-\d{2}-\d{2}$/) ? req.query.data : null;
+    const data = (dataParam && dataParam.slice(0, 7) === mes && Number(dataParam.slice(8, 10)) <= ultimoDiaMesRef)
+      ? dataParam : null;
 
     const base = await montarMetaComercial(eid, mes, req.usuario.perfil);
     // 1) Filtra pelo setor. A lista de vendedores do seletor sai daqui, então em
@@ -690,11 +745,16 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
     let itens = vendedorId ? base_.filter(i => String(i.id) === vendedorId) : base_;
     const emails = itens.map(i => (i.hubsoft_email || '').toLowerCase()).filter(Boolean);
 
-    // Vendas do mês (excluindo as canceladas dentro do próprio mês — mesma regra do painel)
-    const filtroVendas = `empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
+    // Vendas do mês inteiro, ou só do dia escolhido (excluindo canceladas no mesmo
+    // recorte — mesma regra do painel, só muda a janela de tempo).
+    const filtroVendas = data
+      ? `empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM-DD')=$2
+         AND NOT (data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM-DD')=$2)
+         AND LOWER(vendedor_email) = ANY($3)`
+      : `empresa_id=$1 AND TO_CHAR(data_venda,'YYYY-MM')=$2
        AND NOT (data_cancelamento IS NOT NULL AND TO_CHAR(data_cancelamento,'YYYY-MM')=$2)
        AND LOWER(vendedor_email) = ANY($3)`;
-    const p = [eid, mes, emails.length ? emails : ['']];
+    const p = [eid, data || mes, emails.length ? emails : ['']];
 
     const [porDia, porServico, porTipo, porVencimento, porStatus, porGenero, receita] = await Promise.all([
       all(`SELECT TO_CHAR(data_venda,'DD') AS dia, COUNT(*)::int AS qtd
@@ -729,7 +789,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
            GROUP BY 1 ORDER BY 2 DESC`, p),
       all(`SELECT bairro, COUNT(*)::int AS qtd FROM meta_comercial_venda_sync
            WHERE ${filtroVendas} AND bairro IS NOT NULL AND bairro <> ''
-           GROUP BY 1 ORDER BY 2 DESC LIMIT 15`, p),
+           GROUP BY 1 ORDER BY 2 DESC`, p),
       all(`SELECT INITCAP(origem) AS origem, COUNT(*)::int AS qtd FROM meta_comercial_venda_sync
            WHERE ${filtroVendas} AND origem IS NOT NULL AND origem <> ''
            GROUP BY 1 ORDER BY 2 DESC`, p),
@@ -744,47 +804,108 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       get(`SELECT COALESCE(SUM(valor_pacotes),0)::float AS total, COUNT(*) FILTER (WHERE valor_pacotes > 0)::int AS vendas_com_pacote
            FROM meta_comercial_venda_sync WHERE ${filtroVendas}`, p),
       all(`SELECT nome_cliente, nome_servico, cidade, bairro, origem, servico_status, pacotes,
-                  TO_CHAR(data_venda,'DD/MM/YYYY') AS data_venda,
+                  vendedor_nome, TO_CHAR(data_venda,'DD/MM/YYYY') AS data_venda,
                   CASE WHEN LOWER(COALESCE(tipo_pessoa,''))='pj' THEN 'PJ' ELSE 'PF' END AS tipo
            FROM meta_comercial_venda_sync WHERE ${filtroVendas}
-           ORDER BY data_venda, nome_cliente LIMIT 400`, p),
+           ORDER BY vendedor_nome, data_venda, nome_cliente LIMIT 1000`, p),
     ]);
 
+    // Meta por dia: divide a meta do mês pelos dias úteis (seg-sáb) — não é uma meta
+    // configurável à parte, é a mesma meta mensal fatiada pra dar um ritmo diário.
+    const [anoNum, mesNum] = mes.split('-').map(Number);
+    const uteisNoMes = diasUteisDoMes(anoNum, mesNum);
+    const ehDomingoSelecionado = data ? new Date(anoNum, mesNum - 1, Number(data.slice(8, 10))).getDay() === 0 : false;
+
+    // Quando um dia específico foi escolhido, vendas/saldo por vendedor não podem
+    // vir do total do MÊS (itens, calculado por montarMetaComercial) — precisam ser
+    // recontados só para aquele dia, com a mesma regra de cancelamento (mesmo recorte).
+    let vendasPorEmail = null, cancelPorEmail = null;
+    if (data) {
+      const [vendasDia, cancelDia] = await Promise.all([
+        all(`SELECT LOWER(vendedor_email) AS email, COUNT(*)::int AS qtd
+             FROM meta_comercial_venda_sync WHERE ${filtroVendas} GROUP BY 1`, p),
+        all(`SELECT LOWER(vendedor_email) AS email, COUNT(*)::int AS qtd
+             FROM meta_comercial_venda_sync
+             WHERE empresa_id=$1 AND TO_CHAR(data_cancelamento,'YYYY-MM-DD')=$2
+               AND LOWER(vendedor_email) = ANY($3)
+             GROUP BY 1`, p),
+      ]);
+      vendasPorEmail = Object.fromEntries(vendasDia.map(v => [v.email, v.qtd]));
+      cancelPorEmail = Object.fromEntries(cancelDia.map(v => [v.email, v.qtd]));
+    }
+
     // Por filial (meta x vendas x %) e por cidade — a partir dos itens já calculados
+    // (ou recontados por dia, quando uma data específica foi escolhida)
     const porFilial = [];
     const cidades = {};
+    let totalCancel = 0;
     for (const i of itens) {
-      const metaI = i.conta_meta ? (i.meta || 0) : 0;
+      const email = (i.hubsoft_email || '').toLowerCase();
+      const metaMensal = i.conta_meta ? (i.meta || 0) : 0;
+      const metaI = data ? (ehDomingoSelecionado ? 0 : Math.round((uteisNoMes ? metaMensal / uteisNoMes : 0) * 100) / 100) : metaMensal;
+      const qtdVendas = data ? (vendasPorEmail[email] || 0) : (i.qtd_vendas || 0);
+      const cancelamento = data ? (cancelPorEmail[email] || 0) : (i.cancelamento || 0);
+      const saldo = data ? (qtdVendas - cancelamento) : (i.saldo || 0);
+      totalCancel += cancelamento;
       porFilial.push({
+        id: i.id, discord_id: i.discord_id || null,
         filial: i.filial || 'Sem filial',
         vendedor: i.nome,
         meta: metaI,
-        vendas: i.qtd_vendas || 0,
-        saldo: i.saldo || 0,
-        pct: metaI > 0 ? Math.round(((i.saldo || 0) / metaI) * 100) : null,
+        vendas: qtdVendas,
+        saldo,
+        pct: metaI > 0 ? Math.round((saldo / metaI) * 100) : null,
       });
       const cid = cidadeDaFilial(i.filial);
-      cidades[cid] = (cidades[cid] || 0) + (i.qtd_vendas || 0);
+      cidades[cid] = (cidades[cid] || 0) + qtdVendas;
     }
     porFilial.sort((a, b) => b.vendas - a.vendas);
 
-    const totalMeta = itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0);
-    const totalVendas = itens.reduce((s, i) => s + (i.qtd_vendas || 0), 0);
-    const totalCancel = itens.reduce((s, i) => s + (i.cancelamento || 0), 0);
-    const totalSaldo = itens.reduce((s, i) => s + (i.saldo || 0), 0);
+    const totalMeta = porFilial.reduce((s, i) => s + (i.meta || 0), 0);
+    const totalVendas = porFilial.reduce((s, i) => s + (i.vendas || 0), 0);
+    const totalSaldo = porFilial.reduce((s, i) => s + (i.saldo || 0), 0);
+    const totalBateram = porFilial.filter(i => i.meta > 0 && i.saldo >= i.meta).length;
 
-    res.json({
-      mes, setor,
+    const metaPorDiaUtil = uteisNoMes ? (itens.reduce((s, i) => s + (i.conta_meta ? (i.meta || 0) : 0), 0)) / uteisNoMes : 0;
+    const hojeSP = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    const [anoHoje, mesHoje, diaHoje] = hojeSP.split('-').map(Number);
+    const diaReferencia = (anoHoje === anoNum && mesHoje === mesNum) ? diaHoje
+      : (anoHoje > anoNum || (anoHoje === anoNum && mesHoje > mesNum)) ? new Date(anoNum, mesNum, 0).getDate() : 0;
+    const uteisAteHoje = diaReferencia ? diasUteisAte(anoNum, mesNum, diaReferencia) : 0;
+    const metaEsperadaAteHoje = Math.round(metaPorDiaUtil * uteisAteHoje);
+    // Preenche TODOS os dias do mês (não só os que tiveram venda), senão o
+    // acumulado pula dias vazios e o gráfico/ritmo fica errado.
+    const ultimoDiaMes = new Date(anoNum, mesNum, 0).getDate();
+    const qtdPorDia = Object.fromEntries(porDia.map(d => [parseInt(d.dia, 10), d.qtd]));
+    let acumulado = 0;
+    const porDiaComMeta = [];
+    for (let dia = 1; dia <= ultimoDiaMes; dia++) {
+      const qtd = qtdPorDia[dia] || 0;
+      acumulado += qtd;
+      const domingo = new Date(anoNum, mesNum - 1, dia).getDay() === 0;
+      porDiaComMeta.push({
+        dia, qtd, acumulado,
+        meta_dia: domingo ? 0 : Math.round(metaPorDiaUtil * 100) / 100,
+        meta_acumulada: Math.round(metaPorDiaUtil * diasUteisAte(anoNum, mesNum, dia)),
+      });
+    }
+
+    return {
+      mes, setor, data: data || null,
       resumo: {
         meta: totalMeta,
         vendas: totalVendas,
         cancelamentos: totalCancel,
         saldo: totalSaldo,
+        gap: totalSaldo - totalMeta,
         pct: totalMeta > 0 ? Math.round((totalSaldo / totalMeta) * 100) : null,
-        bateram: itens.filter(i => i.bate_meta).length,
+        bateram: totalBateram,
         vendedores: itens.length,
         receita: Math.round((receita?.total || 0) * 100) / 100,
         ticket_medio: Math.round((receita?.ticket || 0) * 100) / 100,
+        meta_por_dia: Math.round(metaPorDiaUtil * 100) / 100,
+        meta_esperada_ate_hoje: (!data && diaReferencia) ? metaEsperadaAteHoje : null,
+        dias_uteis_mes: uteisNoMes,
       },
       por_filial: porFilial,
       // Cidade real do serviço quando o relatório já preencheu; senão, a unidade do vendedor
@@ -804,7 +925,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       // Só os do setor selecionado, para o seletor não misturar times
       vendedores: doSetor.map(i => ({ id: i.id, nome: i.nome, filial: i.filial })),
       vendedor_selecionado: vendedorId || null,
-      por_dia: porDia.map(d => ({ dia: parseInt(d.dia, 10), qtd: d.qtd })),
+      por_dia: porDiaComMeta,
       por_servico: porServico,
       por_tipo: porTipo,
       por_genero: porGenero,
@@ -813,8 +934,193 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
         'SELECT ultima_sync FROM meta_comercial_sync_status WHERE empresa_id=$1', [eid]
       ))?.ultima_sync || null,
       por_status: porStatus,
+    };
+  }
+}
+
+router.get('/meta-comercial/analise', autenticar, exigirVerAnaliseMetaComercial, async (req, res) => {
+  try {
+    res.json(await montarAnaliseMetaComercial(req));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// PDF da aba Análise — respeita os MESMOS filtros da tela (mês, dia, setor, vendedor).
+// Quando um vendedor específico está selecionado, o nome dele entra no título e no
+// nome do arquivo, pra dar pra imprimir/enviar a análise individual de cada um.
+router.get('/meta-comercial/analise/pdf', autenticar, exigirVerAnaliseMetaComercial, async (req, res) => {
+  try {
+    const dados = await montarAnaliseMetaComercial(req);
+    const { gerarPDFMetaComercialAnalise } = require('../utils/gerarPDFMetaComercialAnalise');
+    const pdfBuffer = await gerarPDFMetaComercialAnalise(dados);
+    const vendedorSel = dados.vendedor_selecionado
+      ? (dados.vendedores || []).find(v => String(v.id) === String(dados.vendedor_selecionado))
+      : null;
+    const sufixo = vendedorSel ? `-${vendedorSel.nome}` : (dados.data ? `-${dados.data}` : '');
+    const nomeArquivo = `Analise-Meta-Comercial-${dados.mes}${sufixo}.pdf`
+      .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9.\-]/g, '_');
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', `attachment; filename="${nomeArquivo}"`);
+    res.send(pdfBuffer);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Texto da DM individual — editável por admin/gestor/líder (tela "Editar mensagem"
+// na Análise). Placeholders: {nome} {periodo} {meta} {vendas} {saldo} {pct} {filial}
+const MSG_DISCORD_PADRAO = {
+  titulo: '📊 Sua análise de vendas',
+  corpo: 'Período: **{periodo}**',
+};
+function aplicarPlaceholders(texto, valores) {
+  return String(texto || '').replace(/\{(\w+)\}/g, (m, chave) => (valores[chave] ?? m));
+}
+
+router.get('/meta-comercial/mensagem-discord', autenticar, exigirVerMetaComercial, async (req, res) => {
+  try {
+    const row = await get('SELECT titulo, corpo FROM meta_comercial_mensagem_discord WHERE empresa_id=$1', [req.usuario.empresa_id]);
+    res.json({
+      titulo: row?.titulo ?? MSG_DISCORD_PADRAO.titulo,
+      corpo: row?.corpo ?? MSG_DISCORD_PADRAO.corpo,
+      padrao: MSG_DISCORD_PADRAO,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/meta-comercial/mensagem-discord', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { titulo, corpo } = req.body;
+    await run(
+      `INSERT INTO meta_comercial_mensagem_discord (empresa_id, titulo, corpo, atualizado_em)
+       VALUES ($1,$2,$3,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET titulo=EXCLUDED.titulo, corpo=EXCLUDED.corpo, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, titulo || null, corpo || null]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Manda a análise individual (meta x vendas x saldo do período filtrado) pra cada
+// vendedor do setor filtrado, por DM no Discord — não é o webhook de canal usado nos
+// avisos de cancelamento, é o bot (src/utils/discordBot.js) abrindo conversa privada.
+// Extraída à parte pra ser reaproveitada pelo botão manual (rota abaixo) e pelo
+// disparo automático (jobs/metaComercialSupervisorAuto.js) — cada vendedor recebe
+// SÓ a própria análise (com a lista dos próprios clientes), nunca a do setor inteiro.
+async function enviarAnalisesIndividuaisVendedores(empresa_id, query = {}, somenteVendedorId = null) {
+  const usuarioFake = { empresa_id, perfil: 'admin' };
+  const dados = await montarAnaliseMetaComercial({ usuario: usuarioFake, somenteVendedorId, query });
+  const { enviarDM } = require('../utils/discordBot');
+  const { gerarPDFMetaComercialAnalise } = require('../utils/gerarPDFMetaComercialAnalise');
+  const [anoP, mesP] = dados.mes.split('-').map(Number);
+  const periodo = dados.data
+    ? new Date(anoP, mesP - 1, Number(dados.data.slice(8, 10))).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : new Date(anoP, mesP - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const msgConfig = await get('SELECT titulo, corpo FROM meta_comercial_mensagem_discord WHERE empresa_id=$1', [empresa_id]);
+  const titulo = msgConfig?.titulo ?? MSG_DISCORD_PADRAO.titulo;
+  const corpo = msgConfig?.corpo ?? MSG_DISCORD_PADRAO.corpo;
+
+  const alvos = (dados.por_filial || []).filter(v => v.id);
+  const enviados = [], semDiscord = [], erros = [];
+  for (const v of alvos) {
+    if (!v.discord_id) { semDiscord.push(v.vendedor); continue; }
+    try {
+      // O PDF anexado é a análise SÓ daquele vendedor (com os próprios clientes) —
+      // reconta tudo com o filtro travado nele, não usa o total do setor.
+      const dadosVendedor = await montarAnaliseMetaComercial({
+        usuario: usuarioFake, somenteVendedorId,
+        query: { ...query, vendedor: String(v.id) },
+      });
+      const pdfBuffer = await gerarPDFMetaComercialAnalise(dadosVendedor);
+      const nomeArquivo = `Analise-Meta-Comercial-${dados.mes}-${v.vendedor}.pdf`
+        .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9.\-]/g, '_');
+
+      const placeholders = {
+        nome: v.vendedor, periodo, meta: v.meta > 0 ? v.meta : '—', vendas: v.vendas,
+        saldo: v.saldo, pct: v.pct == null ? '—' : `${v.pct}%`, filial: v.filial || '—',
+      };
+      await enviarDM(v.discord_id, {
+        embed: {
+          title: aplicarPlaceholders(titulo, placeholders),
+          description: aplicarPlaceholders(corpo, placeholders),
+          fields: [
+            { name: 'Meta', value: v.meta > 0 ? String(v.meta) : '—', inline: true },
+            { name: 'Vendas', value: String(v.vendas), inline: true },
+            { name: 'Saldo', value: String(v.saldo), inline: true },
+            { name: '% da meta', value: v.pct == null ? '—' : `${v.pct}%`, inline: true },
+            { name: 'Filial', value: v.filial || '—', inline: true },
+          ],
+          color: (v.pct ?? 0) >= 100 ? 0x16a34a : 0xf59e0b,
+          footer: { text: 'Kronos — Meta do Comercial' },
+          timestamp: new Date().toISOString(),
+        },
+        arquivo: { nome: nomeArquivo, buffer: pdfBuffer, mime: 'application/pdf' },
+      });
+      enviados.push(v.vendedor);
+    } catch (e) { erros.push({ vendedor: v.vendedor, erro: e.message }); }
+  }
+  return { enviados, sem_discord: semDiscord, erros };
+}
+
+router.post('/meta-comercial/analise/enviar-discord', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const resultado = await enviarAnalisesIndividuaisVendedores(req.usuario.empresa_id, req.query, req.somenteVendedorId);
+    res.json(resultado);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Manda o relatório GERAL (todos os vendedores, sem filtro) pro supervisor — mesma
+// DM com texto (resumo do setor) + PDF completo anexado, igual em espírito ao envio
+// individual acima, só que sem travar em ninguém. Extraída à parte pra ser reaproveitada
+// pelo botão manual (rota abaixo) e pelo disparo automático (jobs/metaComercialSupervisorAuto.js).
+async function enviarRelatorioGeralSupervisor(empresa_id, query = {}) {
+  const supervisor = await get(`SELECT nome, discord_id FROM meta_comercial_supervisor WHERE empresa_id=$1`, [empresa_id]);
+  if (!supervisor?.discord_id) throw new Error('Supervisor sem ID do Discord cadastrado.');
+
+  const reqGeral = { usuario: { empresa_id, perfil: 'admin' }, query: { ...query, vendedor: undefined, setor: query.setor || 'todos' } };
+  const dados = await montarAnaliseMetaComercial(reqGeral);
+  const { enviarDM } = require('../utils/discordBot');
+  const { gerarPDFMetaComercialAnalise } = require('../utils/gerarPDFMetaComercialAnalise');
+  // Relatório do supervisor é o GERAL do setor — não leva nome de cliente nenhum,
+  // só quem está com a própria análise individual recebe a lista de clientes.
+  const pdfBuffer = await gerarPDFMetaComercialAnalise(dados, { semClientes: true });
+  const [anoP, mesP] = dados.mes.split('-').map(Number);
+  const periodo = dados.data
+    ? new Date(anoP, mesP - 1, Number(dados.data.slice(8, 10))).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit', year: 'numeric' })
+    : new Date(anoP, mesP - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+  const r = dados.resumo || {};
+  const nomeArquivo = `Analise-Meta-Comercial-Geral-${dados.mes}`
+    .normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^a-zA-Z0-9.\-]/g, '_') + '.pdf';
+
+  await enviarDM(supervisor.discord_id, {
+    content: `📊 **Relatório geral do Comercial — ${periodo}**\n`
+      + `Meta: **${r.meta ?? '—'}** | Vendas: **${r.vendas ?? '—'}** | Cancelamentos: **${r.cancelamentos ?? '—'}** | Saldo: **${r.saldo ?? '—'}**\n`
+      + `% da meta: **${r.pct == null ? '—' : `${r.pct}%`}** | Vendedores que bateram: **${r.bateram ?? '—'} de ${r.vendedores ?? '—'}**`,
+    embed: {
+      title: '📊 Relatório geral do Comercial',
+      description: `Período: **${periodo}**`,
+      fields: [
+        { name: 'Meta', value: String(r.meta ?? '—'), inline: true },
+        { name: 'Vendas', value: String(r.vendas ?? '—'), inline: true },
+        { name: 'Cancelamentos', value: String(r.cancelamentos ?? '—'), inline: true },
+        { name: 'Saldo', value: String(r.saldo ?? '—'), inline: true },
+        { name: '% da meta', value: r.pct == null ? '—' : `${r.pct}%`, inline: true },
+        { name: 'Bateram a meta', value: `${r.bateram ?? '—'} de ${r.vendedores ?? '—'}`, inline: true },
+      ],
+      color: (r.pct ?? 0) >= 100 ? 0x16a34a : 0xf59e0b,
+      footer: { text: 'Kronos — Meta do Comercial' },
+      timestamp: new Date().toISOString(),
+    },
+    arquivo: { nome: nomeArquivo, buffer: pdfBuffer, mime: 'application/pdf' },
+  });
+  return supervisor.nome || 'supervisor';
+}
+
+router.post('/meta-comercial/analise/enviar-discord-supervisor', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const enviado_para = await enviarRelatorioGeralSupervisor(req.usuario.empresa_id, req.query);
+    res.json({ ok: true, enviado_para });
+  } catch (e) { res.status(e.message.includes('Discord') ? 400 : 500).json({ erro: e.message }); }
 });
 
 // Histórico dos PDFs já gerados (acompanhamento)
@@ -831,7 +1137,7 @@ router.get('/meta-comercial/pdfs', autenticar, exigirVerMetaComercial, async (re
 router.post('/meta-comercial/vendedor', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    let { nome, filial, hubsoft_email, hubsoft_id_vendedor, usuario_id, meta, bonus_meta, bonus_gap, conta_meta, ordem } = req.body;
+    let { nome, filial, hubsoft_email, hubsoft_id_vendedor, usuario_id, meta, bonus_meta, bonus_gap, conta_meta, ordem, discord_id } = req.body;
     // Vínculo com usuário real do Kronos: confirma que pertence à mesma empresa e usa o nome de lá.
     if (usuario_id) {
       const u = await get(`SELECT id, nome FROM usuarios WHERE id=$1 AND empresa_id=$2`, [usuario_id, req.usuario.empresa_id]);
@@ -841,10 +1147,10 @@ router.post('/meta-comercial/vendedor', autenticar, async (req, res) => {
     if (!nome) return res.status(400).json({ erro: 'Nome obrigatório' });
     const id = uuidv4();
     await run(
-      `INSERT INTO meta_comercial_vendedor (id,empresa_id,usuario_id,nome,filial,hubsoft_email,hubsoft_id_vendedor,meta,bonus_meta,bonus_gap,conta_meta,ordem)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)`,
+      `INSERT INTO meta_comercial_vendedor (id,empresa_id,usuario_id,nome,filial,hubsoft_email,hubsoft_id_vendedor,meta,bonus_meta,bonus_gap,conta_meta,ordem,discord_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)`,
       [id, req.usuario.empresa_id, usuario_id || null, nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null,
-       meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ordem || 0]
+       meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ordem || 0, (discord_id || '').replace(/\D/g, '') || null]
     );
     res.status(201).json(await get(`SELECT * FROM meta_comercial_vendedor WHERE id=$1`, [id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -886,12 +1192,13 @@ router.delete('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
 router.put('/meta-comercial/supervisor', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const { nome, faixa1_pct, faixa1_valor, faixa2_pct, faixa2_valor, salario } = req.body;
+    const { nome, faixa1_pct, faixa1_valor, faixa2_pct, faixa2_valor, salario, discord_id } = req.body;
     await run(
-      `INSERT INTO meta_comercial_supervisor (empresa_id,nome,faixa1_pct,faixa1_valor,faixa2_pct,faixa2_valor,salario)
-       VALUES ($1,$2,$3,$4,$5,$6,$7)
-       ON CONFLICT (empresa_id) DO UPDATE SET nome=$2,faixa1_pct=$3,faixa1_valor=$4,faixa2_pct=$5,faixa2_valor=$6,salario=$7`,
-      [req.usuario.empresa_id, nome || null, faixa1_pct ?? 15, faixa1_valor || 0, faixa2_pct ?? 25, faixa2_valor || 0, salario || 0]
+      `INSERT INTO meta_comercial_supervisor (empresa_id,nome,faixa1_pct,faixa1_valor,faixa2_pct,faixa2_valor,salario,discord_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (empresa_id) DO UPDATE SET nome=$2,faixa1_pct=$3,faixa1_valor=$4,faixa2_pct=$5,faixa2_valor=$6,salario=$7,discord_id=$8`,
+      [req.usuario.empresa_id, nome || null, faixa1_pct ?? 15, faixa1_valor || 0, faixa2_pct ?? 25, faixa2_valor || 0, salario || 0,
+       (discord_id || '').replace(/\D/g, '') || null]
     );
     res.json(await get(`SELECT * FROM meta_comercial_supervisor WHERE empresa_id=$1`, [req.usuario.empresa_id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -920,4 +1227,6 @@ router.post('/meta-comercial/sync-agora', autenticar, async (req, res) => {
 
 // Exposto para os jobs (aviso de meta batida, rankings automáticos)
 router.montarMetaComercial = montarMetaComercial;
+router.enviarRelatorioGeralSupervisor = enviarRelatorioGeralSupervisor;
+router.enviarAnalisesIndividuaisVendedores = enviarAnalisesIndividuaisVendedores;
 module.exports = router;

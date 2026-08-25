@@ -872,11 +872,19 @@ async function calcularFiscal(dataInicio, dataFim) {
     }
 
     try {
+      let totalComodato = 0;
+      let primeiroDebug = true;
       await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
         for (const n of lote) {
-          // Separa por CNPJ do remetente: se está na lista de filiais, é comodato
-          const cnpjRemetente = String(n.emitente?.cnpj || n.remetente?.cnpj || n.cnpj_emitente || n.cnpj_remetente || n.cnpj || '').replace(/\D/g, '');
-          const isComodato = cnpjsComodato.has(cnpjRemetente);
+          // DEBUG: na primeira nota com "comodato" no número ou que pareça ser comodato, logar TUDO
+          if (primeiroDebug && (n.numero_nf === 129635 || String(n.natureza_operacao || '').toUpperCase().includes('COMODATO'))) {
+            console.log(`[DEBUG-NFe55-CAMPOS] Nota ${n.numero_nf}:`, JSON.stringify(n, null, 2).slice(0, 500));
+            primeiroDebug = false;
+          }
+
+          // Detecta comodato pela natureza_operacao (mais confiável que CNPJ)
+          const isComodato = String(n.natureza_operacao || '').toUpperCase().includes('COMODATO');
+          if (isComodato) totalComodato++;
           const tipoNota = isComodato ? 'nfe55_comodato' : 'nfe55';
 
           tipos[tipoNota].total++;
@@ -884,23 +892,17 @@ async function calcularFiscal(dataInicio, dataFim) {
           tipos[tipoNota].valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
           somaImpostos(tipos[tipoNota], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
 
-          // Para comodato, guarda também a filial (remetente) com CNPJ
+          // Para comodato, guarda a filial (remetente) com CNPJ
           if (isComodato) {
-            // Tenta vários caminhos possíveis para nome e CNPJ da filial
-            const filial =
-              n.emitente?.nome ||
-              n.remetente?.nome ||
-              n.nome_emitente ||
-              n.filial ||
-              n.nome_filial ||
-              'Sem filial';
-
+            const cnpjRemetente = String(n.emitente?.cnpj || n.remetente?.cnpj || n.cnpj_emitente || n.cnpj_remetente || n.cnpj || '').replace(/\D/g, '');
+            const filial = n.emitente?.nome || n.remetente?.nome || n.nome_emitente || n.filial || n.nome_filial || 'Sem filial';
             const chaveFilial = `${filial}|${cnpjRemetente}`;
             if (!tipos[tipoNota].filiais) tipos[tipoNota].filiais = {};
             tipos[tipoNota].filiais[chaveFilial] = (tipos[tipoNota].filiais[chaveFilial] || 0) + 1;
           }
         }
       });
+      console.log(`[DEBUG-NFe55-RESUMO] Empresa ${emp.nome}: ${tipos.nfe55.total} Vendas E-books | ${tipos.nfe55_comodato.total} Comodato`);
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
 
     for (const chave of Object.keys(geral)) {
@@ -952,7 +954,7 @@ async function processarCacheFiscal(id, dataInicio, dataFim) {
 }
 
 // GET /api/erp/fiscal — OTIMIZADO: SÓ LEÊ CACHE (nunca consulta ERP por clique do usuário)
-// Evita sobrecarga do ERP. Dados são atualizados via cron de madrugada (syncAnaliseFiscal.js).
+// Se forcar=1: dispara reprocessamento assíncrono (tipo opcional filtra apenas um tipo)
 router.get('/fiscal', async (req, res) => {
   try {
     const hoje = new Date();
@@ -960,6 +962,22 @@ router.get('/fiscal', async (req, res) => {
     const dataInicio = req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1));
     const dataFim = req.query.data_fim || iso(hoje);
     const empresaId = req.usuario.empresa_id;
+    const forcar = req.query.forcar === '1';
+    const tipo = req.query.tipo; // Tipo específico para reprocessar (nfe55, nfe55_comodato, etc)
+
+    // Se forcar=1: dispara sincronização em background
+    if (forcar) {
+      const id = uuidv4();
+      await db.run(
+        `INSERT INTO erp_fiscal_cache (id, empresa_id, data_inicio, data_fim, status) VALUES ($1,$2,$3,$4,'processando')
+         ON CONFLICT (empresa_id, data_inicio, data_fim) DO UPDATE SET status='processando', updated_at=NOW()`,
+        [id, empresaId, dataInicio, dataFim]
+      );
+
+      // Dispara em background (não bloqueia a resposta)
+      processarCacheFiscal(id, dataInicio, dataFim).catch(e => console.error('Erro sync fiscal:', e.message));
+      return res.json({ status: 'processando', mensagem: 'Reprocessando dados...' });
+    }
 
     const cache = await db.get(
       `SELECT * FROM erp_fiscal_cache WHERE empresa_id=$1 AND data_inicio=$2 AND data_fim=$3`,
@@ -1861,6 +1879,7 @@ router.get('/servicos-nfse', async (req, res) => {
     res.json({ servicos: linha.dados ? JSON.parse(linha.dados) : [], atualizadoEm: linha.updated_at });
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
+
 
 module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;

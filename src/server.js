@@ -126,6 +126,7 @@ conectar()
     require('./jobs/metaSemanal').iniciar();
     require('./jobs/syncMetaComercial').iniciar();
     require('./jobs/syncMetaCobranca').iniciar();
+    require('./jobs/metaComercialSupervisorAuto').iniciar();
     require('./jobs/rankingMensal').iniciar();
   })
   .catch((err) => {

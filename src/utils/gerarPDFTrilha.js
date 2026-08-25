@@ -52,6 +52,7 @@ function montarHtmlTrilha(dados, completo = false) {
             ${!p.pop_id ? `<span><b>Sem POP</b> — tópico só em texto</span>` : ''}
             ${p.instrutor_nome ? `<span><b>Instrutor:</b> ${esc(p.instrutor_nome)}</span>` : ''}
             ${p.data_prevista ? `<span><b>Previsto:</b> ${fmtDataHora(p.data_prevista)}</span>` : ''}
+            ${p.data_fim_real ? `<span><b>Concluído em:</b> ${fmtDataHora(p.data_fim_real)}</span>` : ''}
             ${p.tempo_realizado ? `<span><b>Tempo realizado:</b> ${p.tempo_realizado} min</span>` : ''}
           </div>
           ${p.descricao ? `<p class="pop-descricao">${esc(p.descricao)}</p>` : ''}
@@ -74,6 +75,7 @@ function montarHtmlTrilha(dados, completo = false) {
             ${m.colaborador_nome ? `<span class="modulo-colab">Treinando: ${esc(m.colaborador_nome)}</span>` : ''}
             ${m.instrutor_nome ? `<span class="modulo-colab">Instrutor: ${esc(m.instrutor_nome)}</span>` : ''}
             ${m.data_prevista ? `<span class="modulo-colab">Previsto: ${fmtDataHora(m.data_prevista)}</span>` : ''}
+            ${m.data_fim_real ? `<span class="modulo-colab">Concluído em: ${fmtDataHora(m.data_fim_real)}</span>` : ''}
           </span>
         </div>` : ''}
         ${linhasPop || '<p class="vazio">Nenhum sub-módulo cadastrado.</p>'}
@@ -139,15 +141,22 @@ function montarHtmlTrilhaPrincipal(principal, trilhas) {
   const blocosTrilha = trilhas.map((t, ti) => {
     const modulos = t.modulos?.length ? t.modulos : [{ nome: null, pops: t.popsSemModulo || t.pops || [] }];
     const blocosModulo = modulos.map((m, mi) => {
-      const linhas = (m.pops || []).map((p, pi) => `
+      const linhas = (m.pops || []).map((p, pi) => {
+        const extraTopico = [
+          p.instrutor_nome ? `Instrutor: ${esc(p.instrutor_nome)}` : '',
+          p.data_fim_real ? `Concluído em: ${fmtDataHora(p.data_fim_real)}` : (p.data_prevista ? `Previsto: ${fmtDataHora(p.data_prevista)}` : ''),
+          p.tempo_realizado ? `Tempo realizado: ${p.tempo_realizado} min` : '',
+        ].filter(Boolean).join(' · ');
+        return `
         <li><span class="tp-num">${mi + 1}.${pi + 1}</span> ${esc(p.titulo)}${p.concluido ? ' <span class="tp-ok">✓</span>' : ''}
-          ${p.instrutor_nome || p.data_prevista ? `<span class="tp-extra">${p.instrutor_nome ? `Instrutor: ${esc(p.instrutor_nome)}` : ''}${p.instrutor_nome && p.data_prevista ? ' · ' : ''}${p.data_prevista ? fmtDataHora(p.data_prevista) : ''}</span>` : ''}
+          ${extraTopico ? `<span class="tp-extra">${extraTopico}</span>` : ''}
         </li>
-      `).join('');
+      `;
+      }).join('');
       const extrasModulo = [
         m.colaborador_nome ? `Treinando: ${esc(m.colaborador_nome)}` : '',
         m.instrutor_nome ? `Instrutor: ${esc(m.instrutor_nome)}` : '',
-        m.data_prevista ? `Previsto: ${fmtDataHora(m.data_prevista)}` : '',
+        m.data_fim_real ? `Concluído em: ${fmtDataHora(m.data_fim_real)}` : (m.data_prevista ? `Previsto: ${fmtDataHora(m.data_prevista)}` : ''),
       ].filter(Boolean).join(' · ');
       return `
         <div class="modulo-mini">

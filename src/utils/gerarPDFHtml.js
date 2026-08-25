@@ -157,14 +157,50 @@ async function getBrowser() {
   return _browserPromise;
 }
 
+const PX_POR_MM = 96 / 25.4;
+
 async function htmlParaPdf(html, browser, opcoes = {}) {
   const b = browser || await getBrowser();
   const page = await b.newPage();
   try {
-    await page.setContent(html, { waitUntil: 'load' });
+    // Pra caber em UMA folha (opcoes.umaPagina): mede a altura real do conteúdo
+    // e encolhe via CSS transform (não pelo parâmetro "scale" do page.pdf() —
+    // testado e ele NÃO reduz nada quando combinado com preferCSSPageSize, o
+    // PDF saía sempre em 2 páginas do mesmo jeito). A orientação vem do @page
+    // injetado (preferCSSPageSize), nunca do parâmetro landscape do page.pdf —
+    // as duas coisas juntas (setViewport + landscape) giravam a página errado.
+    let htmlFinal = html;
+    const usarCssPageSize = !!opcoes.umaPagina;
+    if (opcoes.umaPagina) {
+      const larguraMm = opcoes.landscape ? 297 : 210;
+      const alturaMm = opcoes.landscape ? 210 : 297;
+      const margemBaixoMm = 16;
+      const larguraPx = Math.round(larguraMm * PX_POR_MM);
+      const alturaDisponivelPx = Math.round((alturaMm - margemBaixoMm) * PX_POR_MM);
+      const comPageRule = html.replace('<style>', `<style>@page{size:${larguraMm}mm ${alturaMm}mm}`);
+      await page.setViewport({ width: larguraPx, height: 4000, deviceScaleFactor: 1 });
+      await page.setContent(comPageRule, { waitUntil: 'load' });
+      const alturaConteudoPx = await page.evaluate(() => document.body.scrollHeight);
+      const fator = Math.max(0.35, Math.min(1, alturaDisponivelPx / alturaConteudoPx));
+      if (fator < 1) {
+        htmlFinal = comPageRule.replace(
+          /<body([^>]*)>([\s\S]*)<\/body>/,
+          (_, attrs, corpo) => `<body${attrs} style="height:${Math.ceil(alturaConteudoPx * fator)}px;overflow:hidden">
+            <div style="transform:scale(${fator});transform-origin:top left;width:${(100 / fator).toFixed(4)}%">${corpo}</div>
+          </body>`
+        );
+      } else {
+        htmlFinal = comPageRule;
+      }
+      await page.setViewport({ width: larguraPx, height: Math.round(alturaMm * PX_POR_MM), deviceScaleFactor: 1 });
+      await page.setContent(htmlFinal, { waitUntil: 'load' });
+    } else {
+      await page.setContent(html, { waitUntil: 'load' });
+    }
     const agora = new Date().toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
     const pdf = await page.pdf({
-      format: 'A4', landscape: !!opcoes.landscape, printBackground: true,
+      ...(usarCssPageSize ? { preferCSSPageSize: true } : { format: 'A4', landscape: !!opcoes.landscape }),
+      printBackground: true,
       displayHeaderFooter: true,
       headerTemplate: '<span></span>',
       footerTemplate: `<div style="font-size:8px;color:#94a3b8;width:100%;padding:0 12mm;display:flex;justify-content:space-between;align-items:center;font-family:Arial,sans-serif;">
