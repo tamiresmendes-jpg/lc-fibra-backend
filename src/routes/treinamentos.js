@@ -12,14 +12,27 @@ const SELECT_TREINAMENTO = `
     r.nome AS responsavel_nome,
     c.nome AS colaborador_nome,
     tpz.nome AS trilha_principal_nome,
-    (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS total_pops,
-    (SELECT COUNT(*) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id AND tp.concluido = 1) AS pops_concluidos,
-    (SELECT COALESCE(SUM(tp.tempo_estimado),0) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS tempo_total_estimado,
-    (SELECT COALESCE(SUM(tp.tempo_realizado),0) FROM treinamento_pops tp WHERE tp.treinamento_id = t.id) AS tempo_total_realizado,
+    -- Exclui pops de módulos soft-removidos (removido_em) da contagem — senão
+    -- um treinamento que acumulou módulo duplicado numa sincronização antiga
+    -- (nunca apagado, só marcado removido pra preservar histórico) infla o
+    -- total de POPs e derruba o % de conclusão sem motivo aparente na tela.
+    (SELECT COUNT(*) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS total_pops,
+    (SELECT COUNT(*) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND tp.concluido = 1 AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS pops_concluidos,
+    (SELECT COALESCE(SUM(tp.tempo_estimado),0) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS tempo_total_estimado,
+    (SELECT COALESCE(SUM(tp.tempo_realizado),0) FROM treinamento_pops tp
+      WHERE tp.treinamento_id = t.id AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS tempo_total_realizado,
     (SELECT COUNT(*) FROM treinamento_pops tp
       JOIN pops p ON p.id = tp.pop_id
       WHERE tp.treinamento_id = t.id AND tp.versao_pop IS NOT NULL AND tp.versao_pop != p.versao
-    ) AS alertas_reciclagem
+        AND (tp.modulo_id IS NULL OR EXISTS (SELECT 1 FROM treinamento_modulos tm WHERE tm.id = tp.modulo_id AND tm.removido_em IS NULL)))
+      AS alertas_reciclagem
   FROM treinamentos t
   LEFT JOIN departamentos d ON d.id = t.departamento_id
   LEFT JOIN usuarios r ON r.id = t.responsavel_id
@@ -239,6 +252,9 @@ router.get('/trilhas-catalogo', async (req, res) => {
     const linhas = await all(`
       SELECT tc.*, r.nome AS responsavel_nome,
         (SELECT COUNT(*) FROM trilha_catalogo_modulos tcm WHERE tcm.trilha_catalogo_id = tc.id) AS total_modulos,
+        (SELECT COUNT(*) FROM trilha_catalogo_topicos tct
+          JOIN trilha_catalogo_modulos tcm ON tcm.id = tct.trilha_catalogo_modulo_id
+          WHERE tcm.trilha_catalogo_id = tc.id) AS total_topicos,
         (SELECT COUNT(*) FROM treinamento_trilhas tt WHERE tt.trilha_catalogo_id = tc.id) AS total_treinamentos
       FROM trilhas_catalogo tc
       LEFT JOIN usuarios r ON r.id = tc.responsavel_id
@@ -261,7 +277,14 @@ router.get('/trilhas-catalogo/:id', async (req, res) => {
     if (!trilha) return res.status(404).json({ erro: 'Trilha não encontrada' });
     const modulos = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1 ORDER BY ordem', [req.params.id]);
     for (const mod of modulos) {
-      mod.topicos = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [mod.id]);
+      // Tópico com pop_id não guarda título/código próprios — vêm do POP de
+      // verdade (evita duplicar/desatualizar o texto quando o POP é editado).
+      mod.topicos = await all(`
+        SELECT tct.*, COALESCE(tct.titulo, p.titulo) AS titulo, p.codigo
+        FROM trilha_catalogo_topicos tct
+        LEFT JOIN pops p ON p.id = tct.pop_id
+        WHERE tct.trilha_catalogo_modulo_id=$1 ORDER BY tct.ordem
+      `, [mod.id]);
       mod.avaliacoes = await all(`
         SELECT tca.*, tct.pop_id FROM trilha_catalogo_avaliacoes tca
         LEFT JOIN trilha_catalogo_topicos tct ON tct.id = tca.trilha_catalogo_topico_id
@@ -418,9 +441,14 @@ router.delete('/treinamentos-principais/:id/trilhas/:trilha_catalogo_id', async 
 async function propagarTopicosEAvaliacoes(moduloCatalogoId, treinamentoId, moduloId, instrutorId) {
   const topicosCatalogo = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
   for (const [i, topico] of topicosCatalogo.entries()) {
+    // ON CONFLICT: dois saves quase simultâneos da mesma Trilha (duplo clique,
+    // duas abas) podem disparar essa propagação em paralelo pro mesmo colaborador
+    // — sem isso, o segundo INSERT batia na constraint única (treinamento_id,
+    // pop_id) e derrubava a requisição inteira com 500 (bug real, 25/08/2026).
     await run(`INSERT INTO treinamento_pops
       (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, modulo_id, titulo, descricao, trilha_catalogo_topico_id)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+      ON CONFLICT (treinamento_id, pop_id) DO NOTHING
     `, [uuidv4(), treinamentoId, topico.pop_id, i, instrutorId || null, topico.tempo_estimado, topico.topicos, topico.versao_pop, moduloId, topico.titulo, topico.descricao, topico.id]);
   }
   const avaliacoesCatalogo = await all('SELECT * FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
@@ -1093,12 +1121,18 @@ async function sincronizarModeloComClones(modeloId, empresaId) {
       const moduloCloneId = p.modulo_id ? mapaModuloModeloParaClone.get(p.modulo_id) : null;
       const proximaOrdemPop = (maxOrdemPopPorModulo.get(moduloCloneId) ?? -1) + 1;
       maxOrdemPopPorModulo.set(moduloCloneId, proximaOrdemPop);
-      await run(`INSERT INTO treinamento_pops
+      // ON CONFLICT: dois saves quase simultâneos do MESMO modelo (duplo clique
+      // em "Salvar", ou duas abas editando) disparam essa sincronização em
+      // paralelo — sem isso, o segundo INSERT do mesmo pop_id pro mesmo clone
+      // batia na constraint única (treinamento_id, pop_id) e derrubava a
+      // requisição inteira com 500 (bug real, 25/08/2026, trilha Call Center).
+      const resultado = await run(`INSERT INTO treinamento_pops
         (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+        ON CONFLICT (treinamento_id, pop_id) DO NOTHING
       `, [uuidv4(), clone.id, p.pop_id, proximaOrdemPop, p.instrutor_id, p.tempo_estimado, p.topicos, p.versao_pop,
           p.data_prevista, moduloCloneId, p.titulo, p.descricao]);
-      itensAdicionados++;
+      if (resultado.changes > 0) itensAdicionados++;
     }
 
     // 3) Avaliações novas do modelo (de módulo ou de tópico) que faltam no clone.

@@ -814,10 +814,7 @@ function notaVazia() {
 async function calcularFiscal(dataInicio, dataFim) {
   const empresas = await db.all('SELECT id, nome, cnpj FROM empresas');
   const porEmpresa = [];
-  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia(), nfe55_comodato: notaVazia() };
-
-  // CNPJs das filiais de comodato (LC Virtual Net - raiz 08407644)
-  const cnpjsComodato = new Set(['08407644000100', '08407644000291', '08407644000372', '08407644000453', '08407644000534', '08407644000615', '08407644000704', '08407644000887', '08407644000968'].map(c => c.replace(/\D/g, '')));
+  const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
 
   for (const emp of empresas) {
     const documento = (emp.cnpj || '').replace(/\D/g, '');
@@ -826,7 +823,7 @@ async function calcularFiscal(dataInicio, dataFim) {
       continue;
     }
 
-    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia(), nfe55_comodato: notaVazia() };
+    const tipos = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
     let erroEmpresa = null;
 
     // Processa cada página assim que chega e descarta — nunca guarda a lista
@@ -874,31 +871,10 @@ async function calcularFiscal(dataInicio, dataFim) {
     try {
       await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
         for (const n of lote) {
-          // Separa por CNPJ do remetente: se está na lista de filiais, é comodato
-          const cnpjRemetente = String(n.emitente?.cnpj || n.remetente?.cnpj || n.cnpj_emitente || n.cnpj_remetente || n.cnpj || '').replace(/\D/g, '');
-          const isComodato = cnpjsComodato.has(cnpjRemetente);
-          const tipoNota = isComodato ? 'nfe55_comodato' : 'nfe55';
-
-          tipos[tipoNota].total++;
-          if (String(n.status || '').includes('cancel')) tipos[tipoNota].cancelada++;
-          tipos[tipoNota].valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
-          somaImpostos(tipos[tipoNota], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
-
-          // Para comodato, guarda também a filial (remetente) com CNPJ
-          if (isComodato) {
-            // Tenta vários caminhos possíveis para nome e CNPJ da filial
-            const filial =
-              n.emitente?.nome ||
-              n.remetente?.nome ||
-              n.nome_emitente ||
-              n.filial ||
-              n.nome_filial ||
-              'Sem filial';
-
-            const chaveFilial = `${filial}|${cnpjRemetente}`;
-            if (!tipos[tipoNota].filiais) tipos[tipoNota].filiais = {};
-            tipos[tipoNota].filiais[chaveFilial] = (tipos[tipoNota].filiais[chaveFilial] || 0) + 1;
-          }
+          tipos.nfe55.total++;
+          if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
+          tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
+          somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
         }
       });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
