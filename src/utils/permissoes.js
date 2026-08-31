@@ -195,6 +195,7 @@ const MAPA_PERMISSAO = [
   ['/api/chatmix',                     'atendimentos.painel'],
   ['/api/rhid',                        'ponto.painel'],
   // ERP HubSoft — opt-in (ver MODULOS_OPT_IN abaixo)
+  ['/api/erp/rota-tecnica',            'erp.rota-tecnica'],
   ['/api/erp',                         'erp.consultar'],
 ];
 
