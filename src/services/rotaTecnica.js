@@ -22,6 +22,19 @@ function extrairTecnicos(o) {
   return Array.isArray(o.tecnicos) ? o.tecnicos.map(t => t.name || t.display).filter(Boolean) : [];
 }
 
+// O texto de "status" do HubSoft já carrega o estado real da O.S. (é o mesmo
+// texto/cor que aparece no painel: roxo=pendente, vermelho=reservada — técnico
+// a caminho, azul=em execução, verde=finalizado). Não existe um campo separado
+// com a HORA em que a O.S. foi reservada — só dá pra saber que está reservada,
+// não desde quando (checado ao vivo em 01/09/2026).
+function classificarEstado(o) {
+  const s = (o.status || '').toLowerCase();
+  if (s.includes('finalizad')) return 'concluida';
+  if (s.includes('execução') || s.includes('execucao')) return 'executando';
+  if (s.includes('reservad')) return 'reservada';
+  return 'pendente';
+}
+
 function extrairPonto(o) {
   const e = o.dados_endereco_instalacao || {};
   const c = e.coordenadas || {};
@@ -32,8 +45,11 @@ function extrairPonto(o) {
     numero: o.numero,
     tipo: o.tipo_ordem_servico?.descricao || 'Sem tipo',
     status: o.status || null,
+    estado: classificarEstado(o),
+    nome_cliente: o.dados_cliente?.nome_razaosocial || null,
     hora_programada: o.data_inicio_programado || null,
     hora_executada: o.data_inicio_executado || null,
+    hora_termino: o.data_termino_executado || null,
     concluida: !!o.data_termino_executado,
     endereco: e.endereco || null,
     numero_endereco: e.numero || null,
