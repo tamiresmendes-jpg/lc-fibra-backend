@@ -46,10 +46,10 @@ async function resolverNomesCompletos(itens, chaveNome = 'nome') {
 
 const REGEX_RECEBIMENTO = /cobran[çc]a recebida pelo cobrador\s+(.+?)\s+no valor de\s+r\$\s*([\d.,]+)/i;
 
-// Únicos dois cobradores reais. Comparação por "começa com" o nome curto que o
+// Cobradores reais. Comparação por "começa com" o nome curto que o
 // HubSoft devolve no usuario_fechamento (ex.: "Ronald Rego"), tolerando o nome
 // completo também (ex.: "Ronald Rego De Sousa").
-const COBRADORES = ['jhonaldo', 'ronald rego'];
+const COBRADORES = ['jhonaldo', 'ronald rego', 'marcos vinicius'];
 function ehCobrador(nome) {
   const n = (nome || '').trim().toLowerCase();
   return COBRADORES.some(c => n.startsWith(c));
@@ -152,8 +152,8 @@ async function calcularBase({ dataInicio, dataFim }) {
   return { porColaborador, motivos, totalOs: ordens.length, recebimentosDetalhados };
 }
 
-// Monta a Meta de Cobrança de um mês: só Jhonaldo e Ronald Rego (únicos
-// cobradores reais), com total, remoções, pagamentos, efetividade e bônus.
+// Monta a Meta de Cobrança de um mês: só os cobradores reais (lista
+// COBRADORES), com total, remoções, pagamentos, efetividade e bônus.
 async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 }) {
   const { porColaborador, recebimentosDetalhados } = await calcularBase({ dataInicio, dataFim });
 
