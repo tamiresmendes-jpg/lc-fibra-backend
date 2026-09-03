@@ -44,6 +44,7 @@ function extrairPonto(o) {
     id_ordem_servico: o.id_ordem_servico,
     numero: o.numero,
     tipo: o.tipo_ordem_servico?.descricao || 'Sem tipo',
+    tecnicos: extrairTecnicos(o),
     status: o.status || null,
     estado: classificarEstado(o),
     nome_cliente: o.dados_cliente?.nome_razaosocial || null,
