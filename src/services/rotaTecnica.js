@@ -67,6 +67,22 @@ function listarTecnicosDoDia(ordens) {
   return ordenarPtBr([...nomes]);
 }
 
+function cidadeDe(o) { return o.dados_endereco_instalacao?.cidade || null; }
+
+function listarCidadesDoDia(ordens) {
+  const cidades = new Set();
+  for (const o of ordens) { const c = cidadeDe(o); if (c) cidades.add(c); }
+  return ordenarPtBr([...cidades]);
+}
+
+// Filtra as O.S. do dia por cidade — usado só pra achar QUAIS técnicos
+// trabalharam ali; depois de escolhido o técnico, a rota mostra o dia
+// inteiro dele (não corta pontos fora da cidade no meio da sequência).
+function filtrarPorCidade(ordens, cidade) {
+  if (!cidade) return ordens;
+  return ordens.filter(o => cidadeDe(o) === cidade);
+}
+
 // Haversine — distância em km entre dois pontos {lat,lng}.
 function haversineKm(a, b) {
   const R = 6371;
@@ -141,4 +157,7 @@ function montarRotaTecnico(ordens, tecnico) {
   };
 }
 
-module.exports = { buscarOSDoDia, listarTecnicosDoDia, montarRotaTecnico, haversineKm };
+module.exports = {
+  buscarOSDoDia, listarTecnicosDoDia, montarRotaTecnico, haversineKm,
+  listarCidadesDoDia, filtrarPorCidade,
+};

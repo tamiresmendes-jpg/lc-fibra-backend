@@ -7,7 +7,7 @@
 // (utils/permissoes.js) — módulo opt-in por já começar com 'erp.'.
 const express = require('express');
 const { autenticar } = require('../middleware/auth');
-const { buscarOSDoDia, listarTecnicosDoDia, montarRotaTecnico } = require('../services/rotaTecnica');
+const { buscarOSDoDia, listarTecnicosDoDia, montarRotaTecnico, listarCidadesDoDia, filtrarPorCidade } = require('../services/rotaTecnica');
 const { buscarHistoricoReservaOS } = require('../services/hubsoft');
 
 const router = express.Router();
@@ -22,7 +22,9 @@ router.get('/tecnicos', async (req, res) => {
   try {
     const data = dataOuHoje(req.query.data);
     const ordens = await buscarOSDoDia({ data });
-    res.json({ data, tecnicos: listarTecnicosDoDia(ordens) });
+    const cidades = listarCidadesDoDia(ordens);
+    const tecnicos = listarTecnicosDoDia(filtrarPorCidade(ordens, req.query.cidade));
+    res.json({ data, tecnicos, cidades });
   } catch (e) {
     console.error('Erro /erp/rota-tecnica/tecnicos:', e.message);
     res.status(500).json({ erro: 'Erro ao buscar técnicos do dia: ' + e.message.replace('HUBSOFT', 'HubSoft') });
