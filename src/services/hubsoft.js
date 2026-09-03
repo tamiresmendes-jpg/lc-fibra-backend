@@ -193,7 +193,7 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
 // 01-03/09/2026). Cada reserva tem `ordem_servico_reserva_historico`: uma
 // linha por evento (reservada / execução iniciada / desreservada), com hora
 // exata, técnico e coordenadas — é o que a tela "Reserva(s)" do painel mostra.
-async function buscarHistoricoReservaOS(idOrdemServico, empresaId) {
+async function buscarDetalheOSPainel(idOrdemServico, empresaId) {
   const chamar = async (token) => fetch(`${baseUrl()}/api/v1/ordem_servico/${idOrdemServico}`, {
     headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
   });
@@ -201,19 +201,34 @@ async function buscarHistoricoReservaOS(idOrdemServico, empresaId) {
   if (resp.status === 401) { _tokenPainel = null; _expiraPainel = 0; resp = await chamar(await getTokenPainel(empresaId)); }
   const j = await resp.json().catch(() => null);
   if (!j || j.status !== 'success') {
-    throw new Error(`HubSoft O.S.: ${j?.msg || 'falha ao buscar histórico de reserva'}`);
+    throw new Error(`HubSoft O.S.: ${j?.msg || 'falha ao buscar dados da O.S.'}`);
   }
-  const reservas = j.ordem_servico?.reservas || [];
+  return j.ordem_servico || {};
+}
+
+async function buscarHistoricoReservaOS(idOrdemServico, empresaId) {
+  const os = await buscarDetalheOSPainel(idOrdemServico, empresaId);
+  const reservas = os.reservas || [];
   // Achata o histórico de todas as reservas (pode ter sido reservada mais de
   // uma vez, se desreservou e reservou de novo) numa única linha do tempo.
-  const eventos = reservas
+  return reservas
     .flatMap(r => r.ordem_servico_reserva_historico || [])
     // created_at_timestamp já vem em epoch ms — evita ambiguidade de fuso do
     // created_at (esse vem em UTC, "T...Z", diferente do resto do sistema).
     .map(h => ({ descricao: h.descricao, em: h.created_at_timestamp, tecnico: h.usuario?.name || null }))
     .filter(e => e.em)
     .sort((a, b) => a.em - b.em);
-  return eventos;
+}
+
+// Hora da reserva mais recente (a última tentativa, mesmo que já tenha sido
+// desreservada depois) — usado na coluna "Reserva" da tabela, mais leve que
+// buscar o histórico inteiro pra cada linha.
+async function buscarUltimaReserva(idOrdemServico, empresaId) {
+  const os = await buscarDetalheOSPainel(idOrdemServico, empresaId);
+  const reservas = os.reservas || [];
+  if (!reservas.length) return null;
+  const ultima = reservas[reservas.length - 1];
+  return { em: ultima.data_reserva_timestamp || null, tecnico: ultima.usuario?.name || null };
 }
 
 // Relatório de Contas a Receber do painel — é o que a usuária confere como
@@ -1118,7 +1133,7 @@ async function listarMeiosPagamento() {
 
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
-  relatorioServicos, autenticarPainel, statusContrato, buscarHistoricoReservaOS,
+  relatorioServicos, autenticarPainel, statusContrato, buscarHistoricoReservaOS, buscarUltimaReserva,
   listarFaturas, varrerFaturas, varrerContaReceber, parseValorBR, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
   buscarRecebimentos,

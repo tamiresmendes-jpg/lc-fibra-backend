@@ -8,7 +8,7 @@
 const express = require('express');
 const { autenticar } = require('../middleware/auth');
 const { buscarOSDoDia, listarTecnicosDoDia, montarRotaTecnico, listarCidadesDoDia, filtrarPorCidade } = require('../services/rotaTecnica');
-const { buscarHistoricoReservaOS } = require('../services/hubsoft');
+const { buscarHistoricoReservaOS, buscarUltimaReserva } = require('../services/hubsoft');
 
 const router = express.Router();
 router.use(autenticar);
@@ -37,6 +37,15 @@ router.get('/', async (req, res) => {
     if (!req.query.tecnico) return res.status(400).json({ erro: 'Informe o técnico.' });
     const ordens = await buscarOSDoDia({ data });
     const rota = montarRotaTecnico(ordens, req.query.tecnico);
+    // Hora da última reserva de cada O.S. (coluna "Reserva") — exige login de
+    // painel, 1 chamada por O.S.; roda em paralelo pra não somar o tempo de
+    // cada uma. Erro numa O.S. isolada não derruba a tela inteira.
+    await Promise.all(rota.pontos.map(async (p) => {
+      try {
+        const r = await buscarUltimaReserva(p.id_ordem_servico, req.usuario.empresa_id);
+        p.hora_reserva = r?.em || null;
+      } catch { p.hora_reserva = null; }
+    }));
     res.json({ data, ...rota });
   } catch (e) {
     console.error('Erro /erp/rota-tecnica:', e.message);
