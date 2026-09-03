@@ -24,13 +24,19 @@ function extrairTecnicos(o) {
 
 // O texto de "status" do HubSoft já carrega o estado real da O.S. (é o mesmo
 // texto/cor que aparece no painel: roxo=pendente, vermelho=reservada — técnico
-// a caminho, azul=em execução, verde=finalizado). Não existe um campo separado
-// com a HORA em que a O.S. foi reservada — só dá pra saber que está reservada,
-// não desde quando (checado ao vivo em 01/09/2026).
+// a caminho, azul=em execução, verde=finalizado, laranja=aguardando agendamento.
+// Não existe um campo separado com a HORA em que a O.S. foi reservada — só dá
+// pra saber que está reservada, não desde quando (checado ao vivo em 01/09/2026).
+//
+// "Aguardando Agendamento" é um estado PRÓPRIO do HubSoft (cor própria no
+// painel, #FF9800), diferente de "Pendente" comum — acontece quando o técnico
+// desreserva a O.S. com um motivo (ex.: cliente pediu pra reagendar). O motivo
+// completo fica no histórico de reserva (expandir a linha), não só o status.
 function classificarEstado(o) {
   const s = (o.status || '').toLowerCase();
   if (s.includes('finalizad')) return 'concluida';
   if (s.includes('execução') || s.includes('execucao')) return 'executando';
+  if (s.includes('aguardando agendamento') || s.includes('aguardando_agendamento')) return 'aguardando_agendamento';
   if (s.includes('reservad')) return 'reservada';
   return 'pendente';
 }
