@@ -188,6 +188,34 @@ async function relatorioServicos(empresaId, { dataInicio, dataFim, pagina = 1, l
   return { registros: pg.data || [], pagina: pg.current_page || pagina, paginas: pg.last_page || 1, total: pg.total || 0 };
 }
 
+// Detalhe completo de UMA O.S. pelo painel — só aqui existe o histórico real de
+// reserva/execução (a API de integração e o GraphQL não têm isso, checado em
+// 01-03/09/2026). Cada reserva tem `ordem_servico_reserva_historico`: uma
+// linha por evento (reservada / execução iniciada / desreservada), com hora
+// exata, técnico e coordenadas — é o que a tela "Reserva(s)" do painel mostra.
+async function buscarHistoricoReservaOS(idOrdemServico, empresaId) {
+  const chamar = async (token) => fetch(`${baseUrl()}/api/v1/ordem_servico/${idOrdemServico}`, {
+    headers: { Authorization: `Bearer ${token}`, Accept: 'application/json' },
+  });
+  let resp = await chamar(await getTokenPainel(empresaId));
+  if (resp.status === 401) { _tokenPainel = null; _expiraPainel = 0; resp = await chamar(await getTokenPainel(empresaId)); }
+  const j = await resp.json().catch(() => null);
+  if (!j || j.status !== 'success') {
+    throw new Error(`HubSoft O.S.: ${j?.msg || 'falha ao buscar histórico de reserva'}`);
+  }
+  const reservas = j.ordem_servico?.reservas || [];
+  // Achata o histórico de todas as reservas (pode ter sido reservada mais de
+  // uma vez, se desreservou e reservou de novo) numa única linha do tempo.
+  const eventos = reservas
+    .flatMap(r => r.ordem_servico_reserva_historico || [])
+    // created_at_timestamp já vem em epoch ms — evita ambiguidade de fuso do
+    // created_at (esse vem em UTC, "T...Z", diferente do resto do sistema).
+    .map(h => ({ descricao: h.descricao, em: h.created_at_timestamp, tecnico: h.usuario?.name || null }))
+    .filter(e => e.em)
+    .sort((a, b) => a.em - b.em);
+  return eventos;
+}
+
 // Relatório de Contas a Receber do painel — é o que a usuária confere como
 // "faturamento" de verdade (diferente do endpoint de integração de faturas,
 // que não tem o mesmo critério/alcance). Usa token de PAINEL, método POST, e
@@ -1090,7 +1118,7 @@ async function listarMeiosPagamento() {
 
 module.exports = {
   apiGet, listarEquipamentos, listarProdutos, listarOrdensServico, dadosDeInstalacaoPorServico,
-  relatorioServicos, autenticarPainel, statusContrato,
+  relatorioServicos, autenticarPainel, statusContrato, buscarHistoricoReservaOS,
   listarFaturas, varrerFaturas, varrerContaReceber, parseValorBR, listarAtendimentos, listarClientes, listarMovimentosEstoque,
   listarServicosVendidos, buscarTiposOSPorId, getToken, CanceladoError,
   buscarRecebimentos,

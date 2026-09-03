@@ -8,6 +8,7 @@
 const express = require('express');
 const { autenticar } = require('../middleware/auth');
 const { buscarOSDoDia, listarTecnicosDoDia, montarRotaTecnico } = require('../services/rotaTecnica');
+const { buscarHistoricoReservaOS } = require('../services/hubsoft');
 
 const router = express.Router();
 router.use(autenticar);
@@ -38,6 +39,19 @@ router.get('/', async (req, res) => {
   } catch (e) {
     console.error('Erro /erp/rota-tecnica:', e.message);
     res.status(500).json({ erro: 'Erro ao montar a rota técnica: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// Histórico de reserva/execução de UMA O.S. — carregado sob demanda (só
+// quando a linha é expandida na tela), porque exige login de painel (mais
+// lento que a API de integração) e a maioria das O.S. do dia nunca é aberta.
+router.get('/os/:id/historico', async (req, res) => {
+  try {
+    const eventos = await buscarHistoricoReservaOS(req.params.id, req.usuario.empresa_id);
+    res.json({ eventos });
+  } catch (e) {
+    console.error('Erro /erp/rota-tecnica/os/:id/historico:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar histórico da O.S.: ' + e.message.replace('HUBSOFT', 'HubSoft') });
   }
 });
 
