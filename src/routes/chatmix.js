@@ -44,10 +44,12 @@ const depDaQuery = req => req.query.departamento;
 const depDoBody = req => req.body.departamento;
 
 // Mesma regra da Meta de Atendimento, mas pra tudo que é monitoramento em tempo
-// real (Status ao Vivo, Por Atendente, Por Departamento, Dashboard, Mensagens):
-// cada setor só pode pedir dado do PRÓPRIO departamento — nunca de outro, mesmo
-// trocando o filtro na tela — e quem tem "meta-geral" (líder/gestor) vê qualquer
-// um, inclusive a visão combinada (sem filtro).
+// real (Por Atendente, Por Departamento, Dashboard, Mensagens) — cada setor só
+// pode pedir dado do PRÓPRIO departamento — nunca de outro, mesmo trocando o
+// filtro na tela — e quem tem "meta-geral" (líder/gestor) vê qualquer um,
+// inclusive a visão combinada (sem filtro).
+// A tela "Status ao Vivo" (rota /status) NÃO usa isso — pedido explícito pra
+// ficar liberada pra qualquer usuário logado ver qualquer departamento.
 async function departamentosPermitidosAoVivo(req) {
   if (req.usuario.perfil === 'admin') return { geral: true };
   let ownPerms = null;
@@ -61,6 +63,11 @@ async function departamentosPermitidosAoVivo(req) {
   if (temPermissaoServer(perms, 'atendimentos.meta-financeiro', 'visualizar')) deps.push('Financeiro');
   if (temPermissaoServer(perms, 'atendimentos.meta-callcenter', 'visualizar')) deps.push('Suporte');
   return { geral: false, deps };
+}
+// Sem restrição nenhuma — qualquer usuário autenticado vê qualquer departamento
+// (inclusive trocando o filtro livremente na tela).
+function liberarTodosDepartamentos() {
+  return (req, res, next) => next();
 }
 function exigirEFiltrarDepartamentoAoVivo(campo = 'departamento') {
   return async (req, res, next) => {
@@ -433,7 +440,7 @@ function fmtEspera(seg) {
   return `${m} min`;
 }
 
-router.get('/status', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
+router.get('/status', liberarTodosDepartamentos(), async (req, res) => {
   try {
     const emp = req.usuario.empresa_id;
     const cfg = await carregarCfg(emp);
@@ -584,7 +591,16 @@ async function candidatosDeNomes(empresa_id) {
   const us = await all('SELECT nome, email FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
   return us.map(u => ({ nome: u.nome, email: u.email, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
 }
-function nomeCompletoDe(candidatos, atendenteNome) {
+// Apelidos cadastrados manualmente (só os casos ambíguos — ver comentário na criação
+// da tabela em jobs/chatmixSync.js). Mapa: apelido normalizado -> nome completo.
+async function apelidosCadastrados(empresa_id) {
+  const rows = await all('SELECT apelido_norm, nome_completo FROM chatmix_apelido_nome WHERE empresa_id=$1', [empresa_id]);
+  const mapa = {}; rows.forEach(r => { mapa[r.apelido_norm] = r.nome_completo; });
+  return mapa;
+}
+function nomeCompletoDe(candidatos, atendenteNome, apelidos = {}) {
+  const manual = apelidos[semAcentoAt(atendenteNome)];
+  if (manual) return manual;
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return atendenteNome;
   const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
@@ -592,7 +608,9 @@ function nomeCompletoDe(candidatos, atendenteNome) {
 }
 // E-mail do usuário do sistema casado com o nome do atendente (mesma resolução
 // do nome completo) — usado pra filtrar "só a própria linha" na Meta.
-function emailDoAtendente(candidatos, atendenteNome) {
+function emailDoAtendente(candidatos, atendenteNome, apelidos = {}) {
+  const manual = apelidos[semAcentoAt(atendenteNome)];
+  if (manual) return candidatos.find(c => c.nome === manual)?.email || null;
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return null;
   const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
@@ -755,6 +773,39 @@ router.get('/sync/status', async (req, res) => {
       ultima_atualizacao: ext?.ultima_atualizacao || null,
       pagina_atual: est.page || null, ultima_pagina: est.last_page || null, ciclos_completos: est.ciclo || 0,
     });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Acompanhamento: atendimentos que tiveram a mensagem interna de auditoria
+// "Atendimento foi atribuído, enquanto ainda estava na automação... através da tela de auditoria"
+// (atendente pegou o cliente direto na automação, sem passar pela fila do departamento).
+router.get('/auditoria-automacao', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const emp = req.usuario.empresa_id;
+    const { di, df } = periodo(req);
+    const rows = await all(
+      `SELECT protocol, cliente_nome, atendente_nome, departamento, created_at, closed_at, auditoria_automacao
+       FROM chatmix_atendimentos
+       WHERE empresa_id=$1 AND auditoria_automacao IS NOT NULL AND closed_at::date BETWEEN $2 AND $3
+       ORDER BY closed_at DESC`, [emp, di, df]);
+    res.json({ total: rows.length, atendimentos: rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Força o sync a reprocessar as mensagens de um período (pra capturar auditoria_automacao
+// em atendimentos que já tinham sido sincronizados antes desse campo existir).
+router.post('/auditoria-automacao/reprocessar', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const emp = req.usuario.empresa_id;
+    const di = req.body.data_inicial;
+    const df = req.body.data_final;
+    if (!di || !df) return res.status(400).json({ erro: 'Informe data_inicial e data_final.' });
+    const r = await run(
+      `UPDATE chatmix_atendimentos SET msgs_sync_em=NULL
+       WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3`, [emp, di, df]);
+    res.json({ ok: true, marcados: r.changes || 0 });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -1055,6 +1106,9 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
       COUNT(*) FILTER (WHERE (nota IS NOT NULL) AND satisfacao_msg IS NULL)::int AS pendentes
      FROM chatmix_atendimentos
      WHERE empresa_id = $1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
+       -- Conta de teste/automação (nome sempre "... Chatmix", diferente do padrão real
+       -- "Nome Departamento") — não é gente sendo avaliada, fora da Meta.
+       AND atendente_nome NOT ILIKE '%chatmix%'
        AND (${DEPT_SQL}) IN ('Financeiro','Suporte')${extra}
      GROUP BY 1 ORDER BY total DESC`, params);
     // Meta considera apenas Financeiro e Call Center (=Suporte)
@@ -1062,32 +1116,84 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     // Fonte OFICIAL do painel Chatmix (exata). Se disponível, substitui a dedução por mensagem.
     const oficial = await satisfacaoOficial(emp, di, df);
     const candidatosNomes = await candidatosDeNomes(emp).catch(() => []);
-    const itens = rows.map(r => {
-      const o = oficial ? oficial[(r.nome || '').toLowerCase()] : null;
-      const satisfeitas = o ? o.sat : r.satisfeitas;
-      const insatisfeitas = o ? o.insat : r.insatisfeitas;
-      const invalidas = o ? o.inval : r.invalidas;
+    const apelidos = await apelidosCadastrados(emp).catch(() => ({}));
+    // O painel oficial do Chatmix agrupa pelo nome ATUAL do atendente (troca de nome no
+    // Chatmix não reescreve o histórico dele lá) — então em semanas antigas, quando o nome
+    // cru salvo aqui era o antigo ("clara suporte"), a busca direta em `oficial` não bate.
+    // Reaproveita os apelidos cadastrados (todos que resolvem pro mesmo nome_completo) como
+    // nomes alternativos pra tentar encontrar essa mesma pessoa no mapa oficial.
+    const apelidosPorNomeCompleto = {};
+    for (const [chave, nome] of Object.entries(apelidos)) {
+      if (!apelidosPorNomeCompleto[nome]) apelidosPorNomeCompleto[nome] = [];
+      apelidosPorNomeCompleto[nome].push(chave);
+    }
+    // Um mesmo atendente pode aparecer em mais de uma linha CRUA do Chatmix (ex.: apelido
+    // trocado no meio do histórico — "Clara Suporte" e "Ana Clara Suporte" são a mesma
+    // pessoa). A query agrupa pelo nome cru; aqui juntamos as linhas que resolvem pro
+    // mesmo e-mail/nome completo ANTES de calcular percentuais, senão a pessoa aparece
+    // duas vezes na Meta com números fatiados (e conta como duas semanas no fechamento).
+    // A fonte "oficial" é aplicada UMA VEZ POR PESSOA (depois de agrupar), nunca por linha
+    // crua: como ela é indexada pelo nome ATUAL do atendente no Chatmix, duas linhas cruas
+    // da mesma pessoa numa semana (nome antigo + nome novo) podem resolver pro MESMO registro
+    // oficial — se fosse aplicado por linha, contaria a satisfação dela em dobro na semana.
+    const brutos = rows.map(r => {
+      const nomeCompleto = nomeCompletoDe(candidatosNomes, r.nome, apelidos);
+      const email = emailDoAtendente(candidatosNomes, r.nome, apelidos);
+      return {
+        chave: email || nomeCompleto, nome_completo: nomeCompleto, _email: email,
+        _nomeCru: (r.nome || '').toLowerCase(),
+        departamento: rotuloDept(r.nome), total: r.total,
+        respondidas: r.respondidas, pendentes: r.pendentes,
+        satisfeitas: r.satisfeitas, insatisfeitas: r.insatisfeitas, invalidas: r.invalidas,
+      };
+    });
+    const porChave = new Map();
+    for (const b of brutos) {
+      const atual = porChave.get(b.chave);
+      if (!atual) { porChave.set(b.chave, { ...b, _nomesCrus: [b._nomeCru] }); continue; }
+      atual.total += b.total; atual.respondidas += b.respondidas; atual.pendentes += b.pendentes;
+      atual.satisfeitas += b.satisfeitas; atual.insatisfeitas += b.insatisfeitas; atual.invalidas += b.invalidas;
+      atual._nomesCrus.push(b._nomeCru);
+    }
+    const itens = [...porChave.values()].map(b => {
+      // Acha o registro oficial dessa pessoa: primeiro tenta os nomes crus que ela usou
+      // nessa semana; se nenhum bater (nome cru antigo, já trocado no Chatmix), tenta os
+      // apelidos cadastrados que resolvem pro mesmo nome completo.
+      let o = null;
+      if (oficial) {
+        for (const nomeCru of b._nomesCrus) { if (oficial[nomeCru]) { o = oficial[nomeCru]; break; } }
+        if (!o) {
+          for (const alt of (apelidosPorNomeCompleto[b.nome_completo] || [])) {
+            if (oficial[alt]) { o = oficial[alt]; break; }
+          }
+        }
+      }
+      const satisfeitas = o ? o.sat : b.satisfeitas;
+      const insatisfeitas = o ? o.insat : b.insatisfeitas;
+      const invalidas = o ? o.inval : b.invalidas;
+      const respondidas = o ? (o.sat + o.insat + o.inval) : b.respondidas;
+      const pendentes = o ? 0 : b.pendentes;
       const validas = satisfeitas + insatisfeitas;               // válidas = satisfeitas + insatisfeitas
       const percSat = validas ? Math.round((satisfeitas / validas) * 10000) / 100 : null; // satisfeitas / válidas
-      const taxaResp = r.total ? Math.round((validas / r.total) * 10000) / 100 : 0;        // válidas / total (atendimentos)
+      const taxaResp = b.total ? Math.round((validas / b.total) * 10000) / 100 : 0;        // válidas / total (atendimentos)
       const bateSat = percSat != null && percSat >= metaSatisfacao;
       const bateTaxa = taxaResp >= metaTaxa;
       // Nota média (1 a 5) do painel oficial do Chatmix — número puro, além do %
-      const notaMedia = (o && o.media != null && Number.isFinite(Number(o.media)))
-        ? Math.round(Number(o.media) * 100) / 100 : null;
+      const notaValida = o && o.media != null && Number.isFinite(Number(o.media));
+      const notaMedia = notaValida ? Math.round(Number(o.media) * 100) / 100 : null;
       return {
-        atendente: r.nome, nome_completo: nomeCompletoDe(candidatosNomes, r.nome),
-        _email: emailDoAtendente(candidatosNomes, r.nome),
-        departamento: rotuloDept(r.nome), total: r.total,
-        respondidas: o ? (o.sat + o.insat + o.inval) : r.respondidas, pendentes: o ? 0 : r.pendentes,
+        atendente: b.nome_completo, nome_completo: b.nome_completo,
+        _email: b._email,
+        departamento: b.departamento, total: b.total,
+        respondidas, pendentes,
         validas, invalidas, satisfeitas, insatisfeitas,
         perc_satisfacao: percSat, nota_media: notaMedia, taxa_resposta: taxaResp,
         bate_satisfacao: bateSat, bate_taxa: bateTaxa,
         bonificacao: bateSat && bateTaxa,
         bonus_valor: (bateSat && bateTaxa) ? 50 : 0, // R$50 por bater as duas metas na semana
-        situacao: percSat == null ? (r.pendentes > 0 ? `${r.pendentes} pesquisa(s) ainda sendo lida(s)…` : 'Sem pesquisas no período.') : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
+        situacao: percSat == null ? (pendentes > 0 ? `${pendentes} pesquisa(s) ainda sendo lida(s)…` : 'Sem pesquisas no período.') : situacaoTexto(percSat, taxaResp, bateSat, bateTaxa, metaTaxa),
       };
-    });
+    }).sort((x, y) => y.total - x.total);
     const fonteSatisfacao = oficial ? 'oficial' : 'mensagens';
     const departamentos = montarDepartamentos(itens);
     const resumo = montarResumoMeta(itens);
@@ -1202,9 +1308,6 @@ router.get('/analise-atendimentos', exigirVerMetaAtendimento(depDaQuery), async 
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Semanas cheias (domingo→sábado) de um mês, até a semana de hoje — não lista
-// semana futura. A semana que contém o dia 1º só entra se o domingo dela cair
-// dentro do próprio mês (senão pertence ao mês anterior).
 // Fechamento do mês: total de cada atendente somando TODAS as semanas do mês —
 // é o valor a pagar. Junta pelo nome completo (ou o nome do Chatmix quando o
 // cadastro não resolveu). Cada departamento fecha separado, pois `semanas` já
@@ -1226,6 +1329,11 @@ function fechamentoDoMes(semanas) {
   return [...porAtendente.values()].sort((a, b) => b.total_bonus - a.total_bonus);
 }
 
+// Semanas cheias (domingo→sábado) de um mês, até a semana de hoje — não lista
+// semana futura. Cada semana é atribuída ao mês em que ela TERMINA (sábado), não
+// ao mês em que começa: a última semana de um mês, se terminar dentro do mês
+// seguinte, já conta inteira para o mês seguinte (evita ficar sem semana "em
+// andamento" pra mostrar nos primeiros dias de cada mês).
 function semanasDoMes(mesRef) {
   const [ano, mes] = (mesRef || '').match(/^\d{4}-\d{2}$/) ? mesRef.split('-').map(Number) : (() => {
     const h = new Date(); return [h.getFullYear(), h.getMonth() + 1];
@@ -1235,14 +1343,15 @@ function semanasDoMes(mesRef) {
   const hoje = new Date(); hoje.setHours(0, 0, 0, 0);
   const iso = d => d.toISOString().slice(0, 10);
   const semanas = [];
-  // Acha o primeiro domingo dentro (ou depois) do início do mês
-  let dom = new Date(primeiroDia);
-  dom.setDate(dom.getDate() - dom.getDay());
-  if (dom < primeiroDia) dom.setDate(dom.getDate() + 7);
-  while (dom <= ultimoDia && dom <= hoje) {
-    const sab = new Date(dom); sab.setDate(dom.getDate() + 6);
+  // Acha o sábado (fim) da semana que contém o dia 1º — essa é a 1ª semana do mês,
+  // mesmo que tenha começado no mês anterior (é o fim dela que decide o mês, não o início).
+  let sab = new Date(primeiroDia);
+  sab.setDate(sab.getDate() + (6 - sab.getDay()));
+  let dom = new Date(sab); dom.setDate(dom.getDate() - 6);
+  while (sab <= ultimoDia && dom <= hoje) {
     semanas.push({ di: iso(dom), df: iso(sab) });
     dom = new Date(dom); dom.setDate(dom.getDate() + 7);
+    sab = new Date(sab); sab.setDate(sab.getDate() + 7);
   }
   return semanas;
 }
@@ -1421,6 +1530,49 @@ router.put('/msg-config', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Classificação das tags de encerramento do Suporte, usada pelo indicador "Taxa de
+// Resolutividade - Help Desk" (Gestão > Indicadores): cada tag é "resolvido" (sem
+// precisar de técnico) ou "tecnico" (precisou ir ao local). Tag sem linha aqui não
+// entra no cálculo. Lista as tags que realmente apareceram nos últimos 180 dias,
+// pra pessoa não ter que adivinhar os nomes.
+router.get('/helpdesk/tags', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const emp = req.usuario.empresa_id;
+    const desde = new Date(Date.now() - 180 * 86400000).toISOString().slice(0, 10);
+    const rows = await all(
+      `SELECT ca.tag_finalizacao AS tag, COUNT(*)::int AS qtd, ctc.categoria
+       FROM chatmix_atendimentos ca
+       LEFT JOIN chatmix_tag_categoria ctc ON ctc.empresa_id = ca.empresa_id AND ctc.tag = ca.tag_finalizacao
+       WHERE ca.empresa_id = $1 AND ca.closed_at::date >= $2 AND ca.tag_finalizacao IS NOT NULL
+         AND (${DEPT_SQL}) = 'Suporte' AND ca.atendente_nome IS NOT NULL
+       GROUP BY ca.tag_finalizacao, ctc.categoria
+       ORDER BY qtd DESC`, [emp, desde]);
+    res.json({ tags: rows });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/helpdesk/tags', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const emp = req.usuario.empresa_id;
+    const classificacoes = Array.isArray(req.body.classificacoes) ? req.body.classificacoes : [];
+    for (const c of classificacoes) {
+      const tag = (c.tag || '').trim();
+      if (!tag) continue;
+      if (c.categoria === 'resolvido' || c.categoria === 'tecnico') {
+        await run(
+          `INSERT INTO chatmix_tag_categoria (empresa_id, tag, categoria, atualizado_em) VALUES ($1,$2,$3,NOW())
+           ON CONFLICT (empresa_id, tag) DO UPDATE SET categoria = EXCLUDED.categoria, atualizado_em = NOW()`,
+          [emp, tag, c.categoria]);
+      } else {
+        await run('DELETE FROM chatmix_tag_categoria WHERE empresa_id=$1 AND tag=$2', [emp, tag]);
+      }
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // Mensagens & custo por período (lê do que já foi contado; cobrável = enviadas entregues não-internas)
 router.get('/mensagens', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
   try {
@@ -1480,4 +1632,10 @@ router.get('/medias', exigirEFiltrarDepartamentoAoVivo(), async (req, res) => {
 });
 
 router.calcularMeta = calcularMeta;
+// Reaproveitados pelo job de indicadores do Help Desk (backend/src/jobs/indicadoresHelpDesk.js)
+// pra não duplicar o login/refresh de token do painel do Chatmix.
+router.departamentosOficial = departamentosOficial;
+router.satisfacaoOficial = satisfacaoOficial;
+router.deptDeNome = deptDeNome;
+router.DEPT_SQL = DEPT_SQL;
 module.exports = router;
