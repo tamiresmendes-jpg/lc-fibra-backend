@@ -591,16 +591,23 @@ async function candidatosDeNomes(empresa_id) {
   const us = await all('SELECT nome, email FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
   return us.map(u => ({ nome: u.nome, email: u.email, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
 }
-// Apelidos cadastrados manualmente (só os casos ambíguos — ver comentário na criação
-// da tabela em jobs/chatmixSync.js). Mapa: apelido normalizado -> nome completo.
+// Apelidos/vínculos cadastrados manualmente — ver comentário na criação da tabela em
+// jobs/chatmixSync.js. Mapa: apelido normalizado -> { nome_completo, email, usuario_id }.
+// Quando usuario_id está preenchido (vínculo explícito, tela "detectados sem vínculo"),
+// nome_completo/email vêm do cadastro REAL em `usuarios` (join), não do texto digitado.
 async function apelidosCadastrados(empresa_id) {
-  const rows = await all('SELECT apelido_norm, nome_completo FROM chatmix_apelido_nome WHERE empresa_id=$1', [empresa_id]);
-  const mapa = {}; rows.forEach(r => { mapa[r.apelido_norm] = r.nome_completo; });
+  const rows = await all(
+    `SELECT a.apelido_norm, a.usuario_id, COALESCE(u.nome, a.nome_completo) AS nome_completo, u.email
+     FROM chatmix_apelido_nome a
+     LEFT JOIN usuarios u ON u.id = a.usuario_id AND u.empresa_id = a.empresa_id
+     WHERE a.empresa_id = $1`, [empresa_id]);
+  const mapa = {};
+  rows.forEach(r => { mapa[r.apelido_norm] = { nome_completo: r.nome_completo, email: r.email || null, usuario_id: r.usuario_id || null }; });
   return mapa;
 }
 function nomeCompletoDe(candidatos, atendenteNome, apelidos = {}) {
   const manual = apelidos[semAcentoAt(atendenteNome)];
-  if (manual) return manual;
+  if (manual) return manual.nome_completo;
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return atendenteNome;
   const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
@@ -610,7 +617,7 @@ function nomeCompletoDe(candidatos, atendenteNome, apelidos = {}) {
 // do nome completo) — usado pra filtrar "só a própria linha" na Meta.
 function emailDoAtendente(candidatos, atendenteNome, apelidos = {}) {
   const manual = apelidos[semAcentoAt(atendenteNome)];
-  if (manual) return candidatos.find(c => c.nome === manual)?.email || null;
+  if (manual) return manual.email || candidatos.find(c => c.nome === manual.nome_completo)?.email || null;
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return null;
   const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
@@ -731,6 +738,36 @@ function deptDeNome(nome) {
 function diasEntre(di, df) {
   const a = Date.parse(di), b = Date.parse(df);
   return Math.max(1, Math.round((b - a) / 86400000) + 1);
+}
+
+// Atendentes do Financeiro/Suporte que apareceram no período mas não têm vínculo
+// explícito com usuário do sistema NEM resolvem sozinhos pela busca automática de
+// nome (0 ou mais de 1 candidato bateu) — pra tela de Meta sugerir "vincular" um por
+// um, mesmo espírito do "detectados sem config" da Meta Comercial. Quem já resolve
+// sozinho não aparece aqui (não precisa de atenção).
+async function detectadosSemVinculo(empresa_id, di, df) {
+  const candidatosNomes = await candidatosDeNomes(empresa_id);
+  const apelidos = await apelidosCadastrados(empresa_id);
+  const rows = await all(
+    `SELECT DISTINCT atendente_nome AS nome
+     FROM chatmix_atendimentos
+     WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND atendente_nome IS NOT NULL
+       AND atendente_nome NOT ILIKE '%chatmix%'
+       AND (${DEPT_SQL}) IN ('Financeiro','Suporte')`, [empresa_id, di, df]);
+  const rotuloDept = nome => deptDeNome(nome) === 'Suporte' ? 'Call Center' : deptDeNome(nome);
+  const vistos = new Set();
+  const detectados = [];
+  for (const r of rows) {
+    const norm = semAcentoAt(r.nome);
+    if (vistos.has(norm)) continue;
+    vistos.add(norm);
+    if (apelidos[norm]) continue; // já resolvido (vínculo com usuario_id ou apelido antigo)
+    const busca = nomeChatmixSemDepto(r.nome);
+    const achados = busca.length ? candidatosNomes.filter(c => contemSequencia(c.tokens, busca)) : [];
+    if (achados.length === 1) continue;
+    detectados.push({ atendente_nome: r.nome, apelido_norm: norm, departamento: rotuloDept(r.nome) });
+  }
+  return detectados;
 }
 function fmt(seg) { // reaproveita fmtDuracao já definido acima
   return fmtDuracao(seg);
@@ -1123,7 +1160,8 @@ async function calcularMeta(emp, di, df, metaSatisfacao = 90, metaTaxa = 55, { d
     // Reaproveita os apelidos cadastrados (todos que resolvem pro mesmo nome_completo) como
     // nomes alternativos pra tentar encontrar essa mesma pessoa no mapa oficial.
     const apelidosPorNomeCompleto = {};
-    for (const [chave, nome] of Object.entries(apelidos)) {
+    for (const [chave, info] of Object.entries(apelidos)) {
+      const nome = info.nome_completo;
       if (!apelidosPorNomeCompleto[nome]) apelidosPorNomeCompleto[nome] = [];
       apelidosPorNomeCompleto[nome].push(chave);
     }
@@ -1258,6 +1296,13 @@ router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
     const data = await calcularMeta(emp, di, df, metaSatisfacao, metaTaxa, { deps, ats });
     const depChave = deps[0] === 'Suporte' ? 'callcenter' : deps[0] === 'Financeiro' ? 'financeiro' : null;
     if (depChave) {
+      const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+      // Só quem enxerga o setor inteiro (líder/gestor/admin) vê a lista de quem falta
+      // vincular — pro colaborador comum isso não faz sentido nem deveria vazar nomes
+      // de outros atendentes.
+      if (await podeVerTudoNaMeta(req.usuario, depChave)) {
+        data.detectados_sem_vinculo = await detectadosSemVinculo(emp, di, df).catch(() => []);
+      }
       data.itens = await restringirProprio(req, depChave, data.itens);
       // Recalcula o resumo com base só nos itens já restritos, senão continuava
       // mostrando o total do setor inteiro pro colaborador comum.
@@ -1265,6 +1310,42 @@ router.get('/meta', exigirVerMetaAtendimento(depDaQuery), async (req, res) => {
       data.resumo = montarResumoMeta(data.itens);
     }
     res.json({ periodo: { di, df }, semana: true, ...data });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Confirma o vínculo de um atendente do Chatmix com um usuário do sistema (botão da
+// lista "detectados sem vínculo" acima) — grava em chatmix_apelido_nome com usuario_id
+// preenchido, que passa a valer como fonte da verdade pro nome/e-mail dele na Meta.
+// Mesma permissão de quem enxerga o setor inteiro (líder do setor, gestor ou admin).
+router.post('/vinculo', async (req, res) => {
+  try {
+    const emp = req.usuario.empresa_id;
+    const atendenteNome = (req.body.atendente_nome || '').trim();
+    const usuarioId = req.body.usuario_id;
+    const depChave = req.body.departamento === 'Call Center' ? 'callcenter'
+      : req.body.departamento === 'Financeiro' ? 'financeiro' : null;
+    if (!atendenteNome || !usuarioId || !depChave) return res.status(400).json({ erro: 'Informe atendente_nome, usuario_id e departamento.' });
+    const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+    if (!(await podeVerTudoNaMeta(req.usuario, depChave))) return res.status(403).json({ erro: 'Sem permissão' });
+    const usuario = await get('SELECT id, nome FROM usuarios WHERE id=$1 AND empresa_id=$2 AND ativo=1', [usuarioId, emp]);
+    if (!usuario) return res.status(400).json({ erro: 'Usuário não encontrado.' });
+    const norm = semAcentoAt(atendenteNome);
+    await run(
+      `INSERT INTO chatmix_apelido_nome (empresa_id, apelido_norm, nome_completo, usuario_id, atualizado_em)
+       VALUES ($1,$2,$3,$4,NOW())
+       ON CONFLICT (empresa_id, apelido_norm) DO UPDATE SET nome_completo=EXCLUDED.nome_completo, usuario_id=EXCLUDED.usuario_id, atualizado_em=NOW()`,
+      [emp, norm, usuario.nome, usuarioId]);
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Desfaz um vínculo (volta a resolver automático/nome cru) — só admin/gestor.
+router.delete('/vinculo/:apelido_norm', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const emp = req.usuario.empresa_id;
+    await run('DELETE FROM chatmix_apelido_nome WHERE empresa_id=$1 AND apelido_norm=$2', [emp, req.params.apelido_norm]);
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -1377,9 +1458,17 @@ router.get('/meta/semanas', exigirVerMetaAtendimento(depDaQuery), async (req, re
       resultado.push({ periodo: s, ...data });
     }
     const bonusMes = resultado.reduce((t, s) => t + (s.resumo.bonus_total || 0), 0);
+    let detectadosSemVinculoMes = [];
+    if (depChave && semanas.length) {
+      const { podeVerTudoNaMeta } = require('../utils/visibilidadeMeta');
+      if (await podeVerTudoNaMeta(req.usuario, depChave)) {
+        detectadosSemVinculoMes = await detectadosSemVinculo(emp, semanas[0].di, semanas[semanas.length - 1].df).catch(() => []);
+      }
+    }
     res.json({
       mes: req.query.mes || new Date().toISOString().slice(0, 7),
       semanas: resultado, bonus_total_mes: bonusMes, fechamento_mes: fechamentoDoMes(resultado),
+      detectados_sem_vinculo: detectadosSemVinculoMes,
     });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });

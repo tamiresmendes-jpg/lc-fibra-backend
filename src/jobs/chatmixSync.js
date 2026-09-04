@@ -72,11 +72,27 @@ async function garantirTabelas() {
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS satisfacao_msg TEXT`);    // satisfeito|insatisfeito|invalida|null (deduzido das mensagens)
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS cliente_nome TEXT`);      // nome do cliente (a.client.name) — pra tela de Análise e Acompanhamento
   await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS tag_finalizacao TEXT`);   // classificação/tag com que o atendimento foi encerrado (a.classifications)
+  await run(`ALTER TABLE chatmix_atendimentos ADD COLUMN IF NOT EXISTS auditoria_automacao TEXT`); // texto da mensagem interna "atribuído ainda na automação... tela de auditoria" (null = não teve)
   await run(`CREATE INDEX IF NOT EXISTS idx_cxatend_msgsync ON chatmix_atendimentos (empresa_id, closed_at) WHERE msgs_sync_em IS NULL`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_departamentos (
     empresa_id TEXT NOT NULL, dep_id BIGINT NOT NULL, nome TEXT,
     PRIMARY KEY (empresa_id, dep_id)
   )`);
+  // Apelido→nome completo (manual, só para os casos AMBÍGUOS que a resolução automática de
+  // routes/chatmix.js (nomeCompletoDe, por token do primeiro nome) não consegue decidir sozinha
+  // — ex.: duas atendentes "Ana Clara" no mesmo departamento/cargo, onde bate mais de um usuário
+  // e a função desiste e devolve o apelido puro. Chave é o apelido do Chatmix normalizado (sem
+  // acento/caixa). Usado só pela Meta (nome_completo) — não mexe no Status ao Vivo.
+  await run(`CREATE TABLE IF NOT EXISTS chatmix_apelido_nome (
+    empresa_id TEXT NOT NULL, apelido_norm TEXT NOT NULL, nome_completo TEXT NOT NULL,
+    atualizado_em TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (empresa_id, apelido_norm)
+  )`);
+  // Vínculo explícito com o usuário do sistema (tela "Atendentes detectados sem vínculo"
+  // na Meta) — quando preenchido, é a fonte da verdade pro nome/e-mail (substitui a
+  // resolução automática por sequência de tokens); quando nulo, a linha é só um apelido
+  // manual de nome (comportamento antigo, sem vínculo de usuário).
+  await run(`ALTER TABLE chatmix_apelido_nome ADD COLUMN IF NOT EXISTS usuario_id TEXT`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_alertas (
     empresa_id TEXT NOT NULL, atendimento_id BIGINT NOT NULL, tipo TEXT NOT NULL,
     alertado_em TIMESTAMP DEFAULT NOW(), PRIMARY KEY (empresa_id, atendimento_id, tipo)
@@ -85,6 +101,17 @@ async function garantirTabelas() {
     empresa_id TEXT PRIMARY KEY,
     preco_msg NUMERIC DEFAULT 0.0350,
     mensagens_desde DATE
+  )`);
+  // Classificação manual das tags de encerramento do Suporte, pro indicador de
+  // Taxa de Resolutividade (Help Desk): a pessoa escolhe, tag por tag, se ela
+  // significa "resolveu sem precisar de técnico" ou "precisou de técnico no
+  // local". Tag sem linha aqui = não classificada, fica fora do cálculo.
+  await run(`CREATE TABLE IF NOT EXISTS chatmix_tag_categoria (
+    empresa_id TEXT NOT NULL,
+    tag TEXT NOT NULL,
+    categoria TEXT NOT NULL CHECK (categoria IN ('resolvido','tecnico')),
+    atualizado_em TIMESTAMP DEFAULT NOW(),
+    PRIMARY KEY (empresa_id, tag)
   )`);
   await run(`CREATE TABLE IF NOT EXISTS chatmix_sync_estado (
     empresa_id TEXT PRIMARY KEY,
@@ -224,10 +251,16 @@ async function passoMensagem(empresaId, token, desde) {
   let env = 0, rec = 0, intn = 0;
   let surveyTs = null;
   let temGoogleReview = false; // mensagem de pesquisa do Google só é enviada quando o cliente é SATISFEITO
+  let auditoriaAutomacao = null; // texto da msg interna "atribuído ainda na automação... tela de auditoria", se existir
+  const RX_AUDITORIA_AUTOMACAO = /atribu.do,?\s+enquanto\s+ainda\s+estava\s+na\s+automa/i;
   const respostas = []; // respostas do cliente (para classificar após achar a pesquisa)
   for (const m of msgs) {
     if (m.type === 'sent') {
-      if (m.origin === 'internal') { intn++; }
+      if (m.origin === 'internal') {
+        intn++;
+        const txtInterna = conteudo(m.content);
+        if (RX_AUDITORIA_AUTOMACAO.test(txtInterna)) auditoriaAutomacao = txtInterna;
+      }
       else if (Number(m.ack) >= 2) env++; // entregue/lido = cobrável
       if (m.origin === 'survey' || m.origin === 'satisfaction') surveyTs = Number(m.timestamp) || surveyTs; // pergunta da pesquisa enviada
       const tx = String(conteudo(m.content)).toLowerCase();
@@ -256,9 +289,9 @@ async function passoMensagem(empresaId, token, desde) {
   // A mensagem da pesquisa do Google só é disparada quando o cliente foi SATISFEITO.
   // Se ela existe e não houve sinal de insatisfeito, consideramos satisfeito.
   if (temGoogleReview && satisfacao !== 'insatisfeito') satisfacao = 'satisfeito';
-  await run(`UPDATE chatmix_atendimentos SET msgs_enviadas=$3, msgs_recebidas=$4, msgs_internas=$5, satisfacao_msg=$6, msgs_sync_em=NOW()
-             WHERE empresa_id=$1 AND atendimento_id=$2`, [empresaId, id, env, rec, intn, satisfacao]);
-  return { fez: true, id, env, rec, intn, satisfacao };
+  await run(`UPDATE chatmix_atendimentos SET msgs_enviadas=$3, msgs_recebidas=$4, msgs_internas=$5, satisfacao_msg=$6, auditoria_automacao=$7, msgs_sync_em=NOW()
+             WHERE empresa_id=$1 AND atendimento_id=$2`, [empresaId, id, env, rec, intn, satisfacao, auditoriaAutomacao]);
+  return { fez: true, id, env, rec, intn, satisfacao, auditoriaAutomacao };
 }
 
 // Mantém o DIA ATUAL sempre completo (tempo real): escaneia a janela de hoje,
