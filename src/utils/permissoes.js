@@ -196,6 +196,7 @@ const MAPA_PERMISSAO = [
   ['/api/rhid',                        'ponto.painel'],
   // ERP HubSoft — opt-in (ver MODULOS_OPT_IN abaixo)
   ['/api/erp/rota-tecnica',            'erp.rota-tecnica'],
+  ['/api/erp/planos/livros-sva',       'erp.analise-ebooks'],
   ['/api/erp',                         'erp.consultar'],
 ];
 

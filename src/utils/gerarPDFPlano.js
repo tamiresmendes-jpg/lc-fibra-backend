@@ -342,4 +342,4 @@ async function gerarPDFListaPlanos(planos) {
   return htmlParaPdf(montarHtmlListaPlanos(planos));
 }
 
-module.exports = { gerarPDFPlano, montarHtmlPlano, gerarPDFListaPlanos, montarHtmlListaPlanos };
+module.exports = { gerarPDFPlano, montarHtmlPlano, gerarPDFListaPlanos, montarHtmlListaPlanos, agruparComposicao };

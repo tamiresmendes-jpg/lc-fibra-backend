@@ -1696,6 +1696,88 @@ router.get('/planos/itens-composicao', async (req, res) => {
   } catch (e) { res.status(400).json({ erro: e.message }); }
 });
 
+// GET /api/erp/planos/livros-sva — volumetria de e-books (item "LC+ Livros")
+// por plano ativo com cliente, agrupada por faixa (Bronze/Prata/Ouro/...)
+// conforme quantas vezes o item se repete na composição de cada plano.
+router.get('/planos/livros-sva', async (req, res) => {
+  try {
+    const pctManual = req.query.pct !== undefined ? Number(req.query.pct) : null;
+    res.json(await montarRelatorioLivrosComAderencia(req.usuario.empresa_id, { pctManual }));
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// Monta o relatório de livros-sva (bruto + aderência) — reaproveitado pela
+// rota JSON (tela) e pelo PDF, pra não duplicar a lógica de junção do cache.
+// pctManual (0-100): quando informado, ignora a aderência calculada e usa
+// esse percentual fixo pra TODOS os planos — pra quando a aderência ainda
+// não rodou ou a usuária quer simular um cenário próprio (ex.: "90% dos
+// clientes vão receber nota este mês").
+async function montarRelatorioLivrosComAderencia(empresaId, { pctManual = null } = {}) {
+  const planos = await planosComClienteDetalhados(empresaId);
+  const { montarRelatorioLivros } = require('../utils/relatorioLivrosSva');
+  const relatorio = montarRelatorioLivros(planos);
+
+  const taxaManual = pctManual != null && !Number.isNaN(pctManual) ? Math.min(Math.max(pctManual, 0), 100) / 100 : null;
+  let aderencia = null;
+  let taxaPorNome = new Map();
+  if (taxaManual == null) {
+    const cache = await db.get('SELECT dados FROM erp_livros_aderencia_cache WHERE empresa_id = ?', [empresaId]);
+    aderencia = cache?.dados ? JSON.parse(cache.dados) : null;
+    taxaPorNome = new Map((aderencia?.planos || []).map((p) => [String(p.descricao_plano || '').trim().toUpperCase(), p]));
+  }
+
+  for (const p of relatorio.planos) {
+    const taxa = taxaManual != null ? taxaManual : taxaPorNome.get(String(p.descricao_plano || '').trim().toUpperCase())?.taxa_aderencia;
+    p.taxa_aderencia = taxa ?? null;
+    p.clientes_estimado = taxa != null ? Math.round(p.clientes_servicos_count * taxa) : null;
+    p.total_livros_estimado = taxa != null ? p.clientes_estimado * p.quantidade_livros_por_cliente : null;
+  }
+  for (const r of relatorio.resumo) {
+    const linhasDaFaixa = relatorio.planos.filter((p) => p.faixa === r.faixa);
+    const temEstimativa = linhasDaFaixa.some((p) => p.clientes_estimado != null);
+    r.clientes_estimado = temEstimativa ? linhasDaFaixa.reduce((s, p) => s + (p.clientes_estimado || 0), 0) : null;
+    r.total_livros_estimado = temEstimativa ? linhasDaFaixa.reduce((s, p) => s + (p.total_livros_estimado || 0), 0) : null;
+  }
+  relatorio.total_geral_estimado = relatorio.resumo.some((r) => r.total_livros_estimado != null)
+    ? relatorio.resumo.reduce((s, r) => s + (r.total_livros_estimado || 0), 0)
+    : null;
+  relatorio.aderencia_manual_pct = taxaManual != null ? taxaManual * 100 : null;
+  relatorio.aderencia_calculada_em = taxaManual == null ? (aderencia?.calculado_em || null) : null;
+  relatorio.aderencia_janela_meses = taxaManual == null ? (aderencia?.janela_meses || null) : null;
+  return relatorio;
+}
+
+// GET /api/erp/planos/livros-sva/pdf — documento pronto pra encaminhar ao
+// financeiro (resumo, com cabeçalho de quem gerou e quando). Usa a
+// aderência calculada (ou um % manual único em ?pct=).
+router.get('/planos/livros-sva/pdf', async (req, res) => {
+  try {
+    const pctManual = req.query.pct !== undefined ? Number(req.query.pct) : null;
+    const relatorio = await montarRelatorioLivrosComAderencia(req.usuario.empresa_id, { pctManual });
+    const { gerarPDFLivrosSva } = require('../utils/gerarPDFLivrosSva');
+    const pdf = await gerarPDFLivrosSva(relatorio, { nomeUsuario: req.usuario.nome });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="volumetria-ebooks.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
+// POST /api/erp/planos/livros-sva/pdf — mesmo PDF, mas com o resumo já
+// calculado NO FRONTEND (ex.: % manual diferente por plano) — a tela manda o
+// resultado final e aqui só renderiza, sem recalcular nada.
+router.post('/planos/livros-sva/pdf', async (req, res) => {
+  try {
+    const { resumo, total_geral, total_geral_estimado, aderencia_calculada_em, aderencia_janela_meses, aderencia_manual_pct, aderencia_manual_por_plano } = req.body || {};
+    if (!Array.isArray(resumo)) return res.status(400).json({ erro: 'resumo é obrigatório' });
+    const relatorio = { resumo, total_geral, total_geral_estimado, aderencia_calculada_em, aderencia_janela_meses, aderencia_manual_pct, aderencia_manual_por_plano };
+    const { gerarPDFLivrosSva } = require('../utils/gerarPDFLivrosSva');
+    const pdf = await gerarPDFLivrosSva(relatorio, { nomeUsuario: req.usuario.nome });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="volumetria-ebooks.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(400).json({ erro: e.message }); }
+});
+
 // GET /api/erp/planos/:id — detalhe completo de UM plano (composição,
 // contrato, desconto, etc) — sob demanda, quando a pessoa expande o plano.
 router.get('/planos/:id', async (req, res) => {
@@ -1810,6 +1892,39 @@ async function sincronizarServicosNfse() {
   }
 }
 
+// Sincroniza a aderência de faturamento dos planos com "LC+ Livros" — chamada
+// pelo cron das 3h30 (syncAderenciaLivros.js), NUNCA pelo clique do usuário.
+// Varre as faturas dos últimos 3 meses fechados (bem mais pesado que os
+// outros syncs, por isso só de madrugada), calcula por plano quantas venceram
+// com o cliente bloqueado/inativo/cancelado (não recebe nota) e guarda no
+// cache — a tela só lê esse resultado (ver GET /planos/livros-sva).
+async function sincronizarAderenciaLivros() {
+  const empresas = await db.all('SELECT id, nome FROM empresas');
+  const { montarRelatorioLivros, calcularAderenciaLivros } = require('../utils/relatorioLivrosSva');
+  for (const emp of empresas) {
+    try {
+      console.log(`[sync-aderencia-livros] ${emp.nome || emp.id}`);
+      const planos = await planosComClienteDetalhados(emp.id);
+      const { planos: planosComLivros } = montarRelatorioLivros(planos);
+      const aderencia = await calcularAderenciaLivros(emp.id, planosComLivros);
+      await db.run(
+        `INSERT INTO erp_livros_aderencia_cache (empresa_id, dados, erro, updated_at)
+         VALUES (?, ?, NULL, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+         ON CONFLICT (empresa_id) DO UPDATE SET dados = EXCLUDED.dados, erro = NULL, updated_at = EXCLUDED.updated_at`,
+        [emp.id, JSON.stringify(aderencia)]
+      );
+    } catch (e) {
+      console.error(`[sync-aderencia-livros] falha ${emp.id}:`, e.message);
+      await db.run(
+        `INSERT INTO erp_livros_aderencia_cache (empresa_id, dados, erro, updated_at)
+         VALUES (?, NULL, ?, TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))
+         ON CONFLICT (empresa_id) DO UPDATE SET erro = EXCLUDED.erro, updated_at = EXCLUDED.updated_at`,
+        [emp.id, e.message]
+      ).catch(() => {});
+    }
+  }
+}
+
 // GET /api/erp/servicos-nfse/pdf — PDF com todos os serviços já salvos no
 // cache (mesmo dado da tela) — não consulta o HubSoft, só lê o que já está salvo.
 router.get('/servicos-nfse/pdf', async (req, res) => {
@@ -1845,3 +1960,4 @@ module.exports.sincronizarTodasFiscal = sincronizarTodasFiscal;
 module.exports.sincronizarPacotes = sincronizarPacotes;
 module.exports.sincronizarTodasFinanceiro = sincronizarTodasFinanceiro;
 module.exports.sincronizarServicosNfse = sincronizarServicosNfse;
+module.exports.sincronizarAderenciaLivros = sincronizarAderenciaLivros;

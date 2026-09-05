@@ -1517,6 +1517,21 @@ async function initSchema() {
     )
   `);
 
+  // Cache da aderência de faturamento dos planos com "LC+ Livros" — por
+  // plano, dos últimos meses fechados, quantas faturas venceram com o
+  // cliente fora (bloqueado/inativo/cancelado, não recebe nota) x dentro
+  // (recebeu nota normal). Mesmo padrão do erp_pacotes_cache: sem período,
+  // 1 linha por empresa (a janela de meses fica dentro do JSON), preenchido
+  // pelo cron de madrugada (syncAderenciaLivros.js).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS erp_livros_aderencia_cache (
+      empresa_id TEXT PRIMARY KEY,
+      dados TEXT,
+      erro TEXT,
+      updated_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
   // Cache do financeiro mensal (recebido x a receber) — mesmo padrão.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS erp_financeiro_cache (
