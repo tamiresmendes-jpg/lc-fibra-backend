@@ -13,13 +13,15 @@ const express = require('express');
 const Anthropic = require('@anthropic-ai/sdk');
 const { autenticar } = require('../middleware/auth');
 const hubsoft = require('../services/hubsoft');
-const { get: pget } = require('../config/database');
-const { buscarPermsEfetivas, temPermissaoServer } = require('../utils/permissoes');
+const { get: pget, run } = require('../config/database');
+const { buscarPermsEfetivas, temPermissaoServer, resolverPermissao } = require('../utils/permissoes');
 
 const router = express.Router();
 router.use(autenticar);
 
-// Bloqueia o acesso ao ERP (inclusive leitura) para quem não tem 'erp.consultar'.
+// Bloqueia o acesso ao ERP (inclusive leitura) para quem não tem a permissão
+// da tela específica (ver MAPA_PERMISSAO em utils/permissoes.js — granular
+// desde 27/08/2026; 'erp.consultar' já cobre quem configurou antes disso).
 router.use(async (req, res, next) => {
   try {
     if (req.usuario.perfil === 'admin') return next();
@@ -30,7 +32,8 @@ router.use(async (req, res, next) => {
     } catch { ownPerms = null; }
     const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
     if (!perms) return next(); // sem restrição configurada → liberado
-    if (temPermissaoServer(perms, 'erp.consultar', 'visualizar')) return next();
+    const chave = resolverPermissao(req.baseUrl + req.path) || 'erp.consulta';
+    if (temPermissaoServer(perms, chave, 'visualizar')) return next();
     return res.status(403).json({ erro: 'Você não tem permissão para acessar o ERP.' });
   } catch { return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); }
 });
@@ -476,6 +479,184 @@ router.get('/materiais-por-os', async (req, res) => {
   } catch (e) {
     console.error('Erro /erp/materiais-por-os:', e.message);
     res.status(500).json({ erro: 'Erro ao cruzar materiais x OS: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// ── GET /api/erp/analise-os — tempo de atendimento, SLA (abertura → agendamento)
+// e produtividade por técnico/equipe/cidade/bairro. O cache (job syncAnaliseOS,
+// recalcula a cada 5 min) guarda a lista CRUA de O.S. do mês; a agregação (e o
+// filtro por cidade/tipo) roda na hora em cima do cache, sem bater no ERP de
+// novo a cada troca de filtro — só recalcula ao vivo se o cache ainda não
+// existir ou estiver velho demais (mesma ideia da Meta de Cobrança).
+function mesEIntervalo(query) {
+  const mesRef = /^\d{4}-\d{2}$/.test(query || '') ? query : new Date().toISOString().slice(0, 7);
+  const [ano, mes] = mesRef.split('-').map(Number);
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  return { mesRef, dataInicio: iso(1), dataFim: iso(ultimoDia) };
+}
+// Formato do cache mudou em 01/09/2026 (passou a guardar também os movimentos
+// de estoque, pro custo de material) — cache antigo guardava só um ARRAY de
+// O.S. direto. Trata como inválido nesse caso e busca de novo ao vivo, em vez
+// de estourar tentando ler `.movimentos` de um array.
+function cacheEhValido(row) {
+  if (!row) return false;
+  const idadeMin = (Date.now() - new Date(row.atualizado_em).getTime()) / 60000;
+  if (idadeMin >= 15) return false;
+  return row.dados && !Array.isArray(row.dados) && Array.isArray(row.dados.ordens);
+}
+async function dadosOSCacheados(mesRef, dataInicio, dataFim) {
+  const row = await pget('SELECT dados, atualizado_em FROM analise_os_cache WHERE mes=$1', [mesRef]);
+  if (cacheEhValido(row)) return { ...row.dados, cache_atualizado_em: row.atualizado_em };
+  const { buscarDadosOS } = require('../jobs/analiseOS');
+  const dados = await buscarDadosOS({ dataInicio, dataFim });
+  // Persiste mesmo fora do mês atual/anterior (ex.: tendência de meses antigos)
+  // — sem isso, toda consulta a um mês antigo bateria no HubSoft de novo.
+  try {
+    await run(
+      `INSERT INTO analise_os_cache (mes, dados, atualizado_em) VALUES ($1,$2,NOW())
+       ON CONFLICT (mes) DO UPDATE SET dados=EXCLUDED.dados, atualizado_em=NOW()`,
+      [mesRef, JSON.stringify(dados)]
+    );
+  } catch (e) { console.error('[analise-os] erro ao salvar cache:', e.message); }
+  return { ...dados, cache_atualizado_em: null };
+}
+
+router.get('/analise-os', async (req, res) => {
+  try {
+    const { mesRef, dataInicio, dataFim } = mesEIntervalo(req.query.mes);
+    const { agregarAnaliseOS } = require('../jobs/analiseOS');
+    const { ordens, movimentos, cache_atualizado_em } = await dadosOSCacheados(mesRef, dataInicio, dataFim);
+    const dados = agregarAnaliseOS(ordens, movimentos, { cidade: req.query.cidade || null, tipo: req.query.tipo || null });
+    res.json({ mes: mesRef, cache_atualizado_em, ...dados });
+  } catch (e) {
+    console.error('Erro /erp/analise-os:', e.message);
+    res.status(500).json({ erro: 'Erro ao montar a Análise de O.S.: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// Tendência de vários meses (total de O.S., SLA e tempo de atendimento médios) —
+// só o resumo de cada mês, pro gráfico de linha. Roda em sequência (não em
+// paralelo) pra não disparar várias buscas pesadas no HubSoft ao mesmo tempo;
+// meses fora do cache atual/anterior ficam salvos aqui pra próxima consulta ser rápida.
+router.get('/analise-os/tendencia', async (req, res) => {
+  try {
+    const n = Math.min(Math.max(parseInt(req.query.meses, 10) || 6, 2), 12);
+    const { agregarAnaliseOS } = require('../jobs/analiseOS');
+    const hoje = new Date();
+    const meses = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+      meses.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const resultado = [];
+    for (const mesRef of meses) {
+      const { dataInicio, dataFim } = mesEIntervalo(mesRef);
+      const { ordens, movimentos } = await dadosOSCacheados(mesRef, dataInicio, dataFim);
+      const { resumo } = agregarAnaliseOS(ordens, movimentos, { cidade: req.query.cidade || null, tipo: req.query.tipo || null });
+      resultado.push({ mes: mesRef, ...resumo });
+    }
+    res.json({ meses: resultado });
+  } catch (e) {
+    console.error('Erro /erp/analise-os/tendencia:', e.message);
+    res.status(500).json({ erro: 'Erro ao montar a tendência da Análise de O.S.: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// Layout livre (x/y/width/height) dos painéis da tela — mesma ideia da
+// Análise da Meta de Cobrança: qualquer um vê, só admin/gestor reorganiza.
+const PODE_AJUSTAR_LAYOUT_ANALISE_OS = ['admin', 'gestor'];
+router.get('/analise-os/layout', async (req, res) => {
+  try {
+    const row = await pget('SELECT layout FROM analise_os_layout WHERE empresa_id=$1', [req.usuario.empresa_id]);
+    res.json({ layout: row?.layout || null });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+router.put('/analise-os/layout', async (req, res) => {
+  try {
+    if (!PODE_AJUSTAR_LAYOUT_ANALISE_OS.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const layout = req.body.layout;
+    if (!Array.isArray(layout)) return res.status(400).json({ erro: 'Layout inválido' });
+    await run(
+      `INSERT INTO analise_os_layout (empresa_id, layout, atualizado_em) VALUES ($1,$2,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET layout=EXCLUDED.layout, atualizado_em=NOW()`,
+      [req.usuario.empresa_id, JSON.stringify(layout)]
+    );
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── GET /api/erp/agendamentos — OS agendadas por cidade/bairro/rua/dia/semana/mês,
+// com status aguardando/em_execucao/concluida/atrasada. Eixo temporal = data
+// AGENDADA (data_inicio_programado), diferente de /analise-os (data de abertura).
+// Mesmo padrão de cache do /analise-os (cache do job syncAgendamentos, busca ao
+// vivo e persiste se estiver velho/ausente).
+async function agendamentosCacheados(mesRef, dataInicio, dataFim) {
+  const row = await pget('SELECT dados, atualizado_em FROM agendamentos_cache WHERE mes=$1', [mesRef]);
+  const idadeMin = row ? (Date.now() - new Date(row.atualizado_em).getTime()) / 60000 : Infinity;
+  if (row && idadeMin < 15) return { ordens: row.dados, cache_atualizado_em: row.atualizado_em };
+  const { buscarAgendamentos } = require('../jobs/agendamentos');
+  const ordens = await buscarAgendamentos({ dataInicio, dataFim });
+  try {
+    await run(
+      `INSERT INTO agendamentos_cache (mes, dados, atualizado_em) VALUES ($1,$2,NOW())
+       ON CONFLICT (mes) DO UPDATE SET dados=EXCLUDED.dados, atualizado_em=NOW()`,
+      [mesRef, JSON.stringify(ordens)]
+    );
+  } catch (e) { console.error('[agendamentos] erro ao salvar cache:', e.message); }
+  return { ordens, cache_atualizado_em: null };
+}
+
+function filtrosAgendamentos(query) {
+  return {
+    cidade: query.cidade || null,
+    bairro: query.bairro || null,
+    rua: query.rua || null,
+    tecnico: query.tecnico || null,
+    equipe: query.equipe || null,
+    tipo: query.tipo || null,
+    status: query.status || null,
+  };
+}
+
+router.get('/agendamentos', async (req, res) => {
+  try {
+    const { mesRef, dataInicio, dataFim } = mesEIntervalo(req.query.mes);
+    const { agregarAgendamentos } = require('../jobs/agendamentos');
+    const { ordens, cache_atualizado_em } = await agendamentosCacheados(mesRef, dataInicio, dataFim);
+    const dados = agregarAgendamentos(ordens, filtrosAgendamentos(req.query));
+    res.json({ mes: mesRef, cache_atualizado_em, ...dados });
+  } catch (e) {
+    console.error('Erro /erp/agendamentos:', e.message);
+    res.status(500).json({ erro: 'Erro ao montar os Agendamentos: ' + e.message.replace('HUBSOFT', 'HubSoft') });
+  }
+});
+
+// Tendência de vários meses (só o resumo por status de cada mês) — mesmo
+// princípio de /analise-os/tendencia: roda em sequência (não em paralelo) pra
+// não disparar várias buscas pesadas no HubSoft ao mesmo tempo; meses fora do
+// cache atual/anterior/próximo ficam salvos aqui pra próxima consulta ser rápida.
+router.get('/agendamentos/tendencia', async (req, res) => {
+  try {
+    const n = Math.min(Math.max(parseInt(req.query.meses, 10) || 6, 2), 12);
+    const { agregarAgendamentos } = require('../jobs/agendamentos');
+    const hoje = new Date();
+    const meses = [];
+    for (let i = n - 1; i >= 0; i--) {
+      const d = new Date(hoje.getFullYear(), hoje.getMonth() - i, 1);
+      meses.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    const resultado = [];
+    for (const mesRef of meses) {
+      const { dataInicio, dataFim } = mesEIntervalo(mesRef);
+      const { ordens } = await agendamentosCacheados(mesRef, dataInicio, dataFim);
+      const { resumo } = agregarAgendamentos(ordens, filtrosAgendamentos(req.query));
+      resultado.push({ mes: mesRef, ...resumo });
+    }
+    res.json({ meses: resultado });
+  } catch (e) {
+    console.error('Erro /erp/agendamentos/tendencia:', e.message);
+    res.status(500).json({ erro: 'Erro ao montar a tendência dos Agendamentos: ' + e.message.replace('HUBSOFT', 'HubSoft') });
   }
 });
 
