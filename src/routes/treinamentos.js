@@ -175,26 +175,90 @@ router.get('/alertas-reciclagem', async (req, res) => {
 });
 
 // Salva os módulos de uma trilha (e os pops/sub-módulos de cada um). Usado
-// tanto na criação quanto na edição — sempre substitui tudo do zero, é mais
-// simples e evita ordem/id dessincronizados entre módulos e pops.
+// tanto na criação quanto na edição.
+//
+// CUIDADO: isto NÃO pode ser um DELETE+recria do zero — um módulo/tópico que
+// já existe carrega progresso real (concluido, tempo_realizado, status_pop,
+// checklist_marcado, data_inicio_real/fim_real, anotações e avaliações
+// vinculadas por pop_id/modulo_id). Recriar com um UUID novo perde esse
+// progresso mesmo que a edição fosse só, por exemplo, trocar o responsável
+// da trilha (bug real: qualquer edição — inclusive de uma trilha JÁ
+// atribuída a um colaborador, via o botão "Editar" — zerava o progresso
+// inteiro dela; achado em auditoria, 27/08/2026, mesma família do bug que
+// já tinha derrubado o progresso de 100% de uma trilha antes, 18/08/2026).
+//
+// Estratégia: casa cada TÓPICO recebido, em TODO o treinamento (não só
+// dentro do módulo "correspondente"), por pop_id (quando tem POP — é um id
+// estável e único) ou por titulo (quando é tópico-texto sem POP). Um tópico
+// com pop_id sobrevive a qualquer reorganização de módulo/nome. Só depois
+// disso resolve o módulo (por nome, com fallback de posição) — e se o
+// tópico já existia só migra ele de módulo, nunca perde o progresso.
 async function salvarModulos(treinamentoId, modulos) {
-  await run(`DELETE FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id IS NOT NULL`, [treinamentoId]);
-  await run(`DELETE FROM treinamento_modulos WHERE treinamento_id=$1`, [treinamentoId]);
   if (!Array.isArray(modulos)) return;
+
+  const modulosExistentes = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1', [treinamentoId]);
+  const topicosExistentes = await all('SELECT * FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id IS NOT NULL', [treinamentoId]);
+  const modulosVistoIds = new Set();
+  const topicosVistoIds = new Set();
+
   for (const [mi, mod] of modulos.entries()) {
-    const moduloId = uuidv4();
-    await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id, data_prevista) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
-      [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null]);
-    for (const [pi, item] of (mod.pops || []).entries()) {
-      // Sub-módulo pode ser só um tópico em texto (sem POP) — titulo/descricao
-      // valem nesse caso; com POP, o título vem do próprio POP, mas a
-      // descrição (texto explicando o tópico) continua podendo ser usada.
-      await run(`INSERT INTO treinamento_pops
-        (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
-        VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9,$10,$11)
-        ON CONFLICT DO NOTHING
-      `, [uuidv4(), treinamentoId, item.pop_id || null, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId, item.titulo || null, item.descricao || null]);
+    // Casa o módulo por nome primeiro; se não achar (nome mudou), casa pela
+    // MESMA POSIÇÃO (mi) entre os módulos ainda não vistos — cobre o caso
+    // comum de só renomear o módulo sem reordenar nada.
+    let existente = modulosExistentes.find(m => m.nome === mod.nome && !modulosVistoIds.has(m.id));
+    if (!existente) {
+      const naoVistos = modulosExistentes.filter(m => !modulosVistoIds.has(m.id));
+      existente = naoVistos[mi] || naoVistos[0] || null;
     }
+    let moduloId;
+    if (existente) {
+      moduloId = existente.id;
+      modulosVistoIds.add(moduloId);
+      await run(`UPDATE treinamento_modulos SET nome=$1, ordem=$2, colaborador_id=$3, instrutor_id=$4, data_prevista=$5, removido_em=NULL, removido_por=NULL WHERE id=$6`,
+        [mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null, moduloId]);
+    } else {
+      moduloId = uuidv4();
+      modulosVistoIds.add(moduloId);
+      await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, colaborador_id, instrutor_id, data_prevista) VALUES ($1,$2,$3,$4,$5,$6,$7)`,
+        [moduloId, treinamentoId, mod.nome, mi, mod.colaborador_id || null, mod.instrutor_id || null, mod.data_prevista || null]);
+    }
+
+    for (const [pi, item] of (mod.pops || []).entries()) {
+      const existenteTopico = topicosExistentes.find(t =>
+        !topicosVistoIds.has(t.id) && (
+          (item.pop_id && t.pop_id === item.pop_id) ||
+          (!item.pop_id && !t.pop_id && t.titulo === item.titulo)
+        )
+      );
+      if (existenteTopico) {
+        topicosVistoIds.add(existenteTopico.id);
+        // Só atualiza campos de CONTEÚDO — nunca toca em concluido,
+        // tempo_realizado, status_pop, checklist_marcado, datas reais.
+        // modulo_id É atualizado: o tópico segue seu pop_id, não o módulo
+        // antigo, então se ele mudou de módulo/nome isso migra corretamente.
+        await run(`UPDATE treinamento_pops SET
+          ordem=$1, instrutor_id=$2, tempo_estimado=$3, topicos=$4, data_prevista=$5, titulo=$6, descricao=$7, modulo_id=$8
+          WHERE id=$9`,
+          [pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, item.titulo || null, item.descricao || null, moduloId, existenteTopico.id]);
+      } else {
+        const novoId = uuidv4();
+        topicosVistoIds.add(novoId);
+        await run(`INSERT INTO treinamento_pops
+          (id, treinamento_id, pop_id, ordem, instrutor_id, tempo_estimado, topicos, versao_pop, data_prevista, modulo_id, titulo, descricao)
+          VALUES ($1,$2,$3,$4,$5,$6,$7,(SELECT versao FROM pops WHERE id = $3),$8,$9,$10,$11)
+          ON CONFLICT DO NOTHING
+        `, [novoId, treinamentoId, item.pop_id || null, pi, item.instrutor_id || null, item.tempo_estimado || 0, item.topicos || null, item.data_prevista || null, moduloId, item.titulo || null, item.descricao || null]);
+      }
+    }
+  }
+  // Módulos que existiam mas não vieram mais no payload: marca como
+  // removido (soft, reversível) em vez de DELETE — preserva o progresso.
+  // Tópicos cujo pop_id não veio mais no payload também não são tocados
+  // (continuam com seu modulo_id antigo); se esse módulo foi removido, o
+  // tópico fica junto — nunca é apagado, só deixa de aparecer.
+  const modulosParaRemover = modulosExistentes.filter(m => !modulosVistoIds.has(m.id) && !m.removido_em);
+  for (const m of modulosParaRemover) {
+    await run(`UPDATE treinamento_modulos SET removido_em=NOW(), removido_por='edicao-preserva-progresso' WHERE id=$1`, [m.id]);
   }
 }
 
@@ -296,14 +360,49 @@ router.get('/trilhas-catalogo/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Casa cada tópico recebido com um já existente (por pop_id, ou por titulo
+// quando é tópico-texto sem POP) e faz UPDATE no lugar — NUNCA apaga+recria
+// com id novo. O id do tópico do catálogo (trilha_catalogo_topicos.id) é
+// referenciado por trilha_catalogo_avaliacoes E, indiretamente, pela
+// propagação pra colaboradores (ver sincronizarTreinamentoComColaboradores)
+// — recriar com id novo a cada save fazia o sistema achar que TUDO era
+// conteúdo novo e duplicar os módulos pra quem já estava treinando, toda
+// vez que a Trilha era salva (bug real, 26/08/2026).
 async function salvarTopicosCatalogo(moduloCatalogoId, topicos) {
-  await run('DELETE FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [moduloCatalogoId]);
   if (!Array.isArray(topicos)) return;
+  const existentes = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [moduloCatalogoId]);
+  const vistoIds = new Set();
+
   for (const [i, item] of topicos.entries()) {
-    await run(`INSERT INTO trilha_catalogo_topicos
-      (id, trilha_catalogo_modulo_id, pop_id, titulo, descricao, ordem, tempo_estimado, topicos, versao_pop)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT versao FROM pops WHERE id = $3))
-    `, [uuidv4(), moduloCatalogoId, item.pop_id || null, item.titulo || null, item.descricao || null, i, item.tempo_estimado || 0, item.topicos || null]);
+    const existente = existentes.find(t =>
+      !vistoIds.has(t.id) && (
+        (item.pop_id && t.pop_id === item.pop_id) ||
+        (!item.pop_id && !t.pop_id && t.titulo === item.titulo)
+      )
+    );
+    if (existente) {
+      vistoIds.add(existente.id);
+      await run(`UPDATE trilha_catalogo_topicos SET
+        pop_id=$1, titulo=$2, descricao=$3, ordem=$4, tempo_estimado=$5, topicos=$6, versao_pop=(SELECT versao FROM pops WHERE id = $1)
+        WHERE id=$7`,
+        [item.pop_id || null, item.titulo || null, item.descricao || null, i, item.tempo_estimado || 0, item.topicos || null, existente.id]);
+    } else {
+      const novoId = uuidv4();
+      vistoIds.add(novoId);
+      await run(`INSERT INTO trilha_catalogo_topicos
+        (id, trilha_catalogo_modulo_id, pop_id, titulo, descricao, ordem, tempo_estimado, topicos, versao_pop)
+        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,(SELECT versao FROM pops WHERE id = $3))
+      `, [novoId, moduloCatalogoId, item.pop_id || null, item.titulo || null, item.descricao || null, i, item.tempo_estimado || 0, item.topicos || null]);
+    }
+  }
+
+  // Tópicos que saíram do payload: removidos de vez (o catálogo é só o
+  // "molde" — não guarda progresso; quem já tem a cópia propagada mantém a
+  // dela intacta).
+  const paraRemover = existentes.filter(t => !vistoIds.has(t.id));
+  for (const t of paraRemover) {
+    await run('DELETE FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_topico_id=$1', [t.id]);
+    await run('DELETE FROM trilha_catalogo_topicos WHERE id=$1', [t.id]);
   }
 }
 
@@ -321,22 +420,48 @@ async function salvarAvaliacoesCatalogo(moduloCatalogoId, avaliacoes) {
   }
 }
 
-// Substitui TODOS os módulos da Trilha do catálogo — mesmo padrão de
-// salvarModulos() usado pro modelo antigo (DELETE + recria do zero).
+// Casa cada módulo recebido com um já existente (por nome, com fallback de
+// posição) e faz UPDATE no lugar — NUNCA apaga+recria com id novo. O id do
+// módulo do catálogo (trilha_catalogo_modulos.id) é o que
+// sincronizarTreinamentoComColaboradores() usa pra saber "esse colaborador
+// já tem esse módulo?" (treinamento_modulos.trilha_catalogo_modulo_id) — um
+// id novo a cada save fazia TODOS os módulos parecerem novos, duplicando-os
+// pra cada colaborador já vinculado toda vez que a Trilha era salva (bug
+// real, 26/08/2026, causou dezenas de módulos duplicados na trilha do Call
+// Center — ver limpeza em 26/08/2026).
 async function salvarModulosCatalogo(trilhaCatalogoId, modulos) {
-  const antigos = await all('SELECT id FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1', [trilhaCatalogoId]);
-  for (const m of antigos) {
-    await run('DELETE FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1', [m.id]);
-    await run('DELETE FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [m.id]);
-  }
-  await run('DELETE FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1', [trilhaCatalogoId]);
   if (!Array.isArray(modulos)) return;
+  const modulosExistentes = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1', [trilhaCatalogoId]);
+  const modulosVistoIds = new Set();
+
   for (const [i, mod] of modulos.entries()) {
-    const moduloCatalogoId = uuidv4();
-    await run('INSERT INTO trilha_catalogo_modulos (id, trilha_catalogo_id, nome, ordem) VALUES ($1,$2,$3,$4)',
-      [moduloCatalogoId, trilhaCatalogoId, mod.nome, i]);
+    let existente = modulosExistentes.find(m => m.nome === mod.nome && !modulosVistoIds.has(m.id));
+    if (!existente) {
+      const naoVistos = modulosExistentes.filter(m => !modulosVistoIds.has(m.id));
+      existente = naoVistos[i] || null;
+    }
+    let moduloCatalogoId;
+    if (existente) {
+      moduloCatalogoId = existente.id;
+      modulosVistoIds.add(moduloCatalogoId);
+      await run('UPDATE trilha_catalogo_modulos SET nome=$1, ordem=$2 WHERE id=$3', [mod.nome, i, moduloCatalogoId]);
+    } else {
+      moduloCatalogoId = uuidv4();
+      modulosVistoIds.add(moduloCatalogoId);
+      await run('INSERT INTO trilha_catalogo_modulos (id, trilha_catalogo_id, nome, ordem) VALUES ($1,$2,$3,$4)',
+        [moduloCatalogoId, trilhaCatalogoId, mod.nome, i]);
+    }
     await salvarTopicosCatalogo(moduloCatalogoId, mod.topicos);
     await salvarAvaliacoesCatalogo(moduloCatalogoId, mod.avaliacoes);
+  }
+
+  // Módulos que saíram do payload: removidos de vez (mesmo raciocínio dos
+  // tópicos — o catálogo não guarda progresso).
+  const paraRemover = modulosExistentes.filter(m => !modulosVistoIds.has(m.id));
+  for (const m of paraRemover) {
+    await run('DELETE FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1', [m.id]);
+    await run('DELETE FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1', [m.id]);
+    await run('DELETE FROM trilha_catalogo_modulos WHERE id=$1', [m.id]);
   }
 }
 
@@ -389,6 +514,66 @@ router.delete('/trilhas-catalogo/:id', async (req, res) => {
   } catch(e) { res.status(500).json({ erro: e.message }); }
 });
 
+// POST /api/treinamentos/trilhas-catalogo/:id/atribuir — atribui a Trilha do
+// catálogo a vários colaboradores de uma vez (cada um recebe seu vínculo
+// individual, com progresso próprio). Se o colaborador ainda não tiver um
+// Treinamento (vínculo) na Trilha Principal informada, cria um automaticamente
+// — permite marcar departamento(s) inteiro(s) + pessoas avulsas numa tacada só,
+// sem precisar montar o vínculo de pasta manualmente antes.
+router.post('/trilhas-catalogo/:id/atribuir', async (req, res) => {
+  try {
+    const trilha = await get('SELECT * FROM trilhas_catalogo WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [req.params.id, req.usuario.empresa_id]);
+    if (!trilha) return res.status(404).json({ erro: 'Trilha não encontrada' });
+    const { colaboradores_ids, trilha_principal_id, responsavel_id, data_hora } = req.body;
+    if (!Array.isArray(colaboradores_ids) || !colaboradores_ids.length) return res.status(400).json({ erro: 'Selecione ao menos um colaborador' });
+    if (!trilha_principal_id) return res.status(400).json({ erro: 'Selecione a Trilha Principal (pasta) que vai receber essa atribuição' });
+
+    const modulosCatalogo = await all('SELECT * FROM trilha_catalogo_modulos WHERE trilha_catalogo_id=$1 ORDER BY ordem', [req.params.id]);
+    if (!modulosCatalogo.length) return res.status(400).json({ erro: 'Essa trilha ainda não tem nenhum módulo cadastrado' });
+
+    const pasta = await get('SELECT nome FROM treinamento_trilhas_principais WHERE id=$1 AND empresa_id=$2', [trilha_principal_id, req.usuario.empresa_id]);
+    if (!pasta) return res.status(404).json({ erro: 'Trilha Principal não encontrada' });
+
+    const atribuidos = [];
+    const jaTinham = [];
+    for (const colaboradorId of colaboradores_ids) {
+      let treinamento = await get(
+        `SELECT id FROM treinamentos WHERE colaborador_id=$1 AND trilha_principal_id=$2 AND eh_modelo=0 AND excluido_em IS NULL`,
+        [colaboradorId, trilha_principal_id]
+      );
+      let treinamentoId = treinamento?.id;
+      if (!treinamentoId) {
+        const colaborador = await get('SELECT nome FROM usuarios WHERE id=$1 AND empresa_id=$2', [colaboradorId, req.usuario.empresa_id]);
+        if (!colaborador) continue;
+        treinamentoId = uuidv4();
+        await run(
+          `INSERT INTO treinamentos (id, empresa_id, titulo, tipo_trilha, colaborador_id, responsavel_id, data_hora, trilha_principal_id, eh_modelo, status_agenda)
+           VALUES ($1,$2,$3,'onboarding',$4,$5,$6,$7,0,'agendado')`,
+          [treinamentoId, req.usuario.empresa_id, `${pasta.nome} — ${colaborador.nome}`, colaboradorId, responsavel_id || null, data_hora || null, trilha_principal_id]
+        );
+      }
+
+      const jaTem = await get(
+        `SELECT tm.id FROM treinamento_modulos tm JOIN trilha_catalogo_modulos tcm ON tcm.id = tm.trilha_catalogo_modulo_id
+         WHERE tm.treinamento_id=$1 AND tcm.trilha_catalogo_id=$2 AND tm.removido_em IS NULL LIMIT 1`,
+        [treinamentoId, req.params.id]
+      );
+      if (jaTem) { jaTinham.push(colaboradorId); continue; }
+
+      for (const modCat of modulosCatalogo) {
+        const maxOrdem = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_modulos WHERE treinamento_id=$1', [treinamentoId]);
+        const moduloId = uuidv4();
+        await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, trilha_catalogo_modulo_id) VALUES ($1,$2,$3,$4,$5)`,
+          [moduloId, treinamentoId, modCat.nome, (maxOrdem?.m ?? -1) + 1, modCat.id]);
+        await propagarTopicosEAvaliacoes(modCat.id, treinamentoId, moduloId, null);
+      }
+      atribuidos.push(colaboradorId);
+    }
+
+    res.status(201).json({ mensagem: `Trilha atribuída a ${atribuidos.length} colaborador(es)`, atribuidos, jaTinham });
+  } catch(e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ── COMPOSIÇÃO: Treinamento (pasta) ↔ Trilhas do catálogo ──────────────────
 
 // GET /api/treinamentos/treinamentos-principais/:id/trilhas — trilhas que
@@ -435,12 +620,25 @@ router.delete('/treinamentos-principais/:id/trilhas/:trilha_catalogo_id', async 
 
 // Copia os tópicos e avaliações do TEMPLATE de UM módulo do catálogo
 // (trilha_catalogo_topicos / trilha_catalogo_avaliacoes daquele módulo) pro
-// vínculo individual (treinamento_pops / treinamento_avaliacoes) recém-criado
-// — usado tanto pela propagação automática (sincronizarTreinamentoComColaboradores)
+// vínculo individual (treinamento_pops / treinamento_avaliacoes) — usado
+// tanto pela propagação automática (sincronizarTreinamentoComColaboradores)
 // quanto pela vinculação manual de 1 colaborador (POST /:treinamento_id/trilhas-colaborador).
+// Faz upsert por posição: tópico/avaliação que já existe no vínculo (casado
+// por trilha_catalogo_topico_id / titulo+pop_id) só tem o `ordem` realinhado
+// com a posição atual no catálogo — nunca mexe em progresso (concluido,
+// status_pop, tempo_realizado, checklist_marcado, datas reais). O que não
+// existe ainda é criado na posição certa (não só anexado no fim).
 async function propagarTopicosEAvaliacoes(moduloCatalogoId, treinamentoId, moduloId, instrutorId) {
   const topicosCatalogo = await all('SELECT * FROM trilha_catalogo_topicos WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
+  const popsExistentes = await all('SELECT id, trilha_catalogo_topico_id FROM treinamento_pops WHERE treinamento_id=$1 AND modulo_id=$2', [treinamentoId, moduloId]);
+  const popPorTopicoCatalogo = new Map(popsExistentes.filter(p => p.trilha_catalogo_topico_id).map(p => [p.trilha_catalogo_topico_id, p]));
+
   for (const [i, topico] of topicosCatalogo.entries()) {
+    const existente = popPorTopicoCatalogo.get(topico.id);
+    if (existente) {
+      await run('UPDATE treinamento_pops SET ordem=$1 WHERE id=$2', [i, existente.id]);
+      continue;
+    }
     // ON CONFLICT: dois saves quase simultâneos da mesma Trilha (duplo clique,
     // duas abas) podem disparar essa propagação em paralelo pro mesmo colaborador
     // — sem isso, o segundo INSERT batia na constraint única (treinamento_id,
@@ -451,16 +649,24 @@ async function propagarTopicosEAvaliacoes(moduloCatalogoId, treinamentoId, modul
       ON CONFLICT (treinamento_id, pop_id) DO NOTHING
     `, [uuidv4(), treinamentoId, topico.pop_id, i, instrutorId || null, topico.tempo_estimado, topico.topicos, topico.versao_pop, moduloId, topico.titulo, topico.descricao, topico.id]);
   }
+
   const avaliacoesCatalogo = await all('SELECT * FROM trilha_catalogo_avaliacoes WHERE trilha_catalogo_modulo_id=$1 ORDER BY ordem', [moduloCatalogoId]);
-  for (const av of avaliacoesCatalogo) {
+  const avaliacoesExistentes = await all('SELECT id, pop_id, titulo FROM treinamento_avaliacoes WHERE treinamento_id=$1 AND modulo_id=$2', [treinamentoId, moduloId]);
+  for (const [i, av] of avaliacoesCatalogo.entries()) {
     // av.trilha_catalogo_topico_id referencia trilha_catalogo_topicos.id; a
     // avaliação em treinamento_avaliacoes usa pop_id = id do POP real (mesma
     // convenção já usada em treinamento_avaliacoes.pop_id) — resolve olhando
     // o pop_id do tópico do catálogo correspondente.
     const topicoCatalogo = topicosCatalogo.find(t => t.id === av.trilha_catalogo_topico_id);
+    const popIdReferente = topicoCatalogo?.pop_id || null;
+    const existente = avaliacoesExistentes.find(a => a.titulo === av.titulo && a.pop_id === popIdReferente);
+    if (existente) {
+      await run('UPDATE treinamento_avaliacoes SET ordem=$1 WHERE id=$2', [i, existente.id]);
+      continue;
+    }
     await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
-      [uuidv4(), treinamentoId, topicoCatalogo?.pop_id || null, moduloId, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
+      [uuidv4(), treinamentoId, popIdReferente, moduloId, av.titulo, av.tipo, av.perguntas, av.obrigatorio, i]);
   }
 }
 
@@ -468,7 +674,10 @@ async function propagarTopicosEAvaliacoes(moduloCatalogoId, treinamentoId, modul
 // já vinculados ao Treinamento (treinamento_principal_id) — cria 1 vínculo
 // (treinamento_modulos com trilha_catalogo_modulo_id, sem instrutor, status
 // "não iniciada") POR MÓDULO da trilha + copia os tópicos/avaliações do
-// catálogo, SEM progresso. Nunca toca em quem já tem o vínculo daquele módulo.
+// catálogo, SEM progresso. Módulo que já existe no vínculo só tem o `ordem`
+// realinhado com a posição atual no catálogo (não duplica, não mexe em
+// progresso) — sem isso, reordenar a trilha no catálogo não refletia em
+// "Meus Treinamentos" pra quem já tinha o módulo vinculado antes.
 async function sincronizarTreinamentoComColaboradores(treinamentoPrincipalId, trilhaCatalogoId, empresaId) {
   const trilha = await get('SELECT * FROM trilhas_catalogo WHERE id=$1 AND empresa_id=$2 AND excluido_em IS NULL', [trilhaCatalogoId, empresaId]);
   if (!trilha) return { colaboradores: 0, vinculosNovos: 0 };
@@ -482,21 +691,25 @@ async function sincronizarTreinamentoComColaboradores(treinamentoPrincipalId, tr
   let vinculosNovos = 0;
   for (const clone of colaboradoresTreinamento) {
     let algumModuloAdicionado = false;
-    for (const modCat of modulosCatalogo) {
+    for (const [i, modCat] of modulosCatalogo.entries()) {
       const jaTem = await get(
         'SELECT id FROM treinamento_modulos WHERE treinamento_id=$1 AND trilha_catalogo_modulo_id=$2',
         [clone.id, modCat.id]
       );
-      if (jaTem) continue; // já tem esse módulo vinculado — não duplica, não altera
 
-      const maxOrdemModulo = await get('SELECT COALESCE(MAX(ordem),-1) AS m FROM treinamento_modulos WHERE treinamento_id=$1', [clone.id]);
-      const moduloId = uuidv4();
-      await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, trilha_catalogo_modulo_id)
-        VALUES ($1,$2,$3,$4,$5)`,
-        [moduloId, clone.id, modCat.nome, (maxOrdemModulo?.m ?? -1) + 1, modCat.id]);
+      let moduloId;
+      if (jaTem) {
+        moduloId = jaTem.id;
+        await run('UPDATE treinamento_modulos SET ordem=$1 WHERE id=$2', [i, moduloId]);
+      } else {
+        moduloId = uuidv4();
+        await run(`INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem, trilha_catalogo_modulo_id)
+          VALUES ($1,$2,$3,$4,$5)`,
+          [moduloId, clone.id, modCat.nome, i, modCat.id]);
+        algumModuloAdicionado = true;
+      }
 
       await propagarTopicosEAvaliacoes(modCat.id, clone.id, moduloId, null);
-      algumModuloAdicionado = true;
     }
     if (algumModuloAdicionado) vinculosNovos++;
   }
@@ -586,15 +799,20 @@ router.put('/:id/status', async (req, res) => {
 router.put('/:id', async (req, res) => {
   try {
     const { titulo, tipo_trilha, departamento_id, responsavel_id, colaborador_id, data_hora, observacoes, status_agenda, pop_ids, modo_repasse, modulos, trilha_principal_id, ordem } = req.body;
-    // trilha_principal_id e ordem usam COALESCE: quando a chamada não manda
-    // esses campos (ex.: os PUTs "minimalistas" que só mudam status/tempo),
-    // mantém o valor já salvo em vez de apagar/zerar.
+    // trilha_principal_id, ordem e status_agenda usam COALESCE: quando a
+    // chamada não manda esses campos (ex.: edições feitas por telas que só
+    // mudam responsável/observações, sem saber o status atual do progresso),
+    // mantém o valor já salvo em vez de resetar pra "agendado" e apagar que a
+    // trilha já estava em andamento/concluída (achado em auditoria, 27/08/2026
+    // — toda edição de trilha zerava o status de volta pra "Agendado").
     await run(`UPDATE treinamentos SET
-      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7, status_agenda=$8, modo_repasse=$9,
+      titulo=$1, tipo_trilha=$2, departamento_id=$3, responsavel_id=$4, colaborador_id=$5, data_hora=$6, observacoes=$7,
+      status_agenda=COALESCE($8, status_agenda),
+      modo_repasse=$9,
       trilha_principal_id=COALESCE($12, trilha_principal_id),
       ordem=COALESCE($13, ordem)
       WHERE id=$10 AND empresa_id=$11
-    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || 'agendado', modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null, ordem !== undefined && ordem !== '' ? Number(ordem) : null]);
+    `, [titulo, tipo_trilha || 'onboarding', departamento_id || null, responsavel_id || null, colaborador_id || null, data_hora || null, observacoes || null, status_agenda || null, modo_repasse || 'completa', req.params.id, req.usuario.empresa_id, trilha_principal_id || null, ordem !== undefined && ordem !== '' ? Number(ordem) : null]);
 
     if (Array.isArray(modulos)) {
       await salvarModulos(req.params.id, modulos);
@@ -1067,9 +1285,11 @@ async function clonarTrilha(origemId, empresaId, overrides = {}) {
 // não recebem isso automaticamente — clonarTrilha só copia uma vez, na hora
 // de atribuir. Essa função soma nos clones o que falta, SEM apagar/tocar no
 // que já existe lá (progresso, status_pop, tempo_realizado, checklist_
-// marcado, datas reais — tudo preservado). Casamento módulo↔módulo é por
-// NOME (o id muda em cada clone); tópico↔tópico é por pop_id quando existe,
-// senão por título (tópico só-texto, sem POP).
+// marcado, datas reais — tudo preservado); o único campo que É realinhado em
+// item já existente é o `ordem`, pra reordenar o modelo refletir em "Meus
+// Treinamentos". Casamento módulo↔módulo é por NOME (o id muda em cada
+// clone); tópico↔tópico é por pop_id quando existe, senão por título (tópico
+// só-texto, sem POP).
 async function sincronizarModeloComClones(modeloId, empresaId) {
   const clones = await all(
     'SELECT id FROM treinamentos WHERE modelo_origem_id=$1 AND empresa_id=$2 AND excluido_em IS NULL',
@@ -1086,41 +1306,45 @@ async function sincronizarModeloComClones(modeloId, empresaId) {
   for (const clone of clones) {
     const modulosClone = await all('SELECT * FROM treinamento_modulos WHERE treinamento_id=$1', [clone.id]);
     const modulosPorNome = new Map(modulosClone.map(m => [m.nome, m]));
-    const maxOrdemModulo = modulosClone.reduce((max, m) => Math.max(max, m.ordem || 0), -1);
     const mapaModuloModeloParaClone = new Map(); // id do módulo no MODELO -> id do módulo no CLONE
 
-    // 1) Módulos que faltam no clone — cria mantendo o nome/ordem do modelo,
-    // sem tocar nos módulos que já existiam (não altera nome/ordem deles).
-    let proximaOrdem = maxOrdemModulo + 1;
-    for (const m of modulosModelo) {
+    // 1) Módulos — cria os que faltam no clone e realinha o `ordem` dos que já
+    // existem com a posição atual no modelo (nome/conteúdo não são tocados).
+    for (const [i, m] of modulosModelo.entries()) {
       let existente = modulosPorNome.get(m.nome);
       if (!existente) {
         const novoModuloId = uuidv4();
         await run('INSERT INTO treinamento_modulos (id, treinamento_id, nome, ordem) VALUES ($1,$2,$3,$4)',
-          [novoModuloId, clone.id, m.nome, proximaOrdem++]);
+          [novoModuloId, clone.id, m.nome, i]);
         modulosAdicionados++;
-        existente = { id: novoModuloId, nome: m.nome };
+        existente = { id: novoModuloId, nome: m.nome, ordem: i };
         modulosPorNome.set(m.nome, existente);
+      } else if (existente.ordem !== i) {
+        await run('UPDATE treinamento_modulos SET ordem=$1 WHERE id=$2', [i, existente.id]);
       }
       mapaModuloModeloParaClone.set(m.id, existente.id);
     }
 
-    // 2) Tópicos/POPs que faltam no clone, dentro do módulo correspondente —
-    // casamento por pop_id (quando tem POP) ou por título (tópico só-texto).
-    const popsClone = await all('SELECT pop_id, titulo, modulo_id FROM treinamento_pops WHERE treinamento_id=$1', [clone.id]);
+    // 2) Tópicos/POPs — cria os que faltam no clone (casamento por pop_id
+    // quando tem POP, senão por título) e realinha o `ordem` dos que já
+    // existem com a posição atual dentro do módulo, no modelo.
+    const popsClone = await all('SELECT id, pop_id, titulo, modulo_id, ordem FROM treinamento_pops WHERE treinamento_id=$1', [clone.id]);
     const chavePop = p => p.pop_id ? `pop:${p.pop_id}` : `titulo:${p.titulo}`;
-    const chavesJaNoClone = new Set(popsClone.map(chavePop));
-    const maxOrdemPopPorModulo = new Map();
-    for (const p of popsClone) {
-      const atual = maxOrdemPopPorModulo.get(p.modulo_id) || -1;
-      maxOrdemPopPorModulo.set(p.modulo_id, Math.max(atual, p.ordem || 0));
-    }
+    const popsClonePorChave = new Map(popsClone.map(p => [chavePop(p), p]));
+    const ordemPopPorModulo = new Map();
 
     for (const p of popsModelo) {
-      if (chavesJaNoClone.has(chavePop(p))) continue; // já existe nesse clone — não duplica, não altera
       const moduloCloneId = p.modulo_id ? mapaModuloModeloParaClone.get(p.modulo_id) : null;
-      const proximaOrdemPop = (maxOrdemPopPorModulo.get(moduloCloneId) ?? -1) + 1;
-      maxOrdemPopPorModulo.set(moduloCloneId, proximaOrdemPop);
+      const proximaOrdemPop = (ordemPopPorModulo.get(moduloCloneId) ?? -1) + 1;
+      ordemPopPorModulo.set(moduloCloneId, proximaOrdemPop);
+
+      const existente = popsClonePorChave.get(chavePop(p));
+      if (existente) {
+        if (existente.ordem !== proximaOrdemPop) {
+          await run('UPDATE treinamento_pops SET ordem=$1 WHERE id=$2', [proximaOrdemPop, existente.id]);
+        }
+        continue;
+      }
       // ON CONFLICT: dois saves quase simultâneos do MESMO modelo (duplo clique
       // em "Salvar", ou duas abas editando) disparam essa sincronização em
       // paralelo — sem isso, o segundo INSERT do mesmo pop_id pro mesmo clone
@@ -1135,13 +1359,20 @@ async function sincronizarModeloComClones(modeloId, empresaId) {
       if (resultado.changes > 0) itensAdicionados++;
     }
 
-    // 3) Avaliações novas do modelo (de módulo ou de tópico) que faltam no clone.
-    const avaliacoesClone = await all('SELECT pop_id, modulo_id, titulo FROM treinamento_avaliacoes WHERE treinamento_id=$1', [clone.id]);
+    // 3) Avaliações — cria as que faltam no clone e realinha o `ordem` das
+    // que já existem (de módulo ou de tópico) com a posição atual no modelo.
+    const avaliacoesClone = await all('SELECT id, pop_id, modulo_id, titulo, ordem FROM treinamento_avaliacoes WHERE treinamento_id=$1', [clone.id]);
     const chaveAval = a => `${a.modulo_id || ''}|${a.pop_id || ''}|${a.titulo}`;
-    const chavesAvalJaNoClone = new Set(avaliacoesClone.map(chaveAval));
+    const avaliacoesClonePorChave = new Map(avaliacoesClone.map(a => [chaveAval(a), a]));
     for (const av of avaliacoesModelo) {
       const moduloCloneId = av.modulo_id ? mapaModuloModeloParaClone.get(av.modulo_id) : null;
-      if (chavesAvalJaNoClone.has(chaveAval({ ...av, modulo_id: moduloCloneId }))) continue;
+      const existente = avaliacoesClonePorChave.get(chaveAval({ ...av, modulo_id: moduloCloneId }));
+      if (existente) {
+        if (existente.ordem !== av.ordem) {
+          await run('UPDATE treinamento_avaliacoes SET ordem=$1 WHERE id=$2', [av.ordem, existente.id]);
+        }
+        continue;
+      }
       await run(`INSERT INTO treinamento_avaliacoes (id, treinamento_id, pop_id, modulo_id, titulo, tipo, perguntas, obrigatorio, ordem)
         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)`,
         [uuidv4(), clone.id, av.pop_id, moduloCloneId, av.titulo, av.tipo, av.perguntas, av.obrigatorio, av.ordem]);
