@@ -586,6 +586,35 @@ async function analiseCobrancaCacheada(mesRef, dataInicio, dataFim) {
   return { dados: await montarAnaliseCobranca({ dataInicio, dataFim }), cache_atualizado_em: null };
 }
 
+// Cobranças marcadas manualmente pra NÃO contar na meta (ex.: pagamento que não
+// deveria ter sido atribuído àquele cobrador). Guardadas à parte do cache — a
+// gestora desconsidera de verdade (afeta valor_recebido/bônus), mas o cache do
+// HubSoft continua puro, então re-sincronizar não perde a marcação.
+async function chavesDesconsideradasDe(empresaId, mesRef) {
+  const rows = await all('SELECT chave FROM meta_cobranca_desconsiderado WHERE empresa_id=$1 AND mes=$2', [empresaId, mesRef]);
+  return new Set(rows.map(r => r.chave));
+}
+function aplicarDesconsideracoes(dados, chavesDesconsideradas) {
+  if (!chavesDesconsideradas.size) return dados;
+  const descontoPorNome = new Map();
+  const recebimentos = (dados.recebimentos || []).map(f => {
+    const desconsiderado = chavesDesconsideradas.has(f.chave);
+    if (desconsiderado) descontoPorNome.set(f.cobrador, (descontoPorNome.get(f.cobrador) || 0) + f.valor_total);
+    return { ...f, desconsiderado };
+  });
+  const itens = (dados.itens || []).map(i => {
+    const desconto = descontoPorNome.get(i.nome) || 0;
+    if (!desconto) return i;
+    const valorRecebido = Math.round((i.valor_recebido - desconto) * 100) / 100;
+    const bonusRecebimento = Math.round(valorRecebido * 0.05 * 100) / 100;
+    return { ...i, valor_recebido: valorRecebido, bonus_recebimento: bonusRecebimento, bonus_total: Math.round((i.bonus_remocao + bonusRecebimento) * 100) / 100 };
+  });
+  return {
+    ...dados, itens, recebimentos,
+    resumo: dados.resumo ? { ...dados.resumo, bonus_total: itens.reduce((s, i) => s + i.bonus_total, 0) } : dados.resumo,
+  };
+}
+
 router.get('/meta-cobranca', autenticar, async (req, res) => {
   try {
     const { podeVerTudoNaMeta, mesmoEmail } = require('../utils/visibilidadeMeta');
@@ -597,9 +626,12 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const { dados, cache_atualizado_em } = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    const { dados: dadosBrutos, cache_atualizado_em } = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    const desconsideradas = await chavesDesconsideradasDe(req.usuario.empresa_id, mesRef);
+    const dados = aplicarDesconsideracoes(dadosBrutos, desconsideradas);
+    const podeDesconsiderar = PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil);
 
-    if (vTudo) return res.json({ mes: mesRef, cache_atualizado_em, ...dados });
+    if (vTudo) return res.json({ mes: mesRef, cache_atualizado_em, pode_desconsiderar: podeDesconsiderar, ...dados });
 
     // Casa cada item com o e-mail do usuário do sistema, pra achar a PRÓPRIA linha.
     const comEmail = await Promise.all(dados.itens.map(async i => ({ ...i, _email: await emailDoNomeHubsoft(req.usuario.empresa_id, i.nome) })));
@@ -610,7 +642,7 @@ router.get('/meta-cobranca', autenticar, async (req, res) => {
     const nomesProprios = new Set(itens.map(i => i.nome));
     const recebimentos = (dados.recebimentos || []).filter(r => nomesProprios.has(r.cobrador));
     res.json({
-      mes: mesRef, cache_atualizado_em, meta_efetividade: dados.meta_efetividade, itens, recebimentos, somente_proprio: true,
+      mes: mesRef, cache_atualizado_em, pode_desconsiderar: podeDesconsiderar, meta_efetividade: dados.meta_efetividade, itens, recebimentos, somente_proprio: true,
       resumo: {
         colaboradores: itens.length,
         total_os: itens.reduce((s, i) => s + i.total_os, 0),
@@ -635,7 +667,9 @@ router.get('/meta-cobranca/pdf', autenticar, async (req, res) => {
     const [ano, mes] = mesRef.split('-').map(Number);
     const ultimoDia = new Date(ano, mes, 0).getDate();
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const { dados } = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    const { dados: dadosBrutos } = await metaCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+    const desconsideradas = await chavesDesconsideradasDe(req.usuario.empresa_id, mesRef);
+    const dados = aplicarDesconsideracoes(dadosBrutos, desconsideradas);
 
     let payload = { mes: mesRef, ...dados };
     if (!vTudo) {
@@ -654,6 +688,32 @@ router.get('/meta-cobranca/pdf', autenticar, async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// Marca/desmarca uma cobrança pra não contar na meta/bônus de recebimento
+// (ex.: pagamento que não deveria ter sido atribuído àquele cobrador). Mesma
+// restrição de quem pode editar meta/bônus (admin/gestor/líder) — afeta valor
+// pago de verdade.
+router.post('/meta-cobranca/desconsiderar', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { mes, chave, desconsiderado } = req.body;
+    if (!/^\d{4}-\d{2}$/.test(mes || '')) return res.status(400).json({ erro: 'Mês inválido (use AAAA-MM).' });
+    if (!chave) return res.status(400).json({ erro: 'Chave da cobrança é obrigatória.' });
+
+    if (desconsiderado) {
+      await run(
+        `INSERT INTO meta_cobranca_desconsiderado (empresa_id, mes, chave, criado_por, criado_por_nome)
+         VALUES ($1,$2,$3,$4,$5)
+         ON CONFLICT (empresa_id, mes, chave) DO NOTHING`,
+        [req.usuario.empresa_id, mes, chave, req.usuario.id, req.usuario.nome || null]
+      );
+    } else {
+      await run('DELETE FROM meta_cobranca_desconsiderado WHERE empresa_id=$1 AND mes=$2 AND chave=$3',
+        [req.usuario.empresa_id, mes, chave]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
@@ -663,6 +723,36 @@ router.get('/meta-cobranca/analise', autenticar, async (req, res) => {
     const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
     const { dados, cache_atualizado_em } = await analiseCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
     res.json({ mes: mesRef, cache_atualizado_em, ...dados });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Botão manual "Enviar ao Discord" da tela de Análise da Cobrança — gera a
+// MESMA imagem que o disparo automático mensal (jobs/analiseCobrancaAuto) vai
+// usar, só que sob demanda, no mês que estiver selecionado na tela.
+router.post('/meta-cobranca/analise/discord', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const mesRef = /^\d{4}-\d{2}$/.test(req.body.mes || '') ? req.body.mes : new Date().toISOString().slice(0, 7);
+    const [ano, mes] = mesRef.split('-').map(Number);
+    const ultimoDia = new Date(ano, mes, 0).getDate();
+    const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const { dados } = await analiseCobrancaCacheada(mesRef, iso(1), iso(ultimoDia));
+
+    const { getConfig, resolverWebhook, postWebhookImagem, registrarEnvio } = require('../utils/discord');
+    const cfg = await getConfig(req.usuario.empresa_id);
+    if (!cfg || !cfg.ativo) return res.status(400).json({ erro: 'A integração do Discord não está ativa. Ative em Configurações.' });
+    const url = await resolverWebhook(req.usuario.empresa_id, cfg, 'analise_cobranca', req.body.canal_id);
+    if (!url) return res.status(400).json({ erro: 'Cadastre um canal do Discord primeiro (Configurações → Discord).' });
+
+    const { gerarImagemAnaliseCobrancaPng } = require('../utils/gerarImagemAnaliseCobranca');
+    const png = await gerarImagemAnaliseCobrancaPng(dados, mesRef);
+    const [anoRef, mesNum] = mesRef.split('-');
+    const nomeMes = new Date(Number(anoRef), Number(mesNum) - 1, 1).toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+    const conteudo = `📊 **Análise da Cobrança — ${nomeMes}**`;
+    const ok = await postWebhookImagem(url, png, `analise-cobranca-${mesRef}.png`, conteudo);
+    registrarEnvio(req.usuario.empresa_id, 'analise_cobranca', `Análise da Cobrança (${nomeMes})`, ok, ok ? null : 'Falha no envio');
+    if (!ok) return res.status(502).json({ erro: 'Não foi possível enviar ao Discord. Verifique o canal/webhook.' });
+    res.json({ ok: true });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
@@ -773,6 +863,27 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
     const totalCancel = itens.reduce((s, i) => s + (i.cancelamento || 0), 0);
     const totalSaldo = itens.reduce((s, i) => s + (i.saldo || 0), 0);
 
+    // Vendas por dia com ACUMULADO real e a META fatiada por dia útil (seg-sex) —
+    // sem isso o gráfico "Vendas por dia" quebra (o SVG usa esses dois campos pra
+    // desenhar a linha azul e a linha pontilhada de ritmo esperado).
+    const [anoRef, mesRefNum] = mes.split('-').map(Number);
+    const ultimoDiaRef = new Date(anoRef, mesRefNum, 0).getDate();
+    const mapaQtdPorDia = Object.fromEntries(porDia.map(d => [parseInt(d.dia, 10), d.qtd]));
+    const diasUteisTotais = Array.from({ length: ultimoDiaRef }, (_, i) => i + 1)
+      .filter(d => { const dow = new Date(anoRef, mesRefNum - 1, d).getDay(); return dow !== 0 && dow !== 6; }).length;
+    const metaPorDiaUtil = diasUteisTotais > 0 ? totalMeta / diasUteisTotais : 0;
+    let acumuladoRef = 0, diasUteisAteAqui = 0;
+    const porDiaCompleto = [];
+    for (let d = 1; d <= ultimoDiaRef; d++) {
+      acumuladoRef += mapaQtdPorDia[d] || 0;
+      const dow = new Date(anoRef, mesRefNum - 1, d).getDay();
+      if (dow !== 0 && dow !== 6) diasUteisAteAqui++;
+      porDiaCompleto.push({
+        dia: d, qtd: mapaQtdPorDia[d] || 0, acumulado: acumuladoRef,
+        meta_acumulada: Math.round(metaPorDiaUtil * diasUteisAteAqui),
+      });
+    }
+
     res.json({
       mes, setor,
       resumo: {
@@ -785,6 +896,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
         vendedores: itens.length,
         receita: Math.round((receita?.total || 0) * 100) / 100,
         ticket_medio: Math.round((receita?.ticket || 0) * 100) / 100,
+        meta_por_dia: Math.round(metaPorDiaUtil * 100) / 100,
       },
       por_filial: porFilial,
       // Cidade real do serviço quando o relatório já preencheu; senão, a unidade do vendedor
@@ -804,7 +916,7 @@ router.get('/meta-comercial/analise', autenticar, exigirVerMetaComercial, async 
       // Só os do setor selecionado, para o seletor não misturar times
       vendedores: doSetor.map(i => ({ id: i.id, nome: i.nome, filial: i.filial })),
       vendedor_selecionado: vendedorId || null,
-      por_dia: porDia.map(d => ({ dia: parseInt(d.dia, 10), qtd: d.qtd })),
+      por_dia: porDiaCompleto,
       por_servico: porServico,
       por_tipo: porTipo,
       por_genero: porGenero,
@@ -915,6 +1027,110 @@ router.post('/meta-comercial/sync-agora', autenticar, async (req, res) => {
     // senão o botão "Atualizar agora" traria a venda, mas sem esses dados.
     const enriquecido = await require('../jobs/enriquecerVendas').enriquecerRecentes(eid).catch(e => ({ erro: e.message }));
     res.json({ ok: true, servicos_sincronizados: n, enriquecido, quando: new Date().toISOString() });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// ── LC TÉCNICA (indicadores automáticos, dentro de Gestão > Indicadores) ────
+// Reaproveita o cache de O.S. já mantido pela Análise de O.S. (analise_os_cache,
+// atualizado a cada 5 min por syncAnaliseOS) e o cache de atendimentos do
+// Chatmix (chatmix_atendimentos) — não faz sync próprio no HubSoft/Chatmix.
+const PODE_EDITAR_LC_TECNICA = ['admin', 'gestor', 'lider'];
+
+function lcMesEIntervalo(query) {
+  const mesRef = /^\d{4}-\d{2}$/.test(query || '') ? query : new Date().toISOString().slice(0, 7);
+  const [ano, mes] = mesRef.split('-').map(Number);
+  const ultimoDia = new Date(ano, mes, 0).getDate();
+  const iso = (d) => `${ano}-${String(mes).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+  return { mesRef, dataInicio: iso(1), dataFim: iso(ultimoDia) };
+}
+async function lcOrdensCacheadas(mesRef, dataInicio, dataFim) {
+  const row = await get('SELECT dados, atualizado_em FROM analise_os_cache WHERE mes=$1', [mesRef]);
+  const idadeMin = row ? (Date.now() - new Date(row.atualizado_em).getTime()) / 60000 : Infinity;
+  if (row && idadeMin < 15) return row.dados;
+  const { buscarOrdensOS } = require('../jobs/analiseOS');
+  const ordens = await buscarOrdensOS({ dataInicio, dataFim });
+  try {
+    await run(
+      `INSERT INTO analise_os_cache (mes, dados, atualizado_em) VALUES ($1,$2,NOW())
+       ON CONFLICT (mes) DO UPDATE SET dados=EXCLUDED.dados, atualizado_em=NOW()`,
+      [mesRef, JSON.stringify(ordens)]
+    );
+  } catch (e) { console.error('[lc-tecnica] erro ao salvar cache de O.S.:', e.message); }
+  return ordens;
+}
+async function lcConfig(empresaId) {
+  const row = await get('SELECT * FROM lc_tecnica_config WHERE empresa_id=$1', [empresaId]);
+  return row || { tipos_ativacao: [], tipos_suporte: [], chatmix_departamento: null, mapa_notas: {} };
+}
+// Os valores em si (Total O.S., TMI, SLA etc.) NÃO têm rota própria — quem
+// calcula e grava é o job diário (syncIndicadoresLcTecnica.js), como linhas
+// normais de "indicadores"/"indicadores_historico" (mesmo padrão do
+// indicadoresHelpDesk.js). Essas duas rotas abaixo só alimentam a tela de
+// configuração (quais tipos de O.S. compõem cada indicador, qual pesquisa do
+// Chatmix vira a Nota Suporte/Reparo).
+
+// Alimenta a tela de configuração: tipos de O.S. já vistos (mês atual +
+// anterior) e departamentos/tags do Chatmix vistos nos últimos 90 dias —
+// tudo lido do que já está cacheado, sem bater no HubSoft/Chatmix agora.
+router.get('/lc-tecnica/opcoes', autenticar, async (req, res) => {
+  try {
+    const eid = req.usuario.empresa_id;
+    const { tiposDistintos } = require('../jobs/lcTecnicaIndicadores');
+    const { mesRef, dataInicio, dataFim } = lcMesEIntervalo(req.query.mes);
+    const mesAnt = mesAnteriorDe(mesRef);
+    const { dataInicio: diAnt, dataFim: dfAnt } = lcMesEIntervalo(mesAnt);
+    const [ordens, ordensAnt, deps] = await Promise.all([
+      lcOrdensCacheadas(mesRef, dataInicio, dataFim),
+      lcOrdensCacheadas(mesAnt, diAnt, dfAnt),
+      all(
+        `SELECT departamento, tag_finalizacao, COUNT(*) AS total
+         FROM chatmix_atendimentos
+         WHERE empresa_id=$1 AND departamento IS NOT NULL AND closed_at >= NOW() - INTERVAL '90 days'
+         GROUP BY departamento, tag_finalizacao
+         ORDER BY departamento, total DESC`,
+        [eid]
+      ),
+    ]);
+    const tipos = tiposDistintos([...ordens, ...ordensAnt]);
+    const porDepartamento = {};
+    for (const d of deps) {
+      if (!porDepartamento[d.departamento]) porDepartamento[d.departamento] = [];
+      if (d.tag_finalizacao) porDepartamento[d.departamento].push({ tag: d.tag_finalizacao, total: Number(d.total) });
+    }
+    res.json({
+      tipos_os: tipos,
+      chatmix: Object.entries(porDepartamento).map(([departamento, tags]) => ({ departamento, tags })),
+    });
+  } catch (e) {
+    console.error('Erro /gestao/lc-tecnica/opcoes:', e.message);
+    res.status(500).json({ erro: 'Erro ao buscar opções: ' + e.message });
+  }
+});
+
+router.get('/lc-tecnica/config', autenticar, async (req, res) => {
+  try {
+    res.json(await lcConfig(req.usuario.empresa_id));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+router.put('/lc-tecnica/config', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_LC_TECNICA.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { tipos_ativacao, tipos_suporte, chatmix_departamento, mapa_notas } = req.body;
+    await run(
+      `INSERT INTO lc_tecnica_config (empresa_id, tipos_ativacao, tipos_suporte, chatmix_departamento, mapa_notas, atualizado_em)
+       VALUES ($1,$2,$3,$4,$5,NOW())
+       ON CONFLICT (empresa_id) DO UPDATE SET
+         tipos_ativacao=$2, tipos_suporte=$3, chatmix_departamento=$4, mapa_notas=$5, atualizado_em=NOW()`,
+      [
+        req.usuario.empresa_id,
+        JSON.stringify(tipos_ativacao || []),
+        JSON.stringify(tipos_suporte || []),
+        chatmix_departamento || null,
+        JSON.stringify(mapa_notas || {}),
+      ]
+    );
+    res.json(await lcConfig(req.usuario.empresa_id));
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 

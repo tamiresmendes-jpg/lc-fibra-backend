@@ -34,7 +34,9 @@ function montarHtmlMetaCobranca(dados) {
       <td style="text-align:right;font-weight:700;color:#166534;background:#dcfce7">${fx(i.bonus_total)}</td>
     </tr>`).join('');
 
-  const recebimentos = (dados.recebimentos || []).flatMap(f => (f.cobrancas?.length > 1 ? f.cobrancas : [null]).map((c, i) => {
+  const todosRecebimentos = dados.recebimentos || [];
+  const qtdDesconsiderados = todosRecebimentos.filter(f => f.desconsiderado).length;
+  const recebimentos = todosRecebimentos.filter(f => !f.desconsiderado).flatMap(f => (f.cobrancas?.length > 1 ? f.cobrancas : [null]).map((c, i) => {
     if (i > 0) return ''; // uma linha por fatura no PDF (sem expandir), pra caber na folha
     return `<tr>
       <td>${esc(f.cobrador)}</td>
@@ -89,6 +91,7 @@ function montarHtmlMetaCobranca(dados) {
       </tr></thead>
       <tbody>${recebimentos || '<tr><td colspan="8" style="text-align:center;color:#94a3b8">Nenhum recebimento confirmado nesse período.</td></tr>'}</tbody>
     </table>
+    ${qtdDesconsiderados ? `<div class="sub" style="margin-top:6px">* ${qtdDesconsiderados} cobrança(s) desconsiderada(s) manualmente e já excluída(s) do bônus acima.</div>` : ''}
   </body></html>`;
 }
 

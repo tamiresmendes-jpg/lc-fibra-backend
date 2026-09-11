@@ -188,9 +188,12 @@ async function montarMetaCobranca({ dataInicio, dataFim, metaEfetividade = 20 })
   // cobranças de dentro dela disponíveis pra expandir.
   const porFatura = new Map();
   for (const c of cobrancas) {
-    const chave = c.id_fatura || `sem-fatura-${c.id_cobranca}`;
+    // Chave estável (sobrevive a recálculos do cache): id_fatura quando existe,
+    // senão a própria cobrança. É por essa chave que a desconsideração manual
+    // (checkbox na tela) identifica a linha, então não pode depender de índice.
+    const chave = c.id_fatura ? String(c.id_fatura) : `cobranca-${c.id_cobranca}`;
     const f = porFatura.get(chave) || {
-      id_fatura: c.id_fatura, cobrador: c.cobrador,
+      id_fatura: c.id_fatura, chave, cobrador: c.cobrador,
       codigo_cliente: c.codigo_cliente, nome_cliente: c.nome_cliente,
       forma_pagamento: c.forma_pagamento, vendedor: c.vendedor, quem_deu_baixa: c.quem_deu_baixa,
       data_pagamento: c.data_pagamento, data_baixa: c.data_baixa, data_execucao_os: c.data_execucao_os,
