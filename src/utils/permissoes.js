@@ -119,7 +119,12 @@ function temPermissaoServer(perms, chave, nivel = 'visualizar') {
   if (typeof permModulo === 'object') {
     if (permModulo.enabled === false) return false;
     if (!permModulo.itens) return true;
-    const nivelItem = permModulo.itens[item];
+    let nivelItem = permModulo.itens[item];
+    // ERP HubSoft era UMA chave só ('consultar') até 27/08/2026, depois virou
+    // granular (uma por tela). Grupo configurado antes disso só tem 'consultar'
+    // marcado — vale como liberação geral pra qualquer tela nova do ERP, senão
+    // quem já tinha acesso perderia tudo de uma vez com a separação.
+    if (nivelItem === undefined && modulo === 'erp' && item !== 'consultar') nivelItem = permModulo.itens.consultar;
     if (!nivelItem || nivelItem === false) return false;
     if (nivelItem === true || nivelItem === 'editar') return true;
     if (nivelItem === 'visualizar') return nivel === 'visualizar';
@@ -194,10 +199,29 @@ const MAPA_PERMISSAO = [
   ['/api/ifalei',                      'telefonia.indicadores'],
   ['/api/chatmix',                     'atendimentos.painel'],
   ['/api/rhid',                        'ponto.painel'],
-  // ERP HubSoft — opt-in (ver MODULOS_OPT_IN abaixo)
+  // ERP HubSoft — opt-in (ver MODULOS_OPT_IN abaixo). Granular por tela desde
+  // 27/08/2026 (antes era uma chave só 'erp.consultar' pra tudo — o fallback
+  // pra ela em temPermissaoServer mantém quem já tinha acesso funcionando).
   ['/api/erp/rota-tecnica',            'erp.rota-tecnica'],
+  ['/api/erp/analise-os',              'erp.analise-os'],
+  ['/api/erp/agendamentos',            'erp.agendamentos'],
+  ['/api/erp/agenda',                  'erp.agenda-tecnicos'],
+  ['/api/erp/movimentacao',            'erp.movimentacao-estoque'],
+  ['/api/erp/materiais-por-os',        'erp.analise-produto'],
+  ['/api/erp/analise-produto',         'erp.analise-produto'],
+  ['/api/erp/produtos-precos',         'erp.analise-produto'],
+  ['/api/erp/fiscal',                  'erp.analise-fiscal'],
+  ['/api/erp/financeiro-mensal',       'erp.analise-financeira'],
+  ['/api/erp/financeiro',              'erp.analise-financeira'],
   ['/api/erp/planos/livros-sva',       'erp.analise-ebooks'],
-  ['/api/erp',                         'erp.consultar'],
+  ['/api/erp/planos',                  'erp.analise-planos'],
+  ['/api/erp/pacotes',                 'erp.analise-pacotes'],
+  ['/api/erp/servicos-nfse',           'erp.analise-servicos-nfse'],
+  ['/api/erp',                         'erp.consulta'],
+  // Financeiro — Fornecedores / Contas a Pagar (integração de e-mail UOL/IMAP)
+  ['/api/fornecedores',                'financeiro.fornecedores'],
+  ['/api/email-fornecedores',          'financeiro.contas-pagar'],
+  ['/api/contas-pagar-fornecedores',   'financeiro.contas-pagar'],
 ];
 
 // Módulos que NÃO seguem a regra "acesso total mostra tudo": só liberam se o

@@ -1324,6 +1324,18 @@ async function initSchema() {
       dados JSONB,
       atualizado_em TIMESTAMP DEFAULT NOW()
     );
+    -- Cobranças que a gestora marca pra NÃO contar na meta/bônus de recebimento
+    -- (ex.: pagamento que não deveria ter sido atribuído àquele cobrador). Chave
+    -- é o id_fatura, ou "cobranca-<id_cobranca>" quando a cobrança não tem fatura.
+    CREATE TABLE IF NOT EXISTS meta_cobranca_desconsiderado (
+      empresa_id TEXT NOT NULL,
+      mes TEXT NOT NULL,
+      chave TEXT NOT NULL,
+      criado_por TEXT,
+      criado_por_nome TEXT,
+      criado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, mes, chave)
+    );
     CREATE TABLE IF NOT EXISTS meta_visibilidade_extra (
       empresa_id TEXT NOT NULL,
       departamento TEXT NOT NULL,
@@ -1335,6 +1347,42 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS meta_cobranca_analise_layout (
       empresa_id TEXT PRIMARY KEY,
       layout JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
+    -- Cache da Análise de O.S. (tempo de atendimento, SLA, produtividade por
+    -- técnico/equipe/cidade) — mesmo padrão do meta_cobranca_cache: job em
+    -- segundo plano (syncAnaliseOS) recalcula a cada poucos minutos, a tela
+    -- sempre lê daqui.
+    CREATE TABLE IF NOT EXISTS analise_os_cache (
+      mes TEXT PRIMARY KEY,
+      dados JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
+    CREATE TABLE IF NOT EXISTS analise_os_layout (
+      empresa_id TEXT PRIMARY KEY,
+      layout JSONB,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
+    -- Configuração dos indicadores da LC Técnica (Gestão > Indicadores): quais
+    -- tipos de O.S. do HubSoft contam como Ativação e quais contam como
+    -- Suporte/Reparo, e qual pesquisa do Chatmix (departamento + mapa de tag→nota)
+    -- alimenta a Nota Suporte/Reparo. Cálculo roda em cima do que já está
+    -- cacheado em analise_os_cache/chatmix_atendimentos, sem sync próprio.
+    CREATE TABLE IF NOT EXISTS lc_tecnica_config (
+      empresa_id TEXT PRIMARY KEY,
+      tipos_ativacao JSONB DEFAULT '[]',
+      tipos_suporte JSONB DEFAULT '[]',
+      chatmix_departamento TEXT,
+      mapa_notas JSONB DEFAULT '{}',
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    );
+    -- Cache de Agendamentos (OS agendadas por cidade/bairro/rua/dia/semana/mês,
+    -- com status aguardando/em_execucao/concluida/atrasada) — mesmo padrão do
+    -- analise_os_cache: job em segundo plano (syncAgendamentos) recalcula a cada
+    -- poucos minutos, a tela sempre lê daqui. Guarda a lista CRUA por mês (não agregada).
+    CREATE TABLE IF NOT EXISTS agendamentos_cache (
+      mes TEXT PRIMARY KEY,
+      dados JSONB,
       atualizado_em TIMESTAMP DEFAULT NOW()
     );
     -- Login do PAINEL HubSoft (usuário real): a conta de integração não vê relatórios
@@ -2177,6 +2225,61 @@ async function initSchema() {
     await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('catalogo_trilhas_v2', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
     console.log('✅ Migração catalogo_trilhas_v2 executada');
   }
+
+  // Financeiro — Fornecedores e Contas a Pagar (integração de e-mail UOL/IMAP)
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS integracao_email_fornecedores (
+      empresa_id TEXT PRIMARY KEY,
+      imap_host TEXT DEFAULT 'imap.uhserver.com',
+      imap_port INTEGER DEFAULT 993,
+      email_usuario TEXT,
+      email_senha TEXT,
+      pasta TEXT DEFAULT 'INBOX',
+      ativo INTEGER DEFAULT 0,
+      ultimo_uid_processado INTEGER DEFAULT 0,
+      ultima_sync TIMESTAMP,
+      ultimo_status TEXT,
+      ultimo_erro TEXT,
+      atualizado_em TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fornecedores (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      cnpj TEXT,
+      emails_remetentes TEXT,
+      ativo INTEGER DEFAULT 1,
+      criado_em TIMESTAMP DEFAULT NOW()
+    )
+  `);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS contas_pagar_fornecedores (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      fornecedor_id TEXT REFERENCES fornecedores(id),
+      tipo TEXT DEFAULT 'boleto',
+      numero_documento TEXT,
+      descricao TEXT,
+      valor NUMERIC(12,2),
+      vencimento DATE,
+      status TEXT DEFAULT 'pendente_revisao',
+      data_pagamento DATE,
+      arquivo_path TEXT,
+      email_remetente TEXT,
+      email_assunto TEXT,
+      email_message_id TEXT,
+      email_recebido_em TIMESTAMP,
+      extraido_automaticamente INTEGER DEFAULT 0,
+      observacoes TEXT,
+      criado_em TIMESTAMP DEFAULT NOW(),
+      atualizado_em TIMESTAMP DEFAULT NOW(),
+      UNIQUE(empresa_id, email_message_id)
+    )
+  `);
 }
 
 async function seedAdmin() {
