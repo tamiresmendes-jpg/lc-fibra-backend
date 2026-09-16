@@ -56,6 +56,12 @@ app.use('/api/acoes', require('./routes/acoes'));
 app.use('/api/indicadores', require('./routes/indicadores'));
 app.use('/api/comunicados', require('./routes/comunicados'));
 app.use('/api/reunioes', require('./routes/reunioes'));
+// treinamentos-extra ANTES de treinamentos: este tem rotas fixas (/videos,
+// /trilhas, /certificados, /dashboard-stats, /cursos-externos) enquanto
+// aquele tem uma rota catch-all GET /:id — se treinamentos entrasse primeiro,
+// esse /:id capturava "videos"/"trilhas"/etc. como se fosse um id de
+// treinamento e devolvia 404 antes de chegar nas rotas certas.
+app.use('/api/treinamentos', require('./routes/treinamentos-extra'));
 app.use('/api/treinamentos', require('./routes/treinamentos'));
 app.use('/api/alteracoes', require('./routes/alteracoes'));
 app.use('/api/campanhas', require('./routes/campanhas'));
@@ -94,7 +100,6 @@ app.use('/api/tarefas', require('./routes/tarefas'));
 app.use('/api/cultura', require('./routes/cultura-extra'));
 app.use('/api/empresa', require('./routes/empresa-extra'));
 app.use('/api/processos', require('./routes/processos-extra'));
-app.use('/api/treinamentos', require('./routes/treinamentos-extra'));
 app.use('/api/gestao', require('./routes/gestao-extra'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/auditoria-extra', require('./routes/auditoria-extra'));

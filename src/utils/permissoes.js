@@ -169,6 +169,7 @@ const MAPA_PERMISSAO = [
   ['/api/fluxos',                      'pop.fluxos'],
   ['/api/checklists',                  'pop.checklists'],
   // Treinamentos
+  ['/api/treinamentos/videos',         'treinamento.videos'],
   ['/api/treinamentos',                'treinamento.treinamentos'],
   ['/api/onboarding',                  'treinamento.onboarding'],
   // Gestão
@@ -262,6 +263,8 @@ const ROTAS_PESSOAIS = [
   /^\/api\/treinamentos\/[^/]+\/pops\/(?!reordenar(?:\/|$))[^/]+\/?$/, // salvar tempo/anotação do próprio tópico (exclui reordenar, admin-only)
   /^\/api\/treinamentos\/[^/]+\/anotacoes(\/|$)/,                // anotações do treinamento
   /^\/api\/treinamentos\/[^/]+\/avaliacoes\/[^/]+\/responder\/?$/, // responder avaliação da trilha
+  /^\/api\/treinamentos\/videos\/[^/]+\/iniciar\/?$/,            // registra que abriu o vídeo (próprio)
+  /^\/api\/treinamentos\/videos\/[^/]+\/concluir\/?$/,           // marca vídeo assistido até o fim (próprio)
   // POP — comentar, curtir/reagir e excluir o próprio comentário (resolver continua bloqueado)
   /^\/api\/pop-comentarios\/?$/,                                 // criar comentário
   /^\/api\/pop-comentarios\/[^/]+\/reagir\/?$/,                  // curtir/reagir

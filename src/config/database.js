@@ -1186,6 +1186,24 @@ async function initSchema() {
       criado_por TEXT,
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     );
+    -- Vídeo enviado como arquivo (upload real), em vez de link externo (YouTube etc.).
+    -- caminho = nome do arquivo salvo em uploads/videos/; url fica opcional nesse caso.
+    ALTER TABLE treinamento_videos ALTER COLUMN url DROP NOT NULL;
+    ALTER TABLE treinamento_videos ADD COLUMN IF NOT EXISTS caminho TEXT;
+    ALTER TABLE treinamento_videos ADD COLUMN IF NOT EXISTS tipo TEXT;
+    ALTER TABLE treinamento_videos ADD COLUMN IF NOT EXISTS tamanho INTEGER;
+    -- Quem assistiu cada vídeo da biblioteca (1 linha por usuário+vídeo).
+    -- iniciado_em: abriu a página do vídeo. concluido_em: chegou ao fim.
+    CREATE TABLE IF NOT EXISTS treinamento_video_visualizacoes (
+      id TEXT PRIMARY KEY,
+      video_id TEXT NOT NULL,
+      usuario_id TEXT NOT NULL,
+      empresa_id TEXT NOT NULL,
+      iniciado_em TEXT,
+      concluido_em TEXT,
+      ultima_visualizacao TEXT,
+      UNIQUE(video_id, usuario_id)
+    );
     CREATE TABLE IF NOT EXISTS cursos_externos (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

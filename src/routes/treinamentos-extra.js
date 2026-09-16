@@ -1,8 +1,27 @@
 const express = require('express');
 const router = express.Router();
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
 const { run, get, all } = require('../config/database');
 const { autenticar } = require('../middleware/auth');
 const { v4: uuidv4 } = require('uuid');
+
+const VIDEOS_DIR = path.join(__dirname, '../../uploads/videos');
+try { if (!fs.existsSync(VIDEOS_DIR)) fs.mkdirSync(VIDEOS_DIR, { recursive: true }); } catch (_) {}
+
+const uploadVideo = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, VIDEOS_DIR),
+    filename: (req, file, cb) => cb(null, `${uuidv4()}${path.extname(file.originalname)}`),
+  }),
+  // Sem limite de tamanho: vídeos de treinamento variam muito (de poucos MB a
+  // vários GB). O limite real de fato é o espaço em disco do servidor.
+  fileFilter: (req, file, cb) => {
+    if ((file.mimetype || '').startsWith('video/')) return cb(null, true);
+    cb(new Error('Apenas arquivos de vídeo são permitidos'));
+  },
+});
 
 // ── DASHBOARD ────────────────────────────────────────────────────────────────
 router.get('/dashboard-stats', autenticar, async (req, res) => {
@@ -88,6 +107,15 @@ router.get('/videos', autenticar, async (req, res) => {
   } catch { res.status(500).json({ erro: 'Erro ao buscar vídeos' }); }
 });
 
+// Detalhe de um vídeo (página de assistir)
+router.get('/videos/:id', autenticar, async (req, res) => {
+  try {
+    const video = await get(`SELECT * FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!video) return res.status(404).json({ erro: 'Não encontrado' });
+    res.json(video);
+  } catch { res.status(500).json({ erro: 'Erro ao buscar vídeo' }); }
+});
+
 router.post('/videos', autenticar, async (req, res) => {
   try {
     const { titulo, descricao, url, duracao, categoria, tags } = req.body;
@@ -114,13 +142,112 @@ router.put('/videos/:id', autenticar, async (req, res) => {
   } catch { res.status(500).json({ erro: 'Erro ao atualizar vídeo' }); }
 });
 
+// Upload de arquivo de vídeo (em vez de link externo)
+router.post('/videos/upload', autenticar, uploadVideo.single('arquivo'), async (req, res) => {
+  try {
+    if (!req.file) return res.status(400).json({ erro: 'Arquivo de vídeo não enviado' });
+    const { titulo, descricao, duracao, categoria, tags } = req.body;
+    if (!titulo) {
+      try { fs.unlinkSync(path.join(VIDEOS_DIR, req.file.filename)); } catch {}
+      return res.status(400).json({ erro: 'Título é obrigatório' });
+    }
+    const id = uuidv4();
+    await run(
+      `INSERT INTO treinamento_videos (id,empresa_id,titulo,descricao,caminho,tipo,tamanho,duracao,categoria,tags,criado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, descricao || null, req.file.filename, req.file.mimetype, req.file.size, duracao || null, categoria || 'geral', tags || null, req.usuario.id]
+    );
+    res.status(201).json(await get(`SELECT * FROM treinamento_videos WHERE id=?`, [id]));
+  } catch (e) { res.status(500).json({ erro: e.message || 'Erro ao enviar vídeo' }); }
+});
+
+// Substitui o arquivo de um vídeo já cadastrado (mantém ou troca metadados)
+router.put('/videos/:id/upload', autenticar, uploadVideo.single('arquivo'), async (req, res) => {
+  try {
+    const exist = await get(`SELECT * FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!exist) {
+      if (req.file) { try { fs.unlinkSync(path.join(VIDEOS_DIR, req.file.filename)); } catch {} }
+      return res.status(404).json({ erro: 'Não encontrado' });
+    }
+    const { titulo, descricao, duracao, categoria, tags } = req.body;
+    const caminhoAntigo = exist.caminho;
+    await run(
+      `UPDATE treinamento_videos SET titulo=?,descricao=?,duracao=?,categoria=?,tags=?${req.file ? ',caminho=?,tipo=?,tamanho=?,url=NULL' : ''} WHERE id=?`,
+      req.file
+        ? [titulo, descricao || null, duracao || null, categoria || 'geral', tags || null, req.file.filename, req.file.mimetype, req.file.size, req.params.id]
+        : [titulo, descricao || null, duracao || null, categoria || 'geral', tags || null, req.params.id]
+    );
+    if (req.file && caminhoAntigo) {
+      try { fs.unlinkSync(path.join(VIDEOS_DIR, caminhoAntigo)); } catch {}
+    }
+    res.json(await get(`SELECT * FROM treinamento_videos WHERE id=?`, [req.params.id]));
+  } catch (e) { res.status(500).json({ erro: e.message || 'Erro ao atualizar vídeo' }); }
+});
+
 router.delete('/videos/:id', autenticar, async (req, res) => {
   try {
-    const exist = await get(`SELECT id FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    const exist = await get(`SELECT * FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
     if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
     await run(`DELETE FROM treinamento_videos WHERE id=?`, [req.params.id]);
+    if (exist.caminho) {
+      const filePath = path.join(VIDEOS_DIR, exist.caminho);
+      try { if (fs.existsSync(filePath)) fs.unlinkSync(filePath); } catch {}
+    }
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao excluir vídeo' }); }
+});
+
+// Marca que o usuário abriu o vídeo (chamado ao entrar na página de assistir)
+router.post('/videos/:id/iniciar', autenticar, async (req, res) => {
+  try {
+    const video = await get(`SELECT id FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!video) return res.status(404).json({ erro: 'Não encontrado' });
+    const existente = await get(`SELECT id FROM treinamento_video_visualizacoes WHERE video_id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
+    const agora = `TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')`;
+    if (existente) {
+      await run(`UPDATE treinamento_video_visualizacoes SET ultima_visualizacao=${agora} WHERE id=?`, [existente.id]);
+    } else {
+      await run(
+        `INSERT INTO treinamento_video_visualizacoes (id,video_id,usuario_id,empresa_id,iniciado_em,ultima_visualizacao) VALUES (?,?,?,?,${agora},${agora})`,
+        [uuidv4(), req.params.id, req.usuario.id, req.usuario.empresa_id]
+      );
+    }
+    res.json({ ok: true });
+  } catch { res.status(500).json({ erro: 'Erro ao registrar visualização' }); }
+});
+
+// Marca o vídeo como assistido até o fim (chamado no evento "ended" do player)
+router.post('/videos/:id/concluir', autenticar, async (req, res) => {
+  try {
+    const video = await get(`SELECT id FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!video) return res.status(404).json({ erro: 'Não encontrado' });
+    const existente = await get(`SELECT id FROM treinamento_video_visualizacoes WHERE video_id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
+    const agora = `TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')`;
+    if (existente) {
+      await run(`UPDATE treinamento_video_visualizacoes SET concluido_em=${agora}, ultima_visualizacao=${agora} WHERE id=?`, [existente.id]);
+    } else {
+      await run(
+        `INSERT INTO treinamento_video_visualizacoes (id,video_id,usuario_id,empresa_id,iniciado_em,concluido_em,ultima_visualizacao) VALUES (?,?,?,?,${agora},${agora},${agora})`,
+        [uuidv4(), req.params.id, req.usuario.id, req.usuario.empresa_id]
+      );
+    }
+    res.json({ ok: true });
+  } catch { res.status(500).json({ erro: 'Erro ao registrar conclusão' }); }
+});
+
+// Quem assistiu / não assistiu este vídeo (gestor/líder responsável pela biblioteca)
+router.get('/videos/:id/visualizacoes', autenticar, async (req, res) => {
+  try {
+    const rows = await all(`
+      SELECT u.id AS usuario_id, u.nome, u.avatar, d.nome AS departamento_nome,
+             v.iniciado_em, v.concluido_em, v.ultima_visualizacao
+      FROM usuarios u
+      LEFT JOIN departamentos d ON d.id = u.departamento_id
+      LEFT JOIN treinamento_video_visualizacoes v ON v.usuario_id = u.id AND v.video_id = ?
+      WHERE u.empresa_id = ? AND u.ativo = 1
+      ORDER BY (v.concluido_em IS NULL) DESC, u.nome
+    `, [req.params.id, req.usuario.empresa_id]);
+    res.json(rows);
+  } catch { res.status(500).json({ erro: 'Erro ao buscar visualizações' }); }
 });
 
 // ── CURSOS EXTERNOS ──────────────────────────────────────────────────────────
