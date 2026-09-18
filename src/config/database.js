@@ -1652,6 +1652,7 @@ async function initSchema() {
       created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
     )
   `);
+  await pool.query(`ALTER TABLE agenda_itens ADD COLUMN IF NOT EXISTS notificar BOOLEAN DEFAULT true`);
 
   // Soft delete — colunas adicionadas às tabelas principais
   const tabelasSoftDelete = ['departamentos','cargos','processos','treinamentos','reunioes','acoes','pops'];

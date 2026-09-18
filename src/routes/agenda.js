@@ -23,7 +23,7 @@ router.get('/proximos', async (req, res) => {
   try {
     const rows = await all(
       `SELECT * FROM agenda_itens
-       WHERE empresa_id=? AND usuario_id=? AND status='pendente'
+       WHERE empresa_id=? AND usuario_id=? AND status='pendente' AND notificar IS NOT FALSE
          AND data_hora <= TO_CHAR(NOW() - INTERVAL '3 hours' + INTERVAL '1 minute', 'YYYY-MM-DD HH24:MI:SS')
        ORDER BY data_hora ASC`,
       [req.usuario.empresa_id, req.usuario.id]
@@ -35,13 +35,13 @@ router.get('/proximos', async (req, res) => {
 // Criar
 router.post('/', async (req, res) => {
   try {
-    const { titulo, descricao, data_hora } = req.body;
+    const { titulo, descricao, data_hora, notificar } = req.body;
     if (!titulo?.trim() || !data_hora) return res.status(400).json({ erro: 'Título e data/hora são obrigatórios' });
     const id = uuidv4();
     await run(
-      `INSERT INTO agenda_itens (id, empresa_id, usuario_id, titulo, descricao, data_hora)
-       VALUES (?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, req.usuario.id, titulo.trim(), descricao || null, data_hora]
+      `INSERT INTO agenda_itens (id, empresa_id, usuario_id, titulo, descricao, data_hora, notificar)
+       VALUES (?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, req.usuario.id, titulo.trim(), descricao || null, data_hora, notificar !== false]
     );
     res.status(201).json(await get(`SELECT * FROM agenda_itens WHERE id=?`, [id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
@@ -52,10 +52,10 @@ router.put('/:id', async (req, res) => {
   try {
     const existe = await get(`SELECT id FROM agenda_itens WHERE id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
     if (!existe) return res.status(404).json({ erro: 'Não encontrado' });
-    const { titulo, descricao, data_hora, status } = req.body;
+    const { titulo, descricao, data_hora, status, notificar } = req.body;
     await run(
-      `UPDATE agenda_itens SET titulo=?, descricao=?, data_hora=?, status=? WHERE id=?`,
-      [titulo, descricao || null, data_hora, status || 'pendente', req.params.id]
+      `UPDATE agenda_itens SET titulo=?, descricao=?, data_hora=?, status=?, notificar=? WHERE id=?`,
+      [titulo, descricao || null, data_hora, status || 'pendente', notificar !== false, req.params.id]
     );
     res.json(await get(`SELECT * FROM agenda_itens WHERE id=?`, [req.params.id]));
   } catch (e) { res.status(500).json({ erro: e.message }); }
