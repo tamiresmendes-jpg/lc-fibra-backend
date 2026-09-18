@@ -1204,6 +1204,16 @@ async function initSchema() {
       ultima_visualizacao TEXT,
       UNIQUE(video_id, usuario_id)
     );
+    -- Pastas pra organizar a Biblioteca de Vídeos (1 nível, sem sub-pasta).
+    -- Vídeo sem pasta_id fica solto na raiz.
+    CREATE TABLE IF NOT EXISTS treinamento_video_pastas (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      criado_por TEXT,
+      created_at TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    );
+    ALTER TABLE treinamento_videos ADD COLUMN IF NOT EXISTS pasta_id TEXT;
     CREATE TABLE IF NOT EXISTS cursos_externos (
       id TEXT PRIMARY KEY,
       empresa_id TEXT NOT NULL,

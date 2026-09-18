@@ -265,6 +265,8 @@ const ROTAS_PESSOAIS = [
   /^\/api\/treinamentos\/[^/]+\/avaliacoes\/[^/]+\/responder\/?$/, // responder avaliação da trilha
   /^\/api\/treinamentos\/videos\/[^/]+\/iniciar\/?$/,            // registra que abriu o vídeo (próprio)
   /^\/api\/treinamentos\/videos\/[^/]+\/concluir\/?$/,           // marca vídeo assistido até o fim (próprio)
+  /^\/api\/treinamentos\/videos\/[^/]+\/desmarcar-concluido\/?$/, // desfaz a marcação de concluído (próprio)
+  /^\/api\/treinamentos\/videos\/[^/]+\/minha-visualizacao\/?$/, // consulta o próprio status de visualização
   // POP — comentar, curtir/reagir e excluir o próprio comentário (resolver continua bloqueado)
   /^\/api\/pop-comentarios\/?$/,                                 // criar comentário
   /^\/api\/pop-comentarios\/[^/]+\/reagir\/?$/,                  // curtir/reagir

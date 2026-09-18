@@ -107,6 +107,55 @@ router.get('/videos', autenticar, async (req, res) => {
   } catch { res.status(500).json({ erro: 'Erro ao buscar vídeos' }); }
 });
 
+// ── PASTAS DE VÍDEOS ───────────────────────────────────────────────────────────
+// IMPORTANTE: estas rotas fixas (/videos/pastas) precisam vir ANTES de
+// /videos/:id abaixo — senão o Express casa "pastas" como se fosse um :id.
+router.get('/videos/pastas', autenticar, async (req, res) => {
+  try {
+    const rows = await all(`
+      SELECT p.*, COUNT(v.id) AS total_videos
+      FROM treinamento_video_pastas p
+      LEFT JOIN treinamento_videos v ON v.pasta_id = p.id
+      WHERE p.empresa_id=?
+      GROUP BY p.id
+      ORDER BY p.nome
+    `, [req.usuario.empresa_id]);
+    res.json(rows);
+  } catch { res.status(500).json({ erro: 'Erro ao buscar pastas' }); }
+});
+
+router.post('/videos/pastas', autenticar, async (req, res) => {
+  try {
+    const { nome } = req.body;
+    if (!nome) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    const id = uuidv4();
+    await run(`INSERT INTO treinamento_video_pastas (id,empresa_id,nome,criado_por) VALUES (?,?,?,?)`, [id, req.usuario.empresa_id, nome, req.usuario.id]);
+    res.status(201).json(await get(`SELECT *, 0 AS total_videos FROM treinamento_video_pastas WHERE id=?`, [id]));
+  } catch { res.status(500).json({ erro: 'Erro ao criar pasta' }); }
+});
+
+router.put('/videos/pastas/:id', autenticar, async (req, res) => {
+  try {
+    const exist = await get(`SELECT id FROM treinamento_video_pastas WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
+    const { nome } = req.body;
+    if (!nome) return res.status(400).json({ erro: 'Nome é obrigatório' });
+    await run(`UPDATE treinamento_video_pastas SET nome=? WHERE id=?`, [nome, req.params.id]);
+    res.json(await get(`SELECT * FROM treinamento_video_pastas WHERE id=?`, [req.params.id]));
+  } catch { res.status(500).json({ erro: 'Erro ao atualizar pasta' }); }
+});
+
+// Exclui a pasta e solta os vídeos dela na raiz (não apaga os vídeos)
+router.delete('/videos/pastas/:id', autenticar, async (req, res) => {
+  try {
+    const exist = await get(`SELECT id FROM treinamento_video_pastas WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
+    await run(`UPDATE treinamento_videos SET pasta_id=NULL WHERE pasta_id=?`, [req.params.id]);
+    await run(`DELETE FROM treinamento_video_pastas WHERE id=?`, [req.params.id]);
+    res.json({ ok: true });
+  } catch { res.status(500).json({ erro: 'Erro ao excluir pasta' }); }
+});
+
 // Detalhe de um vídeo (página de assistir)
 router.get('/videos/:id', autenticar, async (req, res) => {
   try {
@@ -118,12 +167,12 @@ router.get('/videos/:id', autenticar, async (req, res) => {
 
 router.post('/videos', autenticar, async (req, res) => {
   try {
-    const { titulo, descricao, url, duracao, categoria, tags } = req.body;
+    const { titulo, descricao, url, duracao, categoria, tags, pasta_id } = req.body;
     if (!titulo || !url) return res.status(400).json({ erro: 'Título e URL são obrigatórios' });
     const id = uuidv4();
     await run(
-      `INSERT INTO treinamento_videos (id,empresa_id,titulo,descricao,url,duracao,categoria,tags,criado_por) VALUES (?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, titulo, descricao || null, url, duracao || null, categoria || 'geral', tags || null, req.usuario.id]
+      `INSERT INTO treinamento_videos (id,empresa_id,titulo,descricao,url,duracao,categoria,tags,criado_por,pasta_id) VALUES (?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, descricao || null, url, duracao || null, categoria || 'geral', tags || null, req.usuario.id, pasta_id || null]
     );
     res.status(201).json(await get(`SELECT * FROM treinamento_videos WHERE id=?`, [id]));
   } catch { res.status(500).json({ erro: 'Erro ao criar vídeo' }); }
@@ -142,19 +191,34 @@ router.put('/videos/:id', autenticar, async (req, res) => {
   } catch { res.status(500).json({ erro: 'Erro ao atualizar vídeo' }); }
 });
 
+// Move o vídeo para dentro de uma pasta (ou solta na raiz com pasta_id null)
+router.put('/videos/:id/mover', autenticar, async (req, res) => {
+  try {
+    const exist = await get(`SELECT id FROM treinamento_videos WHERE id=? AND empresa_id=?`, [req.params.id, req.usuario.empresa_id]);
+    if (!exist) return res.status(404).json({ erro: 'Não encontrado' });
+    const { pasta_id } = req.body;
+    if (pasta_id) {
+      const pasta = await get(`SELECT id FROM treinamento_video_pastas WHERE id=? AND empresa_id=?`, [pasta_id, req.usuario.empresa_id]);
+      if (!pasta) return res.status(404).json({ erro: 'Pasta não encontrada' });
+    }
+    await run(`UPDATE treinamento_videos SET pasta_id=? WHERE id=?`, [pasta_id || null, req.params.id]);
+    res.json(await get(`SELECT * FROM treinamento_videos WHERE id=?`, [req.params.id]));
+  } catch { res.status(500).json({ erro: 'Erro ao mover vídeo' }); }
+});
+
 // Upload de arquivo de vídeo (em vez de link externo)
 router.post('/videos/upload', autenticar, uploadVideo.single('arquivo'), async (req, res) => {
   try {
     if (!req.file) return res.status(400).json({ erro: 'Arquivo de vídeo não enviado' });
-    const { titulo, descricao, duracao, categoria, tags } = req.body;
+    const { titulo, descricao, duracao, categoria, tags, pasta_id } = req.body;
     if (!titulo) {
       try { fs.unlinkSync(path.join(VIDEOS_DIR, req.file.filename)); } catch {}
       return res.status(400).json({ erro: 'Título é obrigatório' });
     }
     const id = uuidv4();
     await run(
-      `INSERT INTO treinamento_videos (id,empresa_id,titulo,descricao,caminho,tipo,tamanho,duracao,categoria,tags,criado_por) VALUES (?,?,?,?,?,?,?,?,?,?,?)`,
-      [id, req.usuario.empresa_id, titulo, descricao || null, req.file.filename, req.file.mimetype, req.file.size, duracao || null, categoria || 'geral', tags || null, req.usuario.id]
+      `INSERT INTO treinamento_videos (id,empresa_id,titulo,descricao,caminho,tipo,tamanho,duracao,categoria,tags,criado_por,pasta_id) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [id, req.usuario.empresa_id, titulo, descricao || null, req.file.filename, req.file.mimetype, req.file.size, duracao || null, categoria || 'geral', tags || null, req.usuario.id, pasta_id || null]
     );
     res.status(201).json(await get(`SELECT * FROM treinamento_videos WHERE id=?`, [id]));
   } catch (e) { res.status(500).json({ erro: e.message || 'Erro ao enviar vídeo' }); }
@@ -232,6 +296,22 @@ router.post('/videos/:id/concluir', autenticar, async (req, res) => {
     }
     res.json({ ok: true });
   } catch { res.status(500).json({ erro: 'Erro ao registrar conclusão' }); }
+});
+
+// Desfaz a marcação de concluído (a pessoa clicou errado ou quer reabrir depois)
+router.post('/videos/:id/desmarcar-concluido', autenticar, async (req, res) => {
+  try {
+    await run(`UPDATE treinamento_video_visualizacoes SET concluido_em=NULL WHERE video_id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
+    res.json({ ok: true });
+  } catch { res.status(500).json({ erro: 'Erro ao desmarcar' }); }
+});
+
+// Status da própria visualização (pra refletir corretamente ao reabrir a página)
+router.get('/videos/:id/minha-visualizacao', autenticar, async (req, res) => {
+  try {
+    const row = await get(`SELECT iniciado_em, concluido_em FROM treinamento_video_visualizacoes WHERE video_id=? AND usuario_id=?`, [req.params.id, req.usuario.id]);
+    res.json(row || { iniciado_em: null, concluido_em: null });
+  } catch { res.status(500).json({ erro: 'Erro ao buscar visualização' }); }
 });
 
 // Quem assistiu / não assistiu este vídeo (gestor/líder responsável pela biblioteca)
