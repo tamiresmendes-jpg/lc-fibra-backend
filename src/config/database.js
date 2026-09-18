@@ -2266,10 +2266,23 @@ async function initSchema() {
       pasta TEXT DEFAULT 'INBOX',
       ativo INTEGER DEFAULT 0,
       ultimo_uid_processado INTEGER DEFAULT 0,
+      data_inicio_historico DATE DEFAULT '2026-01-01',
       ultima_sync TIMESTAMP,
       ultimo_status TEXT,
       ultimo_erro TEXT,
       atualizado_em TIMESTAMP DEFAULT NOW()
+    )
+  `);
+  await pool.query(`ALTER TABLE integracao_email_fornecedores ADD COLUMN IF NOT EXISTS data_inicio_historico DATE DEFAULT '2026-01-01'`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS email_fornecedores_pastas (
+      empresa_id TEXT NOT NULL,
+      pasta TEXT NOT NULL,
+      uidvalidity TEXT,
+      ultimo_uid_processado INTEGER DEFAULT 0,
+      atualizado_em TIMESTAMP DEFAULT NOW(),
+      PRIMARY KEY (empresa_id, pasta)
     )
   `);
 
@@ -2302,6 +2315,7 @@ async function initSchema() {
       email_assunto TEXT,
       email_message_id TEXT,
       email_recebido_em TIMESTAMP,
+      email_pasta TEXT,
       extraido_automaticamente INTEGER DEFAULT 0,
       observacoes TEXT,
       criado_em TIMESTAMP DEFAULT NOW(),
@@ -2309,6 +2323,7 @@ async function initSchema() {
       UNIQUE(empresa_id, email_message_id)
     )
   `);
+  await pool.query(`ALTER TABLE contas_pagar_fornecedores ADD COLUMN IF NOT EXISTS email_pasta TEXT`);
 }
 
 async function seedAdmin() {

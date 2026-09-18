@@ -14,7 +14,7 @@ const STATUS_CALCULADO = `
 
 router.get('/', async (req, res) => {
   try {
-    const { status, fornecedor_id, vencimento_de, vencimento_ate, busca } = req.query;
+    const { status, fornecedor_id, vencimento_de, vencimento_ate, recebido_de, busca } = req.query;
     const condicoes = ['c.empresa_id = $1'];
     const params = [req.usuario.empresa_id];
 
@@ -22,6 +22,7 @@ router.get('/', async (req, res) => {
     if (fornecedor_id) { params.push(fornecedor_id); condicoes.push(`c.fornecedor_id = $${params.length}`); }
     if (vencimento_de) { params.push(vencimento_de); condicoes.push(`c.vencimento >= $${params.length}`); }
     if (vencimento_ate) { params.push(vencimento_ate); condicoes.push(`c.vencimento <= $${params.length}`); }
+    if (recebido_de) { params.push(recebido_de); condicoes.push(`c.email_recebido_em >= $${params.length}`); }
     if (busca) { params.push(`%${busca}%`); condicoes.push(`(c.numero_documento ILIKE $${params.length} OR c.descricao ILIKE $${params.length} OR f.nome ILIKE $${params.length})`); }
 
     const contas = await all(`

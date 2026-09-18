@@ -14,12 +14,15 @@ function soAdmin(req, res) {
 router.get('/config', async (req, res) => {
   try {
     if (!soAdmin(req, res)) return;
-    const cfg = await get('SELECT * FROM integracao_email_fornecedores WHERE empresa_id = $1', [req.usuario.empresa_id]) || {};
+    const cfg = await get(`
+      SELECT *, TO_CHAR(data_inicio_historico, 'YYYY-MM-DD') AS data_inicio_historico_fmt
+      FROM integracao_email_fornecedores WHERE empresa_id = $1
+    `, [req.usuario.empresa_id]) || {};
     res.json({
       imap_host: cfg.imap_host || 'imap.uhserver.com',
       imap_port: cfg.imap_port || 993,
       email_usuario: cfg.email_usuario || '',
-      pasta: cfg.pasta || 'INBOX',
+      data_inicio_historico: cfg.data_inicio_historico_fmt || '2026-01-01',
       ativo: !!cfg.ativo,
       tem_senha: !!cfg.email_senha,
       ultima_sync: cfg.ultima_sync || null,
@@ -32,18 +35,18 @@ router.get('/config', async (req, res) => {
 router.put('/config', async (req, res) => {
   try {
     if (!soAdmin(req, res)) return;
-    const { imap_host, imap_port, email_usuario, email_senha, pasta, ativo } = req.body;
+    const { imap_host, imap_port, email_usuario, email_senha, data_inicio_historico, ativo } = req.body;
     const atual = await get('SELECT email_senha FROM integracao_email_fornecedores WHERE empresa_id = $1', [req.usuario.empresa_id]);
     const senhaFinal = (email_senha && email_senha.trim()) ? email_senha.trim() : (atual?.email_senha || null);
     await run(
-      `INSERT INTO integracao_email_fornecedores (empresa_id, imap_host, imap_port, email_usuario, email_senha, pasta, ativo, atualizado_em)
+      `INSERT INTO integracao_email_fornecedores (empresa_id, imap_host, imap_port, email_usuario, email_senha, data_inicio_historico, ativo, atualizado_em)
        VALUES ($1,$2,$3,$4,$5,$6,$7, NOW())
        ON CONFLICT (empresa_id) DO UPDATE SET
          imap_host=EXCLUDED.imap_host, imap_port=EXCLUDED.imap_port, email_usuario=EXCLUDED.email_usuario,
-         email_senha=EXCLUDED.email_senha, pasta=EXCLUDED.pasta, ativo=EXCLUDED.ativo, atualizado_em=NOW()`,
+         email_senha=EXCLUDED.email_senha, data_inicio_historico=EXCLUDED.data_inicio_historico, ativo=EXCLUDED.ativo, atualizado_em=NOW()`,
       [
         req.usuario.empresa_id, (imap_host || '').trim() || 'imap.uhserver.com', imap_port || 993,
-        (email_usuario || '').trim() || null, senhaFinal, (pasta || '').trim() || 'INBOX', ativo ? 1 : 0,
+        (email_usuario || '').trim() || null, senhaFinal, data_inicio_historico || '2026-01-01', ativo ? 1 : 0,
       ]
     );
     res.json({ ok: true });
@@ -59,7 +62,6 @@ router.post('/testar', async (req, res) => {
       imap_port: req.body.imap_port || atual.imap_port || 993,
       email_usuario: (req.body.email_usuario || atual.email_usuario || '').trim(),
       email_senha: (req.body.email_senha && req.body.email_senha.trim()) ? req.body.email_senha.trim() : atual.email_senha,
-      pasta: (req.body.pasta || atual.pasta || 'INBOX').trim(),
     };
     if (!cfg.email_usuario || !cfg.email_senha) return res.status(400).json({ erro: 'Informe o e-mail e a senha.' });
     const resultado = await testarConexao(cfg);
