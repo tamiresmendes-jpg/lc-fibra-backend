@@ -214,10 +214,97 @@ async function mapaDepartamentos(empresaId, cfg) {
   } catch { return {}; }
 }
 
+// ---------- CADASTRO COMPLETO (customerdb) ----------
+// O painel web do RHID usa uma família de serviços /v2/customerdb/*.svc (não documentada
+// publicamente) que devolve o cadastro completo da pessoa — cargo, e-mail, admissão,
+// desligamento/motivo — coisas que o /v2/api.svc/person não tem. Como é endpoint interno
+// (pode mudar sem aviso), toda função aqui é só leitura e tem fallback pro endpoint oficial.
+const BASE_CUSTOMERDB = 'https://www.rhid.com.br/v2/customerdb';
+
+function qsDataTablePessoas({ start = 0, length = 100 } = {}) {
+  const qs = new URLSearchParams();
+  qs.set('draw', '1');
+  ['id', 'name', 'companyTradingName', 'departmentName', 'statusStr', '', '', ''].forEach((data, i) => {
+    qs.set(`columns[${i}][data]`, data);
+    qs.set(`columns[${i}][name]`, '');
+    qs.set(`columns[${i}][searchable]`, 'true');
+    qs.set(`columns[${i}][orderable]`, i <= 1 ? 'true' : 'false');
+    qs.set(`columns[${i}][search][value]`, '');
+    qs.set(`columns[${i}][search][regex]`, 'false');
+  });
+  qs.set('order[0][column]', '1');
+  qs.set('order[0][dir]', 'asc');
+  qs.set('start', String(start));
+  qs.set('length', String(length));
+  qs.set('search[value]', '');
+  qs.set('search[regex]', 'false');
+  qs.set('pisPerson', ''); qs.set('cpfPerson', ''); qs.set('matriculaPerson', '');
+  return qs;
+}
+
+async function chamarCustomerDb(empresaId, cfg, caminho) {
+  const url = BASE_CUSTOMERDB + caminho;
+  const fazer = async (token) => {
+    const resp = await fetch(url, { headers: { 'Authorization': 'Bearer ' + token, 'Accept': 'application/json' } });
+    const texto = await resp.text();
+    let json = null; try { json = JSON.parse(texto); } catch {}
+    return { status: resp.status, json, texto };
+  };
+  let token = await tokenValido(empresaId, cfg);
+  let r = await fazer(token);
+  if (r.status === 401) { token = await tokenValido(empresaId, cfg, true); r = await fazer(token); }
+  return r;
+}
+
+// Datas do RHID vêm no formato .NET "/Date(1591153200000-0300)/"
+function parseDataDotNet(v) {
+  if (!v || typeof v !== 'string') return null;
+  const m = v.match(/\/Date\((-?\d+)/);
+  return m ? new Date(Number(m[1])).toISOString().slice(0, 10) : null;
+}
+
+async function buscarPessoasCustomerDb(empresaId, cfg, statusFiltro) {
+  const tudo = []; let start = 0; const length = 100;
+  while (true) {
+    const qs = qsDataTablePessoas({ start, length });
+    const r = await chamarCustomerDb(empresaId, cfg, `/person.svc/a_status/${statusFiltro}?${qs.toString()}`);
+    if (r.status !== 200 || !r.json || !Array.isArray(r.json.data)) {
+      if (start === 0) throw new Error('customerdb indisponível (HTTP ' + r.status + ')');
+      break;
+    }
+    tudo.push(...r.json.data);
+    if (r.json.data.length < length) break;
+    start += length;
+  }
+  return tudo.map(p => ({
+    id: p.id,
+    nome: p.name || '',
+    cpf: fmtCpf(p.cpf),
+    matricula: (p.registration && String(p.registration) !== '0') ? p.registration : '',
+    departamento: p.departmentName || '',
+    cargo: p.roleName || '',
+    email: p.email || '',
+    status: p.statusStr || (p.status === 1 ? 'Ativo' : 'Inativo'),
+    admissao: parseDataDotNet(p.admissionDate),
+    desligamento: parseDataDotNet(p.dismissalDate),
+    motivo_desligamento: p.reasonDismissalName || null,
+  }));
+}
+
 // ---------- FUNCIONÁRIOS ----------
 router.get('/funcionarios', async (req, res) => {
   try {
     const cfg = await exigirCfg(req, res); if (!cfg) return;
+
+    try {
+      const [ativos, inativos] = await Promise.all([
+        buscarPessoasCustomerDb(req.usuario.empresa_id, cfg, 'ativo'),
+        buscarPessoasCustomerDb(req.usuario.empresa_id, cfg, 'inativo'),
+      ]);
+      const funcionarios = [...ativos, ...inativos].sort((a, b) => a.nome.localeCompare(b.nome));
+      return res.json({ total: funcionarios.length, funcionarios, cadastro_completo: true });
+    } catch (e) { /* endpoint interno indisponível — segue com o oficial */ }
+
     const pessoas = await buscarPaginado(req.usuario.empresa_id, cfg, '/person');
     const deptos = await mapaDepartamentos(req.usuario.empresa_id, cfg);
     const funcionarios = pessoas.map(p => ({
@@ -229,7 +316,64 @@ router.get('/funcionarios', async (req, res) => {
       departamento: deptos[p.idDepartment] || (p.idDepartment != null ? `Depto ${p.idDepartment}` : ''),
       status: p.status === 1 ? 'Ativo' : 'Inativo',
     })).sort((a, b) => a.nome.localeCompare(b.nome));
-    res.json({ total: funcionarios.length, funcionarios });
+    res.json({ total: funcionarios.length, funcionarios, cadastro_completo: false });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Normaliza matrícula para comparar RHID x Kronos (tira espaços e zeros à esquerda)
+function normMatricula(v) {
+  const s = String(v ?? '').trim();
+  return s.replace(/^0+/, '') || s;
+}
+
+// ---------- DIVERGÊNCIAS DE STATUS (RHID x usuários do Kronos) ----------
+// Compara quem está ativo/inativo no RHID com o campo "ativo" da tabela usuarios,
+// casando pela matrícula. Só informa — não desativa nada automaticamente.
+router.get('/divergencias-usuarios', async (req, res) => {
+  try {
+    if (!soAdminGestor(req, res)) return;
+    const cfg = await exigirCfg(req, res); if (!cfg) return;
+    const empresaId = req.usuario.empresa_id;
+
+    const pessoas = await buscarPaginado(empresaId, cfg, '/person');
+    const porMatricula = new Map();
+    for (const p of pessoas) {
+      const mat = (p.registration && String(p.registration) !== '0') ? normMatricula(p.registration) : null;
+      if (mat) porMatricula.set(mat, p);
+    }
+
+    const usuarios = await all(
+      `SELECT id, nome, email, matricula, ativo FROM usuarios WHERE empresa_id = $1 AND matricula IS NOT NULL AND matricula <> ''`,
+      [empresaId]
+    );
+
+    const divergencias = [];
+    for (const u of usuarios) {
+      const pessoa = porMatricula.get(normMatricula(u.matricula));
+      if (!pessoa) continue;
+      const ativoRhid = pessoa.status === 1;
+      const ativoKronos = !!u.ativo;
+      if (ativoRhid !== ativoKronos) {
+        divergencias.push({
+          usuario_id: u.id,
+          nome: u.nome,
+          email: u.email,
+          matricula: u.matricula,
+          ativo_kronos: ativoKronos,
+          ativo_rhid: ativoRhid,
+          sugestao: ativoRhid && !ativoKronos
+            ? 'Ativo no RHID, mas inativo no Kronos — verifique se deve reativar o acesso.'
+            : 'Inativo no RHID, mas ativo no Kronos — verifique se deve desativar o acesso.',
+        });
+      }
+    }
+
+    res.json({
+      verificado_em: new Date().toISOString(),
+      total_pessoas_rhid: pessoas.length,
+      total_usuarios_com_matricula: usuarios.length,
+      divergencias,
+    });
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
