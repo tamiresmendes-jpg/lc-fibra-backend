@@ -1057,15 +1057,30 @@ router.get('/tempos-status', exigirEFiltrarDepartamentoAoVivo(), async (req, res
     // Lista por atendente (TMA/TME/TMR de cada um) — relatório por atendente.
     // NÃO filtra pelo sufixo do nome: quem aparece na tabela do Status é controlado pela lista
     // AO VIVO (departamento real do atendimento). Aqui devolvemos TODOS para o cruzamento por nome.
+    // O "total" do painel oficial (jo) é GLOBAL (todos os departamentos que o atendente
+    // passou no período) — o overview de atendentes do Chatmix não recorta por setor. Com
+    // filtro de departamento ativo isso inflava a coluna "Total (período)" da tela de Status
+    // (podia dar quase o dobro do total oficial do departamento). Recorta pelo nosso banco
+    // sincronizado (departamento REAL de cada ticket) quando há filtro.
+    let totalPorNomeDept = null;
+    if (dep) {
+      const rows = await all(
+        `SELECT LOWER(TRIM(COALESCE(atendente_nome,''))) AS nome, COUNT(*)::int AS total
+         FROM chatmix_atendimentos
+         WHERE empresa_id=$1 AND closed_at::date BETWEEN $2 AND $3 AND departamento=$4
+         GROUP BY 1`, [emp, di, df, dep]);
+      totalPorNomeDept = {}; rows.forEach(r => { totalPorNomeDept[r.nome] = r.total; });
+    }
     let atendentes = [];
     let tmr = '00:00:00', tmr_avg = '00:00:00';
     if (jo) {
       atendentes = (jo.data || []).map(a => {
         const nome = ((a.user?.first_name || '') + ' ' + (a.user?.last_name || '')).trim();
         const s = (jsat && jsat[nome.toLowerCase()]) || null;
+        const total = totalPorNomeDept ? (totalPorNomeDept[nome.toLowerCase()] || 0) : (a.total || 0);
         return {
           atendente: nome, departamento: deptDeNome(nome),
-          tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00', total: a.total || 0,
+          tma: a.tma || '00:00:00', tme: a.tme || '00:00:00', tmr: a.tmr || '00:00:00', tmr_avg: a.tmr_avg || '00:00:00', total,
           satisfeito: s ? s.sat : null, insatisfeito: s ? s.insat : null, invalida: s ? s.inval : null,
         };
       }).sort((x, y) => y.total - x.total);
