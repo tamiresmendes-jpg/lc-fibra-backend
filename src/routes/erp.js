@@ -1079,6 +1079,15 @@ async function calcularFiscal(dataInicio, dataFim) {
     return totalNotas > 0;
   });
 
+  // Se TODAS as empresas com CNPJ válido falharam sem trazer nenhuma nota
+  // (ex.: HubSoft recusando com 429 na janela toda), não é "zero notas no
+  // período" — é falha real. Propaga o erro em vez de salvar um relatório
+  // zerado como se tivesse dado certo.
+  const comCnpj = porEmpresa.filter(e => !e.indisponivel);
+  if (comCnpj.length > 0 && comCnpj.every(e => e.erro)) {
+    throw new Error(comCnpj[0].erro);
+  }
+
   return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, total_geral: totalGeral, por_tipo: geral, por_empresa: porEmpresaComDados };
 }
 
@@ -1126,6 +1135,11 @@ router.get('/fiscal', async (req, res) => {
     // Cache pronto: retorna na hora (não consulta ERP)
     if (cache && cache.status === 'pronto') {
       return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
+    }
+
+    // Cache com erro: avisa em vez de ficar preso em "processando" pra sempre
+    if (cache && cache.status === 'erro') {
+      return res.json({ status: 'erro', erro: cache.erro, gerado_em: cache.updated_at });
     }
 
     // Cache não existe ou está velho: avisa para usar cron (não dispara consulta aqui)

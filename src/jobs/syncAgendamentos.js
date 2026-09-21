@@ -13,6 +13,7 @@
 // por 3 a carga que o syncAnaliseOS já gera hoje.
 const { run } = require('../config/database');
 const { buscarAgendamentos } = require('./agendamentos');
+const { dentroJanelaSyncNoturno } = require('../utils/janelaSyncNoturno');
 
 function mesRef(delta) {
   const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
@@ -44,6 +45,7 @@ let _rodando = false;
 let _ciclo = 0;
 async function tick() {
   if (_rodando) { console.log('[syncAgendamentos] ciclo anterior ainda rodando, pulou esta vez'); return; }
+  if (dentroJanelaSyncNoturno()) { console.log('[syncAgendamentos] dentro da janela de sync noturno, pulou este ciclo'); return; }
   _rodando = true;
   try {
     await sincronizarMes(mesRef(0)); // mês atual — sempre, é o que precisa de tempo real

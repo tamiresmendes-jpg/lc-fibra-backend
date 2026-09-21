@@ -5,6 +5,7 @@
 // cima do cache, sem precisar buscar de novo no ERP a cada troca.
 const { run } = require('../config/database');
 const { buscarDadosOS } = require('./analiseOS');
+const { dentroJanelaSyncNoturno } = require('../utils/janelaSyncNoturno');
 
 function mesAtualEAnterior() {
   const hoje = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
@@ -24,6 +25,7 @@ function intervaloDoMes(mesRef) {
 let _rodando = false;
 async function tick() {
   if (_rodando) { console.log('[syncAnaliseOS] ciclo anterior ainda rodando, pulou esta vez'); return; }
+  if (dentroJanelaSyncNoturno()) { console.log('[syncAnaliseOS] dentro da janela de sync noturno, pulou este ciclo'); return; }
   _rodando = true;
   try {
     // Só o mês atual e o anterior — são os únicos que a tela normalmente abre.
