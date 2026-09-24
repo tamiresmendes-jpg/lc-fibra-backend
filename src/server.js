@@ -108,9 +108,6 @@ app.use('/api/atalhos', require('./routes/atalhos'));
 app.use('/api/chatmix', require('./routes/chatmix'));
 app.use('/api/ifalei', require('./routes/ifalei'));
 app.use('/api/rhid', require('./routes/rhid'));
-app.use('/api/fornecedores', require('./routes/fornecedores'));
-app.use('/api/email-fornecedores', require('./routes/email-fornecedores'));
-app.use('/api/contas-pagar-fornecedores', require('./routes/contas-pagar-fornecedores'));
 app.use('/uploads', express.static(require('path').join(__dirname, '../uploads')));
 
 app.get('/api/health', (req, res) => res.json({ status: 'ok', versao: '1.0.0' }));

@@ -219,10 +219,6 @@ const MAPA_PERMISSAO = [
   ['/api/erp/pacotes',                 'erp.analise-pacotes'],
   ['/api/erp/servicos-nfse',           'erp.analise-servicos-nfse'],
   ['/api/erp',                         'erp.consulta'],
-  // Financeiro — Fornecedores / Contas a Pagar (integração de e-mail UOL/IMAP)
-  ['/api/fornecedores',                'financeiro.fornecedores'],
-  ['/api/email-fornecedores',          'financeiro.contas-pagar'],
-  ['/api/contas-pagar-fornecedores',   'financeiro.contas-pagar'],
 ];
 
 // Módulos que NÃO seguem a regra "acesso total mostra tudo": só liberam se o
