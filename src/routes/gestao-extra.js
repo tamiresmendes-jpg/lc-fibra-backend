@@ -217,11 +217,14 @@ async function montarMetaComercial(eid, mesRef, perfil) {
        LEFT JOIN usuarios u ON u.id = v.usuario_id
        WHERE v.empresa_id=$1 AND v.ativo=true
        ORDER BY v.meta DESC, v.ordem, v.nome`, [eid]);
-    // Meta daquele mês, quando foi ajustada. Sem registro, vale a do cadastro —
-    // por isso mexer na meta de um mês não altera o que já foi apurado nos outros.
+    // Meta com VIGÊNCIA: vale a do registro mais recente com mês <= mês consultado.
+    // Mudar a meta em setembro vale de setembro em diante; meses anteriores seguem com a
+    // meta que tinham. Sem nenhum registro até o mês, vale a do cadastro (base inicial).
     const doMes = await all(
-      `SELECT vendedor_id, meta, bonus_meta, bonus_gap FROM meta_comercial_vendedor_mes
-       WHERE empresa_id=$1 AND mes=$2`, [eid, mesRef]);
+      `SELECT DISTINCT ON (vendedor_id) vendedor_id, mes, meta, bonus_meta, bonus_gap
+       FROM meta_comercial_vendedor_mes
+       WHERE empresa_id=$1 AND mes<=$2
+       ORDER BY vendedor_id, mes DESC`, [eid, mesRef]);
     const mapaMes = Object.fromEntries(doMes.map(m => [String(m.vendedor_id), m]));
     for (const v of vendedores) {
       const m = mapaMes[String(v.id)];
@@ -229,7 +232,15 @@ async function montarMetaComercial(eid, mesRef, perfil) {
       if (m.meta !== null && m.meta !== undefined) v.meta = m.meta;
       if (m.bonus_meta !== null && m.bonus_meta !== undefined) v.bonus_meta = m.bonus_meta;
       if (m.bonus_gap !== null && m.bonus_gap !== undefined) v.bonus_gap = m.bonus_gap;
-      v.meta_do_mes = true;   // a tela mostra que este mês tem meta própria
+      v.meta_do_mes = m.mes === mesRef;   // a tela marca o mês em que a meta mudou
+    }
+    // Férias no mês: sem meta nem bônus e fora da meta total, só naquele mês.
+    const feriasMes = await all(
+      `SELECT vendedor_id FROM meta_comercial_ferias WHERE empresa_id=$1 AND mes=$2`, [eid, mesRef]);
+    const setFerias = new Set(feriasMes.map(f => String(f.vendedor_id)));
+    for (const v of vendedores) {
+      v.em_ferias = setFerias.has(String(v.id));
+      if (v.em_ferias) v.meta = 0;
     }
     vendedores.sort((a, b) => (b.meta || 0) - (a.meta || 0) || (a.ordem || 0) - (b.ordem || 0) || String(a.nome).localeCompare(String(b.nome)));
 
@@ -266,9 +277,11 @@ async function montarMetaComercial(eid, mesRef, perfil) {
       const cancelamento = mapaCancel[email] || 0;
       const saldo = qtdVendas - cancelamento;
       const gap = saldo - (v.meta || 0);
-      const bateMeta = v.conta_meta ? saldo >= (v.meta || 0) : null;
-      const bonusMeta = v.conta_meta && bateMeta ? Number(v.bonus_meta || 0) : 0;
-      const bonusGap = v.conta_meta && gap > 0 ? gap * Number(v.bonus_gap || 0) : 0;
+      // Meta 0 = sem meta no mês: aparece na lista, mas não "bate meta" nem gera bônus.
+      const temMeta = v.conta_meta && (v.meta || 0) > 0;
+      const bateMeta = temMeta ? saldo >= (v.meta || 0) : null;
+      const bonusMeta = temMeta && bateMeta ? Number(v.bonus_meta || 0) : 0;
+      const bonusGap = temMeta && gap > 0 ? gap * Number(v.bonus_gap || 0) : 0;
       return {
         ...v, nome: v.usuario_nome || v.nome, // nome do sistema (Kronos) tem prioridade quando vinculado
         qtd_vendas: qtdVendas, cancelamento, saldo, gap,
@@ -276,10 +289,10 @@ async function montarMetaComercial(eid, mesRef, perfil) {
         total_bonus: Math.round((bonusMeta + bonusGap) * 100) / 100,
       };
     })
-      // Quem TEM meta aparece sempre (mesmo sem venda no mês, senão a meta do setor encolheria
-      // e o supervisor seria beneficiado). Quem não tem meta (Call Center, Financeiro, etc.)
-      // só aparece no mês em que teve venda.
-      .filter(i => (i.conta_meta && (i.meta || 0) > 0) || i.qtd_vendas > 0);
+      // Todo vendedor com meta individual aparece sempre (mesmo sem venda no mês ou com meta 0).
+      // Quem não tem meta individual (Call Center, Financeiro, etc.) só aparece no mês em que
+      // teve venda.
+      .filter(i => i.conta_meta || i.qtd_vendas > 0);
 
     // Vendedores detectados nas vendas sincronizadas mas SEM cadastro de meta ainda.
     // Para cada um, sugere o usuário do Kronos com o mesmo e-mail (vínculo automático por
@@ -392,8 +405,28 @@ router.get('/meta-comercial/pdf', autenticar, exigirVerMetaComercial, async (req
 });
 
 // ─── Meta de um MÊS específico ───────────────────────────────────────────────
-// Ajusta a meta só naquele mês, sem tocar nos outros nem no cadastro do vendedor.
-// Enviar meta vazia remove o ajuste e o mês volta a usar a meta padrão.
+// Marca/desmarca o vendedor como "em férias" só naquele mês (sem meta nem bônus).
+router.put('/meta-comercial/vendedor/:id/ferias/:mes', autenticar, async (req, res) => {
+  try {
+    if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
+    const { id, mes } = req.params;
+    if (!/^\d{4}-\d{2}$/.test(mes)) return res.status(400).json({ erro: 'Mês inválido (use AAAA-MM).' });
+    const existe = await get('SELECT id FROM meta_comercial_vendedor WHERE id=$1 AND empresa_id=$2', [id, req.usuario.empresa_id]);
+    if (!existe) return res.status(404).json({ erro: 'Vendedor não encontrado' });
+    if (req.body.ferias) {
+      await run(`INSERT INTO meta_comercial_ferias (empresa_id, vendedor_id, mes) VALUES ($1,$2,$3)
+                 ON CONFLICT DO NOTHING`, [req.usuario.empresa_id, id, mes]);
+    } else {
+      await run('DELETE FROM meta_comercial_ferias WHERE empresa_id=$1 AND vendedor_id=$2 AND mes=$3',
+        [req.usuario.empresa_id, id, mes]);
+    }
+    res.json({ ok: true });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Define a meta A PARTIR daquele mês (vale nos seguintes até a próxima mudança), sem tocar
+// nos meses anteriores nem no cadastro do vendedor.
+// Enviar meta vazia remove a mudança daquele mês e ele volta a herdar a vigente anterior.
 router.put('/meta-comercial/vendedor/:id/mes/:mes', autenticar, async (req, res) => {
   try {
     if (!PODE_EDITAR_META_COMERCIAL.includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
@@ -975,11 +1008,12 @@ router.put('/meta-comercial/vendedor/:id', autenticar, async (req, res) => {
     }
     await run(
       `UPDATE meta_comercial_vendedor SET
-         nome=$1, filial=$2, hubsoft_email=$3, hubsoft_id_vendedor=$4, usuario_id=$5, meta=$6, bonus_meta=$7, bonus_gap=$8,
+         nome=$1, filial=$2, hubsoft_email=$3, hubsoft_id_vendedor=$4, usuario_id=$5,
+         meta=COALESCE($6, meta), bonus_meta=COALESCE($7, bonus_meta), bonus_gap=COALESCE($8, bonus_gap),
          conta_meta=$9, ativo=$10, ordem=$11, discord_id=$12
        WHERE id=$13 AND empresa_id=$14`,
       [nome, filial || null, (hubsoft_email || '').toLowerCase() || null, hubsoft_id_vendedor || null, usuario_id || null,
-       meta || 0, bonus_meta || 0, bonus_gap || 0, conta_meta !== false, ativo !== false, ordem || 0,
+       meta ?? null, bonus_meta ?? null, bonus_gap ?? null, conta_meta !== false, ativo !== false, ordem || 0,
        (discord_id || '').replace(/\D/g, '') || null,
        req.params.id, req.usuario.empresa_id]
     );

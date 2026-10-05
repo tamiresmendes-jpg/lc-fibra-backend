@@ -1437,6 +1437,22 @@ async function initSchema() {
       PRIMARY KEY (empresa_id, vendedor_id, mes)
     );
     -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
+    -- Vendedor em férias num mês específico: fica na lista, mas sem meta e sem bônus naquele
+    -- mês (não conta na meta total). Não se propaga: no mês seguinte volta ao normal.
+    CREATE TABLE IF NOT EXISTS meta_comercial_ferias (
+      empresa_id  TEXT NOT NULL,
+      vendedor_id TEXT NOT NULL,
+      mes         TEXT NOT NULL,          -- YYYY-MM
+      PRIMARY KEY (empresa_id, vendedor_id, mes)
+    );
+    -- Vigência: o registro mais recente <= mês consultado vale daquele mês em diante.
+    -- Fixa em set/2026 os valores que estavam no cadastro (cadastrados em setembro), para
+    -- que mudanças futuras não alterem setembro. Só vendedores anteriores a out/2026.
+    INSERT INTO meta_comercial_vendedor_mes (empresa_id, vendedor_id, mes, meta, bonus_meta, bonus_gap)
+    SELECT v.empresa_id, v.id, '2026-09', v.meta, v.bonus_meta, v.bonus_gap
+    FROM meta_comercial_vendedor v
+    WHERE v.created_at < '2026-10-01'
+    ON CONFLICT (empresa_id, vendedor_id, mes) DO NOTHING;
     -- Histórico de PDFs da Meta de Atendimento (Financeiro/Call Center) — satisfação semanal
     CREATE TABLE IF NOT EXISTS meta_atendimento_pdf (
       id TEXT PRIMARY KEY,
