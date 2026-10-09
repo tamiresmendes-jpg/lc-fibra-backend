@@ -639,4 +639,28 @@ router.post('/gerar-acessos-corporativos', async (req, res) => {
   }
 });
 
+// POST /usuarios/relatorio-pdf — PDF com os colaboradores selecionados na
+// tela (Usuários > marca as linhas > "Relatório PDF"), agrupados por
+// departamento com contagem por setor e total geral.
+router.post('/relatorio-pdf', async (req, res) => {
+  try {
+    const ids = Array.isArray(req.body?.ids) ? [...new Set(req.body.ids.filter(Boolean))] : [];
+    if (!ids.length) return res.status(400).json({ erro: 'Selecione ao menos um colaborador' });
+    const placeholders = ids.map(() => '?').join(',');
+    const usuarios = await all(`
+      SELECT u.nome, d.nome as departamento_nome, c.nome as cargo_nome
+      FROM usuarios u
+      LEFT JOIN departamentos d ON d.id = u.departamento_id
+      LEFT JOIN cargos c ON c.id = u.cargo_id
+      WHERE u.empresa_id = ? AND u.id IN (${placeholders})
+    `, [req.usuario.empresa_id, ...ids]);
+    if (!usuarios.length) return res.status(404).json({ erro: 'Nenhum colaborador encontrado' });
+    const { gerarPDFRelatorioPessoal } = require('../utils/gerarPDFRelatorioPessoal');
+    const pdf = await gerarPDFRelatorioPessoal(usuarios, { nomeUsuario: req.usuario.nome });
+    res.setHeader('Content-Type', 'application/pdf');
+    res.setHeader('Content-Disposition', 'attachment; filename="relatorio-pessoal.pdf"');
+    res.send(pdf);
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 module.exports = router;

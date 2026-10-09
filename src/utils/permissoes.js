@@ -219,6 +219,7 @@ const MAPA_PERMISSAO = [
   ['/api/erp/pacotes',                 'erp.analise-pacotes'],
   ['/api/erp/servicos-nfse',           'erp.analise-servicos-nfse'],
   ['/api/erp',                         'erp.consulta'],
+  ['/api/composicao-planos',           'erp.composicao-planos'],
 ];
 
 // Módulos que NÃO seguem a regra "acesso total mostra tudo": só liberam se o

@@ -37,7 +37,7 @@ router.get('/', autenticar, async (req, res) => {
 router.post('/', autenticar, async (req, res) => {
   try {
     if (!['admin','gestor'].includes(req.usuario.perfil)) return res.status(403).json({ erro: 'Sem permissão' });
-    const { nome, data, tipo, recorrente, observacao } = req.body;
+    const { nome, data, tipo, recorrente, observacao, cidade } = req.body;
     if (!nome || !data) return res.status(400).json({ erro: 'Nome e data são obrigatórios' });
 
     const tipoFinal = tipo || 'nacional';
@@ -45,8 +45,8 @@ router.post('/', autenticar, async (req, res) => {
 
     const id = uuidv4();
     await run(
-      `INSERT INTO feriados (id, empresa_id, nome, data, tipo, recorrente, observacao, validacao) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [id, req.usuario.empresa_id, nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, validacao]
+      `INSERT INTO feriados (id, empresa_id, nome, data, tipo, recorrente, observacao, validacao, cidade) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [id, req.usuario.empresa_id, nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, validacao, cidade || null]
     );
     const novo = await get(`SELECT * FROM feriados WHERE id = ?`, [id]);
     res.status(201).json(novo);
@@ -61,7 +61,7 @@ router.put('/:id', autenticar, async (req, res) => {
     const existente = await get(`SELECT id FROM feriados WHERE id = ? AND empresa_id = ?`, [req.params.id, req.usuario.empresa_id]);
     if (!existente) return res.status(404).json({ erro: 'Feriado não encontrado' });
 
-    const { nome, data, tipo, recorrente, observacao } = req.body;
+    const { nome, data, tipo, recorrente, observacao, cidade } = req.body;
     const tipoFinal = tipo || 'nacional';
 
     // Se mudou para tipo auto-confirmado, atualiza validação automaticamente
@@ -69,13 +69,13 @@ router.put('/:id', autenticar, async (req, res) => {
 
     if (validacaoAuto) {
       await run(
-        `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ?, validacao = ? WHERE id = ?`,
-        [nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, validacaoAuto, req.params.id]
+        `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ?, validacao = ?, cidade = ? WHERE id = ?`,
+        [nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, validacaoAuto, cidade || null, req.params.id]
       );
     } else {
       await run(
-        `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ? WHERE id = ?`,
-        [nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, req.params.id]
+        `UPDATE feriados SET nome = ?, data = ?, tipo = ?, recorrente = ?, observacao = ?, cidade = ? WHERE id = ?`,
+        [nome, data, tipoFinal, recorrente !== undefined ? (recorrente ? 1 : 0) : 1, observacao || null, cidade || null, req.params.id]
       );
     }
 

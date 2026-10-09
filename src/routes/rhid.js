@@ -436,6 +436,33 @@ router.get('/batidas', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
+// ---------- FERIADOS (fonte de verdade p/ o módulo Escala) ----------
+// Datas que o próprio RHID marcou como feriado (isHoliday) na apuração de ponto,
+// filtradas por departamento — assim a escala usa exatamente o que já vale pra folha,
+// em vez de depender só do cadastro manual/feriados nacionais fixos no código.
+router.get('/feriados', async (req, res) => {
+  try {
+    await garantir();
+    const emp = req.usuario.empresa_id;
+    const { departamento, mes, ano } = req.query;
+    if (!mes || !ano) return res.status(400).json({ erro: 'Informe mes e ano.' });
+    const m = String(mes).padStart(2, '0');
+    const ultimoDia = new Date(Number(ano), Number(mes), 0).getDate();
+    const dataIni = `${ano}-${m}-01`;
+    const dataFim = `${ano}-${m}-${String(ultimoDia).padStart(2, '0')}`;
+
+    const params = [emp, dataIni, dataFim];
+    let sql = `SELECT DISTINCT data FROM rhid_ponto_dia WHERE empresa_id=$1 AND is_holiday=true AND data >= $2 AND data <= $3`;
+    if (departamento) { params.push(`%${departamento}%`); sql += ` AND departamento ILIKE $${params.length}`; }
+    const rows = await all(sql + ' ORDER BY data', params);
+    const dias = rows.map(r => {
+      const s = (r.data instanceof Date) ? r.data.toISOString().slice(0, 10) : String(r.data).slice(0, 10);
+      return Number(s.slice(8, 10));
+    });
+    res.json({ dias });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
 // ---------- LISTAS (para filtros do dashboard) ----------
 router.get('/listas', async (req, res) => {
   try {

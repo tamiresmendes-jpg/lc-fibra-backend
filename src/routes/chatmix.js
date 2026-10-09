@@ -587,9 +587,19 @@ function contemSequencia(tokensNomeCompleto, tokensBusca) {
   }
   return false;
 }
+// Inclui usuários DESATIVADOS: quem sai (ou é desativada, ex.: atendente da Meta Call
+// Center) não pode perder o vínculo com o Chatmix e o histórico. Ativos têm prioridade
+// (ver achaCandidato); desativado só é usado se nenhum ativo bater.
 async function candidatosDeNomes(empresa_id) {
-  const us = await all('SELECT nome, email FROM usuarios WHERE empresa_id=$1 AND ativo=1', [empresa_id]);
-  return us.map(u => ({ nome: u.nome, email: u.email, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
+  const us = await all('SELECT nome, email, ativo FROM usuarios WHERE empresa_id=$1', [empresa_id]);
+  return us.map(u => ({ nome: u.nome, email: u.email, ativo: u.ativo === 1, tokens: semAcentoAt(u.nome).split(/\s+/).filter(Boolean) }));
+}
+// Acha o ÚNICO colaborador que bate com o nome; ativos primeiro, desativados como reserva.
+function achaCandidato(candidatos, busca) {
+  const bate = candidatos.filter(c => contemSequencia(c.tokens, busca));
+  const ativos = bate.filter(c => c.ativo);
+  const grupo = ativos.length ? ativos : bate;
+  return grupo.length === 1 ? grupo[0] : null;
 }
 // Apelidos/vínculos cadastrados manualmente — ver comentário na criação da tabela em
 // jobs/chatmixSync.js. Mapa: apelido normalizado -> { nome_completo, email, usuario_id }.
@@ -610,8 +620,8 @@ function nomeCompletoDe(candidatos, atendenteNome, apelidos = {}) {
   if (manual) return manual.nome_completo;
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return atendenteNome;
-  const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
-  return achados.length === 1 ? achados[0].nome : atendenteNome;
+  const achado = achaCandidato(candidatos, busca);
+  return achado ? achado.nome : atendenteNome;
 }
 // E-mail do usuário do sistema casado com o nome do atendente (mesma resolução
 // do nome completo) — usado pra filtrar "só a própria linha" na Meta.
@@ -620,8 +630,8 @@ function emailDoAtendente(candidatos, atendenteNome, apelidos = {}) {
   if (manual) return manual.email || candidatos.find(c => c.nome === manual.nome_completo)?.email || null;
   const busca = nomeChatmixSemDepto(atendenteNome);
   if (!busca.length) return null;
-  const achados = candidatos.filter(c => contemSequencia(c.tokens, busca));
-  return achados.length === 1 ? achados[0].email : null;
+  const achado = achaCandidato(candidatos, busca);
+  return achado ? achado.email : null;
 }
 
 // Departamento derivado do NOME do atendente (ex.: "Maiza Suporte" → Suporte)
@@ -763,8 +773,7 @@ async function detectadosSemVinculo(empresa_id, di, df) {
     vistos.add(norm);
     if (apelidos[norm]) continue; // já resolvido (vínculo com usuario_id ou apelido antigo)
     const busca = nomeChatmixSemDepto(r.nome);
-    const achados = busca.length ? candidatosNomes.filter(c => contemSequencia(c.tokens, busca)) : [];
-    if (achados.length === 1) continue;
+    if (busca.length && achaCandidato(candidatosNomes, busca)) continue;
     detectados.push({ atendente_nome: r.nome, apelido_norm: norm, departamento: rotuloDept(r.nome) });
   }
   return detectados;

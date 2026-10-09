@@ -224,6 +224,10 @@ router.patch('/:id/turnos', async (req, res) => {
       sets.push('colunas_atend=?');
       params.push(req.body.colunas_atend === null ? null : JSON.stringify(req.body.colunas_atend));
     }
+    if ('feriados_ignorados' in req.body) {
+      sets.push('feriados_ignorados=?');
+      params.push(req.body.feriados_ignorados === null ? null : JSON.stringify(req.body.feriados_ignorados));
+    }
     if (sets.length) {
       params.push(req.params.id);
       await run(`UPDATE escalas SET ${sets.join(',')} WHERE id=?`, params);

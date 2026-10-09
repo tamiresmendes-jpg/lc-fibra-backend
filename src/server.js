@@ -69,6 +69,7 @@ app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/email', require('./routes/email-teste'));
 app.use('/api/ia', require('./routes/ia'));
 app.use('/api/erp', require('./routes/erp'));
+app.use('/api/composicao-planos', require('./routes/composicaoPlanos'));
 app.use('/api/erp/rota-tecnica', require('./routes/rota-tecnica'));
 app.use('/api/pop-comentarios', require('./routes/pop-comentarios'));
 app.use('/api/setores', require('./routes/setores'));

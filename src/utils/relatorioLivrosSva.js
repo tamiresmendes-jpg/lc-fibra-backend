@@ -7,6 +7,10 @@ const { agruparComposicao } = require('./gerarPDFPlano');
 const hubsoft = require('../services/hubsoft');
 
 const NOME_ITEM_REGEX = /LC\+?\s*Livros/i;
+// Audio-book entra na composição real do HubSoft como pacote à parte —
+// pedido da usuária 29/09/2026 pra essa faixa considerar Audio-book junto do
+// livro, igual já funciona no Combo da tela de Composição de Planos.
+const NOME_AUDIO_REGEX = /AUDIO\s*[- ]?\s*BOOK/i;
 
 // Fatura vence com o cliente num desses status = não recebe nota (mesmo já
 // tendo o livro entregue) — "ficou de fora" daquele ciclo de faturamento.
@@ -16,18 +20,30 @@ const STATUS_SEM_NOTA_REGEX = /cancelad|bloque|inativ/i;
 // aparece como "N livros" mesmo, pra não inventar rótulo.
 const NOME_FAIXA = { 2: 'Bronze', 3: 'Prata', 4: 'Ouro' };
 
-// Soma TODOS os grupos que batem com "LC+ Livros", não só o primeiro — linhas
+// Mesma prioridade da tela de Composição de Planos (calcularCombo, front-end)
+// — Audio-book manda no nome da faixa quando presente, pra ficar consistente
+// entre os dois lugares que mostram Bronze/Prata/Ouro/Safira/Diamante.
+function nomeFaixa(qtdLivros, qtdAudio) {
+  if (qtdAudio >= 2) return 'Diamante';
+  if (qtdAudio === 1) return 'Safira';
+  if (NOME_FAIXA[qtdLivros]) return NOME_FAIXA[qtdLivros];
+  return `${qtdLivros} livros`;
+}
+
+// Soma TODOS os grupos que batem com o regex, não só o primeiro — linhas
 // idênticas na composição (mesma descrição/percentual) agrupam certinho, mas
 // se alguma linha tiver um campo diferente das outras (ex.: valor calculado
 // com centavos diferentes), ela vira um grupo à parte em vez de somar no
 // mesmo — pegar só o primeiro grupo (find) sub-contava esses casos.
-function quantidadeLivros(plano) {
+function somarGrupo(plano, regex) {
   const composicao = Array.isArray(plano.servico_composicao) ? plano.servico_composicao : [];
   const grupos = agruparComposicao(composicao);
   return grupos
-    .filter(g => NOME_ITEM_REGEX.test(g.descricao || ''))
+    .filter(g => regex.test(g.descricao || ''))
     .reduce((soma, g) => soma + (g._quantidade || 0), 0);
 }
+const quantidadeLivros = (plano) => somarGrupo(plano, NOME_ITEM_REGEX);
+const quantidadeAudio = (plano) => somarGrupo(plano, NOME_AUDIO_REGEX);
 
 // planos: já vem de planosComClienteDetalhados (ativo/inativo-com-cliente,
 // já com clientes_servicos_count e servico_composicao completos).
@@ -38,31 +54,40 @@ function montarRelatorioLivros(planos) {
     if (!clientes) continue;
     const qtdLivros = quantidadeLivros(plano);
     if (!qtdLivros) continue; // plano sem o item "LC+ Livros" na composição — não entra na volumetria
+    const qtdAudio = quantidadeAudio(plano);
     linhas.push({
       id_servico: plano.id_servico,
       descricao_plano: plano.descricao || plano.nome_exibicao || `Plano ${plano.id_servico}`,
       ativo: !!plano.ativo,
       clientes_servicos_count: clientes,
       quantidade_livros_por_cliente: qtdLivros,
+      quantidade_audio_por_cliente: qtdAudio,
       total_livros: clientes * qtdLivros,
-      faixa: NOME_FAIXA[qtdLivros] || `${qtdLivros} livros`,
+      total_audio: clientes * qtdAudio,
+      faixa: nomeFaixa(qtdLivros, qtdAudio),
     });
   }
 
   const porFaixa = new Map();
   for (const l of linhas) {
-    const acc = porFaixa.get(l.faixa) || { faixa: l.faixa, quantidade_livros_por_cliente: l.quantidade_livros_por_cliente, clientes: 0, total_livros: 0 };
+    const acc = porFaixa.get(l.faixa) || {
+      faixa: l.faixa, quantidade_livros_por_cliente: l.quantidade_livros_por_cliente,
+      quantidade_audio_por_cliente: l.quantidade_audio_por_cliente, clientes: 0, total_livros: 0, total_audio: 0,
+    };
     acc.clientes += l.clientes_servicos_count;
     acc.total_livros += l.total_livros;
+    acc.total_audio += l.total_audio;
     porFaixa.set(l.faixa, acc);
   }
   const resumo = [...porFaixa.values()].sort((a, b) => a.quantidade_livros_por_cliente - b.quantidade_livros_por_cliente);
   const totalGeral = resumo.reduce((s, r) => s + r.total_livros, 0);
+  const totalGeralAudio = resumo.reduce((s, r) => s + r.total_audio, 0);
 
   return {
     planos: linhas.sort((a, b) => a.quantidade_livros_por_cliente - b.quantidade_livros_por_cliente),
     resumo,
     total_geral: totalGeral,
+    total_geral_audio: totalGeralAudio,
   };
 }
 

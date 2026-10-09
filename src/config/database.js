@@ -996,6 +996,7 @@ async function initSchema() {
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_audit_log_empresa ON audit_log(empresa_id, created_at DESC)`);
 
   await pool.query(`ALTER TABLE feriados ADD COLUMN IF NOT EXISTS validacao TEXT DEFAULT 'confirmado'`);
+  await pool.query(`ALTER TABLE feriados ADD COLUMN IF NOT EXISTS cidade TEXT`);
   // Tipos que precisam de validação entram como pendente
   await pool.query(`
     UPDATE feriados SET validacao = 'pendente'
@@ -1436,7 +1437,6 @@ async function initSchema() {
       atualizado_em TIMESTAMP DEFAULT NOW(),
       PRIMARY KEY (empresa_id, vendedor_id, mes)
     );
-    -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
     -- Vendedor em férias num mês específico: fica na lista, mas sem meta e sem bônus naquele
     -- mês (não conta na meta total). Não se propaga: no mês seguinte volta ao normal.
     CREATE TABLE IF NOT EXISTS meta_comercial_ferias (
@@ -1453,6 +1453,7 @@ async function initSchema() {
     FROM meta_comercial_vendedor v
     WHERE v.created_at < '2026-10-01'
     ON CONFLICT (empresa_id, vendedor_id, mes) DO NOTHING;
+    -- Histórico dos PDFs da Meta gerados, para acompanhamento posterior
     -- Histórico de PDFs da Meta de Atendimento (Financeiro/Call Center) — satisfação semanal
     CREATE TABLE IF NOT EXISTS meta_atendimento_pdf (
       id TEXT PRIMARY KEY,
@@ -1624,6 +1625,198 @@ async function initSchema() {
     )
   `);
 
+  // Composição de Planos — v1 (SCM+SVA importado do ERP) foi substituída em
+  // 24/09/2026 pelo modelo de precificação completo (custo de fornecedor
+  // separado do valor de venda, impostos genéricos por item, regra dos 50%,
+  // margem sobre o preço de venda). Sem uso real ainda, então troca de schema
+  // direto — nada a migrar.
+  await pool.query(`DROP TABLE IF EXISTS composicoes_planos_itens`);
+  await pool.query(`DROP TABLE IF EXISTS composicoes_planos`);
+  await pool.query(`DROP TABLE IF EXISTS scms_manuais`);
+  await pool.query(`DROP TABLE IF EXISTS svas`);
+  // v2 (mesmo dia): Tipo deixa de ser enum fixo (era travado em
+  // internet_sm/sva/ebook) e vira cadastro próprio (cp_tipos_item). O DROP de
+  // cp_itens/cp_item_impostos daquela migração (pra trocar de "tipo TEXT"
+  // para "tipo_id") era pra rodar SÓ UMA VEZ, mas ficou incondicional aqui —
+  // todo reinício do backend apagava os itens/impostos de novo (bug real:
+  // sumiu o cadastro dela em produção). NÃO reintroduzir esse DROP; a
+  // correção (repopula o que foi apagado) está em corrigirComposicaoPlanosItens.
+
+  // cp_modelos: modelos PERSONALIZADOS que a usuária cria além de "novo" e
+  // "atual" (pedido 25/09/2026) — planos nesses modelos são "livres": cada
+  // item usa o valor que ela digitar na hora, sem fórmula (sem trava de 50%,
+  // sem SVA fora da composição). "novo" e "atual" continuam sendo valores
+  // fixos de cp_planos.modelo (nunca viram linha aqui); um modelo
+  // personalizado é referenciado em cp_planos.modelo pelo próprio id.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_modelos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      criado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // cp_tipos_item: categorias de item cadastráveis (Internet/SM, SVA,
+  // Livro/E-book vêm de fábrica, mas dá pra criar outras). conta_no_limite_50
+  // marca se esse tipo entra na soma da regra dos 50% (SVA/Livro entram,
+  // Internet/SM não). percentual_fixo: quando preenchido, o valor desse item
+  // no plano é travado nesse % do preço de venda (ex.: Internet/SM = 50),
+  // em vez de usar o valor de venda do catálogo. absorve_restante: esse tipo
+  // pega o que sobrar do preço de venda depois de todo o resto (ex.:
+  // Livro/E-book) — pedido explícito da usuária (24/09/2026): ela já sabe o
+  // valor de cada SVA e da Internet (50% fixo); só o Livro/E-book varia
+  // conforme o que sobra.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_tipos_item (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      conta_no_limite_50 INTEGER NOT NULL DEFAULT 1,
+      percentual_fixo NUMERIC(5,2),
+      absorve_restante INTEGER NOT NULL DEFAULT 0,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      ordem INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`ALTER TABLE cp_tipos_item ADD COLUMN IF NOT EXISTS percentual_fixo NUMERIC(5,2)`);
+  await pool.query(`ALTER TABLE cp_tipos_item ADD COLUMN IF NOT EXISTS absorve_restante INTEGER NOT NULL DEFAULT 0`);
+
+  // cp_itens: catálogo de itens que compõem um plano. valor_venda e
+  // custo_fornecedor são SEPARADOS (o que se cobra do cliente x o que se
+  // paga ao fornecedor) — pedido explícito da usuária pra calcular margem de
+  // verdade, não só "quanto custa a composição".
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_itens (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      tipo_id TEXT NOT NULL,
+      valor_venda NUMERIC(12,2) NOT NULL DEFAULT 0,
+      custo_fornecedor NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      criado_por TEXT,
+      criado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      atualizado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // cp_impostos: só o NOME do imposto (ICMS, PIS, COFINS, ISS, IBS
+  // Estadual...). A alíquota não mora aqui porque o MESMO imposto tem
+  // alíquota diferente em cada item (ex.: PIS varia 0% / 0,65% / 1,65%
+  // conforme o item, nos dados reais do ERP) — a alíquota é da relação
+  // item×imposto, ver cp_item_impostos.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_impostos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      ativo INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+
+  // cp_item_impostos: vínculo item×imposto com os valores específicos
+  // daquela combinação. base_calculo = % do valor do item que compõe a base
+  // de cálculo (100 = base cheia, equivalente ao "Valor Original" do ERP;
+  // menos que isso = redução de base).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_item_impostos (
+      id TEXT PRIMARY KEY,
+      item_id TEXT NOT NULL,
+      imposto_id TEXT NOT NULL,
+      aliquota NUMERIC(6,3) NOT NULL DEFAULT 0,
+      base_calculo NUMERIC(6,3) NOT NULL DEFAULT 100,
+      vigente_desde TEXT,
+      ativo INTEGER NOT NULL DEFAULT 1
+    )
+  `);
+
+  // cp_historico: log de alteração de valor/custo/imposto (pedido explícito
+  // da usuária pra rastrear mudanças de precificação — os PLANOS salvos são
+  // snapshot e não são afetados por isso, é só consulta do cadastro).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_historico (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      entidade TEXT NOT NULL,
+      entidade_id TEXT NOT NULL,
+      descricao TEXT NOT NULL,
+      alterado_por TEXT,
+      alterado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+
+  // cp_planos: o plano salvo. preco_venda é o preço cobrado do cliente
+  // (informado pela usuária), independente da soma dos itens — é sobre ele
+  // que resultado/margem são calculados. quantidade_clientes é digitada à
+  // mão (quantos clientes reais estão nessa composição hoje) pra calcular o
+  // total agregado (faturamento/impostos/resultado × quantidade).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_planos (
+      id TEXT PRIMARY KEY,
+      empresa_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      preco_venda NUMERIC(12,2) NOT NULL DEFAULT 0,
+      quantidade_clientes INTEGER NOT NULL DEFAULT 1,
+      desconto_pontualidade NUMERIC(12,2) NOT NULL DEFAULT 10,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      criado_por TEXT,
+      criado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'),
+      atualizado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`ALTER TABLE cp_planos ADD COLUMN IF NOT EXISTS quantidade_clientes INTEGER NOT NULL DEFAULT 1`);
+  // Desconto de pontualidade (padrão R$10, editável por plano) — pedido da
+  // usuária 24/09/2026: todo plano tem esse desconto sobre o preço de tabela.
+  await pool.query(`ALTER TABLE cp_planos ADD COLUMN IF NOT EXISTS desconto_pontualidade NUMERIC(12,2) NOT NULL DEFAULT 10`);
+  // 'novo' (fórmula nova, Internet 50% do preço cheio) ou 'atual' (modelo de
+  // hoje, Internet+Livro 50/50 só sobre o valor sem SVA) — pedido da usuária
+  // 24/09/2026: duplicar um plano 'novo' já registrando a versão 'atual' dele,
+  // pra manter as duas em abas separadas.
+  await pool.query(`ALTER TABLE cp_planos ADD COLUMN IF NOT EXISTS modelo TEXT NOT NULL DEFAULT 'novo'`);
+  // ID do serviço no HubSoft (ex.: 391, 217) — pedido da usuária 29/09/2026:
+  // o "ID" da tabela comparativa é esse número curto do ERP, não o id interno
+  // (UUID) do plano. Só é preenchido pra planos vindos de /importar-erp.
+  await pool.query(`ALTER TABLE cp_planos ADD COLUMN IF NOT EXISTS id_erp TEXT`);
+
+  // cp_plano_itens / cp_plano_itens_impostos: itens do plano em SNAPSHOT — se
+  // o cadastro de itens/impostos/tipos mudar depois, planos já salvos não
+  // mudam. conta_no_limite_50 também é snapshotado (se o tipo for
+  // reconfigurado depois, planos antigos mantêm a regra de quando foram salvos).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_plano_itens (
+      id TEXT PRIMARY KEY,
+      plano_id TEXT NOT NULL,
+      item_id TEXT,
+      nome TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      conta_no_limite_50 INTEGER NOT NULL DEFAULT 1,
+      percentual_fixo NUMERIC(5,2),
+      absorve_restante INTEGER NOT NULL DEFAULT 0,
+      quantidade INTEGER NOT NULL DEFAULT 1,
+      valor_unitario NUMERIC(12,2) NOT NULL DEFAULT 0,
+      custo_fornecedor_unitario NUMERIC(12,2) NOT NULL DEFAULT 0,
+      ordem INTEGER NOT NULL DEFAULT 0
+    )
+  `);
+  await pool.query(`ALTER TABLE cp_plano_itens ADD COLUMN IF NOT EXISTS conta_no_limite_50 INTEGER NOT NULL DEFAULT 1`);
+  // Snapshot da fórmula do item (não só o valor já calculado) — precisa pra
+  // recalcular a "composição antiga" (Internet+Livro 50/50 só sobre o valor
+  // sem as SVAs, pedido da usuária 24/09/2026) a partir do plano já salvo.
+  await pool.query(`ALTER TABLE cp_plano_itens ADD COLUMN IF NOT EXISTS percentual_fixo NUMERIC(5,2)`);
+  await pool.query(`ALTER TABLE cp_plano_itens ADD COLUMN IF NOT EXISTS absorve_restante INTEGER NOT NULL DEFAULT 0`);
+
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS cp_plano_itens_impostos (
+      id TEXT PRIMARY KEY,
+      plano_item_id TEXT NOT NULL,
+      nome TEXT NOT NULL,
+      aliquota NUMERIC(6,3) NOT NULL DEFAULT 0,
+      base_calculo NUMERIC(6,3) NOT NULL DEFAULT 100
+    )
+  `);
+
   // Cache do financeiro mensal (recebido x a receber) — mesmo padrão.
   await pool.query(`
     CREATE TABLE IF NOT EXISTS erp_financeiro_cache (
@@ -1744,6 +1937,7 @@ async function initSchema() {
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS tipo TEXT DEFAULT 'plantao'`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS nome TEXT`);
   await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS subtipo TEXT`);
+  await pool.query(`ALTER TABLE escalas ADD COLUMN IF NOT EXISTS feriados_ignorados TEXT`);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS sobreaviso_entradas (
       id TEXT PRIMARY KEY,
@@ -2170,6 +2364,18 @@ async function initSchema() {
     console.log('✅ Migração reset_senha_admins_v2 executada');
   }
 
+  // Composição de Planos: Internet/SM trava em 50% do preço de venda e
+  // Livro/E-book absorve o que sobrar (pedido da usuária 24/09/2026) — os
+  // tipos já semeados pela v2 não tinham essas colunas ainda, então atualiza
+  // os dois tipos de fábrica uma única vez.
+  const jaFezTiposFormula = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'composicao_planos_tipos_formula_v3'`);
+  if (!jaFezTiposFormula) {
+    await pool.query(`UPDATE cp_tipos_item SET percentual_fixo = 50 WHERE nome = 'Internet/SM' AND percentual_fixo IS NULL`);
+    await pool.query(`UPDATE cp_tipos_item SET absorve_restante = 1 WHERE nome = 'Livro/E-book'`);
+    await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('composicao_planos_tipos_formula_v3', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+    console.log('✅ Migração composicao_planos_tipos_formula_v3 executada');
+  }
+
   // Popula o Catálogo de Trilhas a partir dos MODELOS já existentes hoje
   // (eh_modelo=1) — cada MODELO INTEIRO se torna 1 Trilha reutilizável no
   // catálogo (ex.: "TRILHA 4 – Atendimento Comercial"), com os MÓDULOS dele
@@ -2299,9 +2505,150 @@ async function seedAdmin() {
   }
 }
 
+// Tipos de item de fábrica — conta_no_limite_50 replica o comportamento
+// fixo de antes (Internet/SM não entra na regra dos 50%, SVA e Livro/E-book
+// entram). A usuária pode cadastrar outros tipos pela tela.
+const CP_TIPOS_SEED = [
+  { nome: 'Internet/SM', conta_no_limite_50: 0, percentual_fixo: 50, absorve_restante: 0 },
+  { nome: 'SVA', conta_no_limite_50: 1, percentual_fixo: null, absorve_restante: 0 },
+  { nome: 'Livro/E-book', conta_no_limite_50: 1, percentual_fixo: null, absorve_restante: 1 },
+];
+
+// Itens e impostos reais passados pela usuária em 24/09/2026 (telas do
+// cadastro de composição fiscal no HubSoft). ICMS 0% dos SVAs não entra como
+// linha de imposto — não contribui em nada no cálculo. Custo de fornecedor e
+// o valor de venda do Internet/SM ficam 0 ("a definir" — ver item 13 do
+// documento da usuária), editáveis depois na tela. tipo referencia o nome em
+// CP_TIPOS_SEED (resolvido pro id na hora do seed).
+const CP_ITENS_SEED = [
+  { nome: 'Internet 1000MBPS', tipo: 'Internet/SM', valor_venda: 0, custo_fornecedor: 0, impostos: [
+    ['ICMS', 19, 100], ['PIS', 0.65, 100], ['COFINS', 3.00, 100], ['IBS Estadual', 0.10, 100],
+    ['IBS Municipal', 0, 100], ['CBS', 0.90, 100], ['CSLL', 9, 100], ['IRRF', 15, 100],
+    ['FUST', 1, 100], ['FUNTTEL', 0.5, 100],
+  ] },
+  { nome: 'Telemedicina', tipo: 'SVA', valor_venda: 10.00, custo_fornecedor: 0, impostos: [
+    ['PIS', 0.65, 100], ['COFINS', 3.00, 100], ['ISS', 5, 100],
+  ] },
+  { nome: 'HBO Max', tipo: 'SVA', valor_venda: 25.00, custo_fornecedor: 0, impostos: [
+    ['PIS', 1.65, 100], ['COFINS', 7.60, 100],
+  ] },
+  { nome: 'Watch TV', tipo: 'SVA', valor_venda: 0, custo_fornecedor: 0, impostos: [
+    ['PIS', 1.65, 100], ['COFINS', 7.60, 100],
+  ] },
+  { nome: 'ExitLag', tipo: 'SVA', valor_venda: 20.00, custo_fornecedor: 0, impostos: [
+    ['PIS', 0.65, 100], ['COFINS', 3.00, 100], ['ISS', 5, 100],
+  ] },
+  { nome: 'IP Dedicado', tipo: 'SVA', valor_venda: 80.00, custo_fornecedor: 0, impostos: [
+    ['PIS', 1.65, 100], ['COFINS', 7.60, 100], ['ISS', 5, 100],
+  ] },
+  { nome: 'Roteador Adicional Mesh', tipo: 'SVA', valor_venda: 0, custo_fornecedor: 0, impostos: [
+    ['PIS', 1.65, 100], ['COFINS', 7.60, 100],
+  ] },
+  { nome: 'Livro/E-book', tipo: 'Livro/E-book', valor_venda: 16.44, custo_fornecedor: 0, impostos: [] },
+];
+
+async function seedComposicaoPlanos() {
+  const jaFez = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'seed_composicao_planos_v2'`);
+  if (jaFez) return;
+  const { v4: uuidv4 } = require('uuid');
+
+  const empresas = await all('SELECT id FROM empresas');
+  for (const empresa of empresas) {
+    const tipoIdPorNome = {};
+    for (const tipoSeed of CP_TIPOS_SEED) {
+      const tipoId = uuidv4();
+      await run(
+        `INSERT INTO cp_tipos_item (id, empresa_id, nome, conta_no_limite_50, percentual_fixo, absorve_restante) VALUES (?, ?, ?, ?, ?, ?)`,
+        [tipoId, empresa.id, tipoSeed.nome, tipoSeed.conta_no_limite_50, tipoSeed.percentual_fixo, tipoSeed.absorve_restante]
+      );
+      tipoIdPorNome[tipoSeed.nome] = tipoId;
+    }
+
+    const impostoIdPorNome = {};
+    for (const itemSeed of CP_ITENS_SEED) {
+      const itemId = uuidv4();
+      await run(
+        `INSERT INTO cp_itens (id, empresa_id, nome, tipo_id, valor_venda, custo_fornecedor) VALUES (?, ?, ?, ?, ?, ?)`,
+        [itemId, empresa.id, itemSeed.nome, tipoIdPorNome[itemSeed.tipo], itemSeed.valor_venda, itemSeed.custo_fornecedor]
+      );
+      for (const [nomeImposto, aliquota, base] of itemSeed.impostos) {
+        let impostoId = impostoIdPorNome[nomeImposto];
+        if (!impostoId) {
+          impostoId = uuidv4();
+          await run(`INSERT INTO cp_impostos (id, empresa_id, nome) VALUES (?, ?, ?)`, [impostoId, empresa.id, nomeImposto]);
+          impostoIdPorNome[nomeImposto] = impostoId;
+        }
+        await run(
+          `INSERT INTO cp_item_impostos (id, item_id, imposto_id, aliquota, base_calculo) VALUES (?, ?, ?, ?, ?)`,
+          [uuidv4(), itemId, impostoId, aliquota, base]
+        );
+      }
+    }
+  }
+  await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('seed_composicao_planos_v2', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+  console.log('✅ Seed v2 de Composição de Planos executado (tipos dinâmicos)');
+}
+
+// Corrige o bug do DROP TABLE sem guarda (initSchema, corrigido acima em
+// 24/09/2026): cp_itens/cp_item_impostos vinham sendo apagados a cada
+// reinício do backend, e cp_impostos ficou com nomes duplicados (cada seed
+// recriava do zero em vez de reaproveitar). Aqui: remove as duplicatas de
+// cp_impostos e repopula cp_itens/cp_item_impostos só pra quem ficou vazio,
+// reaproveitando os tipos e os impostos que já existem (não recria
+// cp_tipos_item, que não foi afetado pelo bug).
+async function corrigirComposicaoPlanosItens() {
+  const jaFez = await get(`SELECT 1 FROM migracoes_executadas WHERE nome = 'composicao_planos_itens_v4'`);
+  if (jaFez) return;
+  const { v4: uuidv4 } = require('uuid');
+
+  await pool.query(`
+    DELETE FROM cp_impostos a USING cp_impostos b
+    WHERE a.empresa_id = b.empresa_id AND a.nome = b.nome AND a.id > b.id
+  `);
+
+  const empresas = await all('SELECT id FROM empresas');
+  for (const empresa of empresas) {
+    const jaTemItens = await get('SELECT 1 FROM cp_itens WHERE empresa_id = ?', [empresa.id]);
+    if (jaTemItens) continue;
+
+    const tipos = await all('SELECT id, nome FROM cp_tipos_item WHERE empresa_id = ?', [empresa.id]);
+    const tipoIdPorNome = Object.fromEntries(tipos.map(t => [t.nome, t.id]));
+    if (Object.keys(tipoIdPorNome).length === 0) continue; // empresa sem tipos ainda (nunca usou o módulo) — nada a repopular
+
+    const impostosExistentes = await all('SELECT id, nome FROM cp_impostos WHERE empresa_id = ?', [empresa.id]);
+    const impostoIdPorNome = Object.fromEntries(impostosExistentes.map(i => [i.nome, i.id]));
+
+    for (const itemSeed of CP_ITENS_SEED) {
+      const tipoId = tipoIdPorNome[itemSeed.tipo];
+      if (!tipoId) continue;
+      const itemId = uuidv4();
+      await run(
+        `INSERT INTO cp_itens (id, empresa_id, nome, tipo_id, valor_venda, custo_fornecedor) VALUES (?, ?, ?, ?, ?, ?)`,
+        [itemId, empresa.id, itemSeed.nome, tipoId, itemSeed.valor_venda, itemSeed.custo_fornecedor]
+      );
+      for (const [nomeImposto, aliquota, base] of itemSeed.impostos) {
+        let impostoId = impostoIdPorNome[nomeImposto];
+        if (!impostoId) {
+          impostoId = uuidv4();
+          await run(`INSERT INTO cp_impostos (id, empresa_id, nome) VALUES (?, ?, ?)`, [impostoId, empresa.id, nomeImposto]);
+          impostoIdPorNome[nomeImposto] = impostoId;
+        }
+        await run(
+          `INSERT INTO cp_item_impostos (id, item_id, imposto_id, aliquota, base_calculo) VALUES (?, ?, ?, ?, ?)`,
+          [uuidv4(), itemId, impostoId, aliquota, base]
+        );
+      }
+    }
+  }
+  await run(`INSERT INTO migracoes_executadas (nome, executado_em) VALUES ('composicao_planos_itens_v4', TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS'))`);
+  console.log('✅ Migração composicao_planos_itens_v4 executada (repõe itens apagados pelo bug do DROP sem guarda)');
+}
+
 async function conectar() {
   await initSchema();
   await seedAdmin();
+  await seedComposicaoPlanos();
+  await corrigirComposicaoPlanosItens();
   console.log('✅ Banco de dados PostgreSQL conectado');
 }
 

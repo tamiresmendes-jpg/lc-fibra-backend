@@ -27,8 +27,10 @@ function linhaResumo(r) {
   return `<tr>
     <td>${esc(r.faixa)}</td>
     <td class="num">${esc(r.quantidade_livros_por_cliente)}</td>
+    <td class="num">${r.quantidade_audio_por_cliente ? esc(r.quantidade_audio_por_cliente) : '—'}</td>
     <td class="num">${fmtNum(r.clientes)}</td>
     <td class="num">${fmtNum(r.total_livros)}</td>
+    <td class="num">${fmtNum(r.total_audio)}</td>
     <td class="num">${fmtNum(r.clientes_estimado)}</td>
     <td class="num">${fmtNum(r.total_livros_estimado)}</td>
   </tr>`;
@@ -57,7 +59,7 @@ function montarHtmlRelatorioLivrosSva(relatorio, { nomeUsuario } = {}) {
     <h2>Resumo por faixa</h2>
     <table>
       <thead><tr>
-        <th>Plano</th><th>Livros/cliente</th><th>Clientes ativos</th><th>Total (bruto)</th>
+        <th>Plano</th><th>Livros/cliente</th><th>Audio/cliente</th><th>Clientes ativos</th><th>Total livros (bruto)</th><th>Total audio (bruto)</th>
         <th>Clientes estimados</th><th>Total estimado</th>
       </tr></thead>
       <tbody>
@@ -65,6 +67,7 @@ function montarHtmlRelatorioLivrosSva(relatorio, { nomeUsuario } = {}) {
         <tr class="total">
           <td colspan="3">Total geral</td>
           <td class="num">${fmtNum((relatorio.resumo || []).reduce((s, r) => s + (r.total_livros || 0), 0))}</td>
+          <td class="num">${fmtNum((relatorio.resumo || []).reduce((s, r) => s + (r.total_audio || 0), 0))}</td>
           <td class="num">${fmtNum((relatorio.resumo || []).reduce((s, r) => s + (r.clientes_estimado || 0), 0))}</td>
           <td class="num">${fmtNum(relatorio.total_geral_estimado)}</td>
         </tr>

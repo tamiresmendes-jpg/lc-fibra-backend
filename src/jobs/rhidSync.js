@@ -35,6 +35,7 @@ async function garantir() {
   await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS extra50_min INTEGER DEFAULT 0`);
   await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS extra100_min INTEGER DEFAULT 0`);
   await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS sobreaviso_min INTEGER DEFAULT 0`);
+  await run(`ALTER TABLE rhid_ponto_dia ADD COLUMN IF NOT EXISTS is_holiday BOOLEAN DEFAULT false`);
   pronto = true;
 }
 
@@ -149,15 +150,15 @@ async function sincronizarEmpresa(empresa_id, cfg) {
           const { e50, e100 } = splitExtras(dia);
           await run(
             `INSERT INTO rhid_ponto_dia
-              (empresa_id,id_person,nome,id_department,departamento,data,trabalhado_min,extra_min,extra_cem,extra50_min,extra100_min,sobreaviso_min,noturno_min,falta_min,falta_dia,atraso_min,saldo_min,abono_min,atestado,ativo,atualizado_em)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,NOW())
+              (empresa_id,id_person,nome,id_department,departamento,data,trabalhado_min,extra_min,extra_cem,extra50_min,extra100_min,sobreaviso_min,noturno_min,falta_min,falta_dia,atraso_min,saldo_min,abono_min,atestado,ativo,is_holiday,atualizado_em)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,NOW())
              ON CONFLICT (empresa_id,id_person,data) DO UPDATE SET
                nome=EXCLUDED.nome, id_department=EXCLUDED.id_department, departamento=EXCLUDED.departamento,
                trabalhado_min=EXCLUDED.trabalhado_min, extra_min=EXCLUDED.extra_min, extra_cem=EXCLUDED.extra_cem,
                extra50_min=EXCLUDED.extra50_min, extra100_min=EXCLUDED.extra100_min, sobreaviso_min=EXCLUDED.sobreaviso_min,
                noturno_min=EXCLUDED.noturno_min, falta_min=EXCLUDED.falta_min, falta_dia=EXCLUDED.falta_dia,
                atraso_min=EXCLUDED.atraso_min, saldo_min=EXCLUDED.saldo_min, abono_min=EXCLUDED.abono_min,
-               atestado=EXCLUDED.atestado, ativo=EXCLUDED.ativo, atualizado_em=NOW()`,
+               atestado=EXCLUDED.atestado, ativo=EXCLUDED.ativo, is_holiday=EXCLUDED.is_holiday, atualizado_em=NOW()`,
             [
               empresa_id, p.id, p.name || '', p.idDepartment ?? null, deptos[p.idDepartment] || null, data,
               Math.round(dia.totalHorasTrabalhadas || 0),
@@ -173,6 +174,7 @@ async function sincronizarEmpresa(empresa_id, cfg) {
               Math.round(dia.minutosAbono || 0),
               temAtestado(dia),
               p.status === 1,
+              !!dia.isHoliday,
             ]
           );
         }
