@@ -38,6 +38,9 @@ router.use(async (req, res, next) => {
   } catch { return res.status(500).json({ erro: 'Erro ao verificar permissão.' }); }
 });
 
+// Análise Financeira (lê só do banco local; sincroniza sob demanda).
+router.use('/analise-financeira', require('./analiseFinanceira'));
+
 function getClient() {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw new Error('ANTHROPIC_API_KEY não configurada no .env');

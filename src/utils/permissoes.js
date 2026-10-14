@@ -212,6 +212,7 @@ const MAPA_PERMISSAO = [
   ['/api/erp/analise-produto',         'erp.analise-produto'],
   ['/api/erp/produtos-precos',         'erp.analise-produto'],
   ['/api/erp/fiscal',                  'erp.analise-fiscal'],
+  ['/api/erp/analise-financeira',      'erp.analise-financeira'],
   ['/api/erp/financeiro-mensal',       'erp.analise-financeira'],
   ['/api/erp/financeiro',              'erp.analise-financeira'],
   ['/api/erp/planos/livros-sva',       'erp.analise-ebooks'],

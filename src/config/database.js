@@ -1833,6 +1833,82 @@ async function initSchema() {
     )
   `);
 
+  // Análise Financeira: uma linha por título (fatura / conta a pagar), para
+  // permitir rastrear cada total até os lançamentos. Datas em TEXT 'YYYY-MM-DD'.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fin_fatura (
+      empresa_id TEXT NOT NULL,
+      id_fatura BIGINT NOT NULL,
+      nosso_numero TEXT,
+      cliente_id BIGINT,
+      cliente_codigo TEXT,
+      cliente_nome TEXT,
+      cliente_doc TEXT,
+      cliente_ativo INTEGER,
+      tipo_pessoa TEXT,
+      emissao TEXT,
+      vencimento TEXT,
+      pagamento TEXT,
+      credito TEXT,
+      valor NUMERIC(14,2) NOT NULL DEFAULT 0,
+      valor_pago NUMERIC(14,2),
+      juros_pago NUMERIC(14,2),
+      desconto NUMERIC(14,2) NOT NULL DEFAULT 0,
+      tipo_cobranca TEXT,
+      banco_id BIGINT,
+      banco_nome TEXT,
+      banco_numero TEXT,
+      conta TEXT,
+      empresa_doc TEXT,
+      empresa_nome TEXT,
+      link TEXT,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      sync_em TEXT,
+      PRIMARY KEY (empresa_id, id_fatura)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_fatura_venc ON fin_fatura (empresa_id, vencimento)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_fatura_pgto ON fin_fatura (empresa_id, pagamento)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_fatura_emissao ON fin_fatura (empresa_id, emissao)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fin_conta_pagar (
+      empresa_id TEXT NOT NULL,
+      id_conta_pagar BIGINT NOT NULL,
+      descricao TEXT,
+      status TEXT,
+      vencimento TEXT,
+      pagamento TEXT,
+      emissao TEXT,
+      valor NUMERIC(14,2) NOT NULL DEFAULT 0,
+      valor_pago NUMERIC(14,2),
+      acrescimo NUMERIC(14,2) NOT NULL DEFAULT 0,
+      desconto NUMERIC(14,2) NOT NULL DEFAULT 0,
+      fornecedor_id BIGINT,
+      fornecedor_nome TEXT,
+      empresa_doc TEXT,
+      empresa_nome TEXT,
+      plano_conta TEXT,
+      ativo INTEGER NOT NULL DEFAULT 1,
+      sync_em TEXT,
+      PRIMARY KEY (empresa_id, id_conta_pagar)
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_cp_venc ON fin_conta_pagar (empresa_id, vencimento)`);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_cp_pgto ON fin_conta_pagar (empresa_id, pagamento)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fin_sync_status (
+      empresa_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      status TEXT,
+      janela_inicio TEXT,
+      janela_fim TEXT,
+      mensagem TEXT,
+      iniciado_em TEXT,
+      atualizado_em TEXT,
+      PRIMARY KEY (empresa_id, tipo)
+    )
+  `);
+
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS foto TEXT`);
   await pool.query(`ALTER TABLE empresa_contatos ADD COLUMN IF NOT EXISTS fixo INTEGER DEFAULT 0`);
   await pool.query(`ALTER TABLE unidades ADD COLUMN IF NOT EXISTS maps_url TEXT`);
