@@ -12,11 +12,11 @@ const fmtPctItem = (v) => (v == null ? 'fora da composição' : fmtPct(v));
 // Mesmas regras do card na tela (ComposicaoPlanos.jsx) — ver comentário lá
 // de 29/09/2026 sobre por que o combo é identificado só pelo NOME do item.
 const COMBOS = [
-  { emoji: '💎', nome: 'Diamante', teste: (l, a) => a >= 2 },
-  { emoji: '💠', nome: 'Safira', teste: (l, a) => a === 1 },
-  { emoji: '🥇', nome: 'Ouro', teste: (l, a) => l >= 4 },
-  { emoji: '🥈', nome: 'Prata', teste: (l, a) => l === 3 },
-  { emoji: '🥉', nome: 'Bronze', teste: (l, a) => l === 2 },
+  { emoji: '💎', nome: 'Diamante', teste: (l, a) => l === 4 && a === 2 },
+  { emoji: '💠', nome: 'Safira', teste: (l, a) => l === 4 && a === 1 },
+  { emoji: '🥇', nome: 'Ouro', teste: (l, a) => l >= 4 && a === 0 },
+  { emoji: '🥈', nome: 'Prata', teste: (l, a) => l === 3 && a === 0 },
+  { emoji: '🥉', nome: 'Bronze', teste: (l, a) => l === 2 && a === 0 },
 ];
 function calcularComboDoPlano(itens) {
   const qtdLivro = itens.find((i) => !/audio/i.test(i.nome) && /^livro/i.test(i.nome))?.quantidade || 0;

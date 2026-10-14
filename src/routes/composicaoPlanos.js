@@ -120,6 +120,62 @@ router.delete('/modelos/:id', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: 'Erro ao remover modelo' }); }
 });
 
+// Duplica um modelo inteiro (modelo + todos os planos dele, com itens, valores
+// e impostos copiados tal como estão) — pedido da usuária 10/10/2026 ("duplica
+// o modelo de 40% de novo, base 40% 2"). Aceita também 'novo'/'atual' como origem.
+router.post('/modelos/:id/duplicar', async (req, res) => {
+  try {
+    const empresaId = req.usuario.empresa_id;
+    const origemId = req.params.id;
+    let nomeOrigem;
+    if (origemId === 'novo') nomeOrigem = 'Modelo novo';
+    else if (origemId === 'atual') nomeOrigem = 'Modelo atual';
+    else {
+      const m = await get('SELECT nome FROM cp_modelos WHERE id = ? AND empresa_id = ? AND ativo = 1', [origemId, empresaId]);
+      if (!m) return res.status(404).json({ erro: 'Modelo não encontrado' });
+      nomeOrigem = m.nome;
+    }
+    const nome = (req.body.nome || '').trim() || `${nomeOrigem} 2`;
+    const novoModeloId = uuidv4();
+    await run('INSERT INTO cp_modelos (id, empresa_id, nome) VALUES (?, ?, ?)', [novoModeloId, empresaId, nome]);
+
+    const planos = await all('SELECT * FROM cp_planos WHERE empresa_id = ? AND ativo = 1 AND modelo = ? ORDER BY preco_venda ASC', [empresaId, origemId]);
+    for (const original of planos) {
+      const itens = await carregarItensDoPlano(original.id);
+      const novoId = uuidv4();
+      await run(
+        `INSERT INTO cp_planos (id, empresa_id, nome, preco_venda, quantidade_clientes, desconto_pontualidade, modelo, criado_por) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+        [novoId, empresaId, original.nome, original.preco_venda, original.quantidade_clientes, original.desconto_pontualidade, novoModeloId, req.usuario.id]
+      );
+      await gravarItensDoPlano(novoId, itens);
+    }
+    res.status(201).json({ ...(await get('SELECT * FROM cp_modelos WHERE id = ?', [novoModeloId])), planos_copiados: planos.length });
+  } catch (e) { res.status(500).json({ erro: e.message || 'Erro ao duplicar modelo' }); }
+});
+
+// Planos excluídos (exclusão é só ativo = 0) e restauração — pedido da usuária
+// 10/10/2026, pra desfazer exclusão sem depender de acesso ao banco. Rota
+// literal precisa vir antes de qualquer GET /:id.
+router.get('/excluidos', async (req, res) => {
+  try {
+    const modelo = req.query.modelo || 'novo';
+    const rows = await all(
+      'SELECT id, nome, preco_venda, modelo, atualizado_em FROM cp_planos WHERE empresa_id = ? AND ativo = 0 AND modelo = ? ORDER BY atualizado_em DESC, preco_venda ASC',
+      [req.usuario.empresa_id, modelo]
+    );
+    res.json(rows);
+  } catch (e) { res.status(500).json({ erro: 'Erro ao buscar planos excluídos' }); }
+});
+
+router.post('/:id/restaurar', async (req, res) => {
+  try {
+    const existente = await get('SELECT id FROM cp_planos WHERE id = ? AND empresa_id = ? AND ativo = 0', [req.params.id, req.usuario.empresa_id]);
+    if (!existente) return res.status(404).json({ erro: 'Plano excluído não encontrado' });
+    await run('UPDATE cp_planos SET ativo = 1 WHERE id = ?', [req.params.id]);
+    res.json({ mensagem: 'Plano restaurado com sucesso' });
+  } catch (e) { res.status(500).json({ erro: 'Erro ao restaurar plano' }); }
+});
+
 // ── Catálogo de tipos de item (cadastrável) ─────────────────────────────────
 
 router.get('/tipos', async (req, res) => {
