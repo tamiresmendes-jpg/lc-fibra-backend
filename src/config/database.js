@@ -1585,6 +1585,79 @@ async function initSchema() {
     )
   `);
 
+  // Empresas/filiais da Análise Fiscal (CNPJs emissores no HubSoft, com a cidade
+  // de cada uma). Tabela própria de propósito: `empresas` é tenant do sistema e
+  // vários jobs de sincronização percorrem todas as linhas dela.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fiscal_empresas (
+      cnpj TEXT PRIMARY KEY,
+      nome TEXT NOT NULL,
+      cidade TEXT,
+      uf TEXT,
+      id_hubsoft INTEGER,
+      ordem INTEGER DEFAULT 0
+    )
+  `);
+  for (const [cnpj, nome, cidade, idHub, ordem] of [
+    ['08407644000100', 'LC Mãe do Rio', 'Mãe do Rio', 4, 1],
+    ['08407644000291', 'LC Concórdia do Pará', 'Concórdia do Pará', 25, 2],
+    ['08407644000372', 'LC Ipixuna do Pará', 'Ipixuna do Pará', 26, 3],
+    ['08407644000453', 'LC Acará', 'Acará', 23, 4],
+    ['08407644000534', 'LC Aurora do Pará', 'Aurora do Pará', 24, 5],
+    ['08407644000615', 'LC São Miguel do Guamá', 'São Miguel do Guamá', 28, 6],
+    ['08407644000704', 'LC Salinópolis', 'Salinópolis', 27, 7],
+    ['08407644000887', 'LC Nova Esperança do Piriá', 'Nova Esperança do Piriá', 40, 8],
+    ['08407644000968', 'LC Garrafão do Norte', 'Garrafão do Norte', 52, 9],
+    ['68975897000102', 'LC Hub Digital', 'Mãe do Rio', 62, 10],
+  ]) {
+    await pool.query(
+      `INSERT INTO fiscal_empresas (cnpj, nome, cidade, uf, id_hubsoft, ordem) VALUES ($1,$2,$3,'PA',$4,$5)
+       ON CONFLICT (cnpj) DO NOTHING`,
+      [cnpj, nome, cidade, idHub, ordem]
+    );
+  }
+
+  // Notas fiscais individuais (cabeçalho) e seus itens, vindas do HubSoft — base
+  // da conferência nota a nota da Análise Fiscal. `tributacao` do item guarda o
+  // bloco fiscal original (ICMS/PIS/COFINS...) como veio, sem interpretar.
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fiscal_notas (
+      id TEXT PRIMARY KEY,
+      cnpj TEXT NOT NULL,
+      modelo TEXT NOT NULL,
+      id_origem TEXT NOT NULL,
+      numero TEXT,
+      serie TEXT,
+      chave TEXT,
+      data_emissao TEXT,
+      natureza TEXT,
+      tipo_operacao TEXT,
+      status TEXT,
+      valor NUMERIC(14,2) DEFAULT 0,
+      cfops TEXT,
+      categoria TEXT,
+      alerta TEXT,
+      sincronizado_em TEXT DEFAULT TO_CHAR(NOW() - INTERVAL '3 hours', 'YYYY-MM-DD HH24:MI:SS')
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fiscal_notas_cnpj_data ON fiscal_notas (cnpj, modelo, data_emissao)`);
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fiscal_itens (
+      id TEXT PRIMARY KEY,
+      nota_id TEXT NOT NULL,
+      produto TEXT,
+      codigo TEXT,
+      ncm TEXT,
+      cfop TEXT,
+      unidade TEXT,
+      quantidade NUMERIC(14,4) DEFAULT 0,
+      valor_unitario NUMERIC(14,4) DEFAULT 0,
+      valor NUMERIC(14,2) DEFAULT 0,
+      tributacao TEXT
+    )
+  `);
+  await pool.query(`CREATE INDEX IF NOT EXISTS idx_fiscal_itens_nota ON fiscal_itens (nota_id)`);
+
   // Cache dos Pacotes (add-ons como Watch TV, HBO Max, etc) — catálogo sem
   // período (não muda por mês), só 1 linha por empresa. Preenchido pelo cron
   // de madrugada (syncAnalisePacotes.js) — a tela NUNCA consulta o HubSoft
@@ -1839,11 +1912,7 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS fin_fatura (
       empresa_id TEXT NOT NULL,
       id_fatura BIGINT NOT NULL,
-      nosso_numero TEXT,
       cliente_id BIGINT,
-      cliente_codigo TEXT,
-      cliente_nome TEXT,
-      cliente_doc TEXT,
       cliente_ativo INTEGER,
       tipo_pessoa TEXT,
       emissao TEXT,
@@ -1861,7 +1930,6 @@ async function initSchema() {
       conta TEXT,
       empresa_doc TEXT,
       empresa_nome TEXT,
-      link TEXT,
       ativo INTEGER NOT NULL DEFAULT 1,
       sync_em TEXT,
       PRIMARY KEY (empresa_id, id_fatura)
@@ -1874,7 +1942,6 @@ async function initSchema() {
     CREATE TABLE IF NOT EXISTS fin_conta_pagar (
       empresa_id TEXT NOT NULL,
       id_conta_pagar BIGINT NOT NULL,
-      descricao TEXT,
       status TEXT,
       vencimento TEXT,
       pagamento TEXT,
@@ -1883,8 +1950,6 @@ async function initSchema() {
       valor_pago NUMERIC(14,2),
       acrescimo NUMERIC(14,2) NOT NULL DEFAULT 0,
       desconto NUMERIC(14,2) NOT NULL DEFAULT 0,
-      fornecedor_id BIGINT,
-      fornecedor_nome TEXT,
       empresa_doc TEXT,
       empresa_nome TEXT,
       plano_conta TEXT,
@@ -1895,6 +1960,25 @@ async function initSchema() {
   `);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_cp_venc ON fin_conta_pagar (empresa_id, vencimento)`);
   await pool.query(`CREATE INDEX IF NOT EXISTS idx_fin_cp_pgto ON fin_conta_pagar (empresa_id, pagamento)`);
+  // A Análise Financeira NÃO guarda dado pessoal de cliente (decisão de 15/10/2026):
+  // nome, CPF/CNPJ, código, link da fatura e descrição/fornecedor das contas a pagar.
+  // Estes DROPs também limpam o que a 1ª sincronização (14/10) chegou a gravar.
+  for (const col of ['nosso_numero', 'cliente_codigo', 'cliente_nome', 'cliente_doc', 'link']) {
+    await pool.query(`ALTER TABLE fin_fatura DROP COLUMN IF EXISTS ${col}`);
+  }
+  for (const col of ['descricao', 'fornecedor_id', 'fornecedor_nome']) {
+    await pool.query(`ALTER TABLE fin_conta_pagar DROP COLUMN IF EXISTS ${col}`);
+  }
+  // Meses já buscados por completo (controla a carga dos meses de 2026 aos poucos).
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS fin_sync_mes (
+      empresa_id TEXT NOT NULL,
+      tipo TEXT NOT NULL,
+      mes TEXT NOT NULL,
+      sync_em TEXT,
+      PRIMARY KEY (empresa_id, tipo, mes)
+    )
+  `);
   await pool.query(`
     CREATE TABLE IF NOT EXISTS fin_sync_status (
       empresa_id TEXT NOT NULL,

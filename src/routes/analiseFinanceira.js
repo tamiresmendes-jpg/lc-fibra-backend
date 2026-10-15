@@ -1,13 +1,16 @@
 // ─────────────────────────────────────────────────────────────────────────────
-// Análise Financeira — lê SOMENTE das tabelas locais fin_fatura / fin_conta_pagar
-// (alimentadas por services/finSync.js, só pelo job da madrugada). Nunca consulta o ERP aqui.
+// Análise Financeira — painel agregado (cards e gráficos), janeiro a dezembro.
+// Lê SOMENTE das tabelas locais fin_fatura / fin_conta_pagar (alimentadas por
+// services/finSync.js, só pelo job da madrugada). Nunca consulta o ERP aqui.
+//
+// SEM dado de cliente: nada de nome, CPF/CNPJ ou lista de clientes — só valores,
+// quantidades e contagens de clientes distintos (por id interno).
 //
 // Três visões distintas, para não confundir fatura emitida com dinheiro em conta
 // nem previsão com recebimento confirmado:
-//   competencia  → o que foi emitido/faturado (data de emissão da fatura)
+//   faturamento  → o que VENCE no mês (mesmo critério do relatório Contas a Receber do painel)
 //   movimentacao → o que efetivamente entrou/saiu (crédito, ou pagamento se sem crédito)
-//   previsao     → o que ainda está previsto (em aberto, por vencimento)
-//   carteira     → tudo que VENCE no período (critério da tela antiga / do relatório do painel)
+//   previsao     → o que ainda está em aberto (a vencer / vencido) + projeção do fechamento
 //
 // Montada dentro de routes/erp.js (herda autenticação e permissão
 // 'erp.analise-financeira'; ver MAPA_PERMISSAO em utils/permissoes.js).
@@ -22,246 +25,178 @@ const router = express.Router();
 
 const n = (v) => Number(v) || 0;
 const hojeSP = () => new Date(Date.now() - 3 * 3600 * 1000).toISOString().slice(0, 10);
-const reData = /^\d{4}-\d{2}-\d{2}$/;
-const NULO = '__nulo__';
-
-// Data usada para colocar a fatura "dentro do período", conforme o filtro.
-const COL_DATA = { emissao: 'f.emissao', vencimento: 'f.vencimento', pagamento: 'COALESCE(f.credito, f.pagamento)' };
-
-function periodo(q) {
-  const hoje = hojeSP();
-  const ini = reData.test(q.data_inicio || '') ? q.data_inicio : hoje.slice(0, 8) + '01';
-  const fim = reData.test(q.data_fim || '') ? q.data_fim : (() => {
-    const [a, m] = hoje.split('-').map(Number);
-    return new Date(Date.UTC(a, m, 0)).toISOString().slice(0, 10);
-  })();
-  return { ini, fim, hoje };
-}
-
-// Filtros comuns às faturas (alias f). Retorna { where, params }.
-function filtrosFatura(req, q) {
-  const w = ['f.empresa_id = ?', 'f.ativo = 1'];
-  const p = [req.usuario.empresa_id];
-  if (q.empresa_doc) { w.push('f.empresa_doc = ?'); p.push(q.empresa_doc); }
-  if (q.empresa_nome) { w.push('f.empresa_nome = ?'); p.push(q.empresa_nome); }
-  if (q.banco === NULO) w.push('f.banco_nome IS NULL');
-  else if (q.banco) { w.push('f.banco_nome = ?'); p.push(q.banco); }
-  if (q.forma === NULO) w.push('f.tipo_cobranca IS NULL');
-  else if (q.forma) { w.push('f.tipo_cobranca = ?'); p.push(q.forma); }
-  if (q.cliente_id) { w.push('f.cliente_id = ?'); p.push(Number(q.cliente_id) || 0); }
-  if (q.cliente) {
-    w.push('(f.cliente_nome ILIKE ? OR f.cliente_doc LIKE ? OR f.cliente_codigo = ?)');
-    p.push(`%${q.cliente}%`, `%${String(q.cliente).replace(/\D/g, '') || '@@'}%`, String(q.cliente));
-  }
-  if (q.tipo_pessoa) { w.push('f.tipo_pessoa = ?'); p.push(q.tipo_pessoa); }
-  return { where: w, params: p };
-}
-
-function condSituacao(situacao, hoje) {
-  switch (situacao) {
-    case 'paga': return 'f.pagamento IS NOT NULL';
-    case 'aberta': return 'f.pagamento IS NULL';
-    case 'vencida': return `f.pagamento IS NULL AND f.vencimento < '${hoje}'`;
-    case 'a_vencer': return `f.pagamento IS NULL AND f.vencimento >= '${hoje}'`;
-    default: return null;
-  }
-}
-
-// O driver devolve NUMERIC e BIGINT/COUNT como texto: converte só as colunas
-// numéricas conhecidas (CPF/CNPJ, nosso número etc. ficam como texto p/ não perder zeros).
-const CAMPOS_NUMERICOS = new Set([
-  'qtd', 'faturado', 'recebido', 'a_receber', 'vencido', 'a_vencer', 'descontos', 'qtd_pagas', 'qtd_abertas', 'qtd_vencidas',
-  'clientes', 'clientes_inadimplentes', 'juros', 'qtd_sem_credito', 'valor_sem_credito', 'pago', 'pendente', 'valor',
-  'valor_pago', 'juros_pago', 'desconto', 'desconto_pct', 'dias_atraso', 'acrescimo', 'id_fatura', 'cliente_id', 'id_conta_pagar',
-]);
-function numeros(o) {
-  const r = {};
-  for (const k of Object.keys(o)) r[k] = CAMPOS_NUMERICOS.has(k) && o[k] !== null && o[k] !== '' ? Number(o[k]) : o[k];
-  return r;
-}
-
-// Bloco padrão de totais sobre um conjunto de faturas (hoje validado: AAAA-MM-DD).
-const SELECT_TOTAIS = (hoje) => `
-  COUNT(*) AS qtd,
-  COALESCE(SUM(f.valor),0) AS faturado,
-  COALESCE(SUM(f.valor_pago) FILTER (WHERE f.pagamento IS NOT NULL),0) AS recebido,
-  COALESCE(SUM(f.valor) FILTER (WHERE f.pagamento IS NULL),0) AS a_receber,
-  COALESCE(SUM(f.valor) FILTER (WHERE f.pagamento IS NULL AND f.vencimento < '${hoje}'),0) AS vencido,
-  COALESCE(SUM(f.valor) FILTER (WHERE f.pagamento IS NULL AND f.vencimento >= '${hoje}'),0) AS a_vencer,
-  COALESCE(SUM(f.desconto),0) AS descontos,
-  COUNT(*) FILTER (WHERE f.pagamento IS NOT NULL) AS qtd_pagas,
-  COUNT(*) FILTER (WHERE f.pagamento IS NULL) AS qtd_abertas,
-  COUNT(*) FILTER (WHERE f.pagamento IS NULL AND f.vencimento < '${hoje}') AS qtd_vencidas,
-  COUNT(DISTINCT f.cliente_id) AS clientes,
-  COUNT(DISTINCT f.cliente_id) FILTER (WHERE f.pagamento IS NULL AND f.vencimento < '${hoje}') AS clientes_inadimplentes`;
-
-// ── GET /resumo ─────────────────────────────────────────────────────────────
-router.get('/resumo', async (req, res) => {
-  try {
-    const { ini, fim, hoje } = periodo(req.query);
-    const { where, params } = filtrosFatura(req, req.query);
-    const base = where.join(' AND ');
-
-    const [competencia, movimentacao, previsao, carteira] = await Promise.all([
-      get(`SELECT COUNT(*) AS qtd, COALESCE(SUM(f.valor),0) AS faturado, COALESCE(SUM(f.desconto),0) AS descontos,
-                  COUNT(DISTINCT f.cliente_id) AS clientes
-           FROM fin_fatura f WHERE ${base} AND f.emissao BETWEEN ? AND ?`, [...params, ini, fim]),
-      get(`SELECT COUNT(*) AS qtd, COALESCE(SUM(f.valor_pago),0) AS recebido, COALESCE(SUM(f.juros_pago),0) AS juros,
-                  COUNT(*) FILTER (WHERE f.credito IS NULL) AS qtd_sem_credito,
-                  COALESCE(SUM(f.valor_pago) FILTER (WHERE f.credito IS NULL),0) AS valor_sem_credito
-           FROM fin_fatura f WHERE ${base} AND f.pagamento IS NOT NULL AND COALESCE(f.credito, f.pagamento) BETWEEN ? AND ?`, [...params, ini, fim]),
-      get(`SELECT COUNT(*) AS qtd, COALESCE(SUM(f.valor),0) AS a_receber,
-                  COALESCE(SUM(f.valor) FILTER (WHERE f.vencimento < '${hoje}'),0) AS vencido,
-                  COALESCE(SUM(f.valor) FILTER (WHERE f.vencimento >= '${hoje}'),0) AS a_vencer,
-                  COUNT(DISTINCT f.cliente_id) FILTER (WHERE f.vencimento < '${hoje}') AS clientes_inadimplentes
-           FROM fin_fatura f WHERE ${base} AND f.pagamento IS NULL AND f.vencimento BETWEEN ? AND ?`, [...params, ini, fim]),
-      get(`SELECT ${SELECT_TOTAIS(hoje)} FROM fin_fatura f WHERE ${base} AND f.vencimento BETWEEN ? AND ?`, [...params, ini, fim]),
-    ]);
-
-    // Saídas (contas a pagar) — só filtram por empresa/CNPJ.
-    const wp = ['c.empresa_id = ?', 'c.ativo = 1']; const pp = [req.usuario.empresa_id];
-    if (req.query.empresa_doc) { wp.push('c.empresa_doc = ?'); pp.push(req.query.empresa_doc); }
-    const baseP = wp.join(' AND ');
-    const [pagas, previstas] = await Promise.all([
-      get(`SELECT COUNT(*) AS qtd, COALESCE(SUM(c.valor_pago),0) AS pago
-           FROM fin_conta_pagar c WHERE ${baseP} AND c.pagamento BETWEEN ? AND ?`, [...pp, ini, fim]),
-      get(`SELECT COUNT(*) AS qtd, COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)),0) AS pendente,
-                  COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)) FILTER (WHERE c.vencimento < '${hoje}'),0) AS vencido,
-                  COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)) FILTER (WHERE c.vencimento >= '${hoje}'),0) AS a_vencer
-           FROM fin_conta_pagar c WHERE ${baseP} AND c.status <> 'pago' AND c.vencimento BETWEEN ? AND ?`, [...pp, ini, fim]),
-    ]);
-
-    const entradas = n(movimentacao.recebido), saidas = n(pagas.pago);
-    res.json({
-      periodo: { data_inicio: ini, data_fim: fim, hoje },
-      competencia: numeros(competencia),
-      movimentacao: numeros(movimentacao),
-      previsao: numeros(previsao),
-      carteira: numeros(carteira),
-      saidas: { pagas: numeros(pagas), previstas: numeros(previstas) },
-      // Resultado de caixa REALIZADO no período. Não é saldo bancário: o ERP não informa saldo de conta.
-      resultado_caixa: { entradas, saidas, saldo: entradas - saidas },
-      origem: ORIGEM,
-    });
-  } catch (e) {
-    console.error('Erro /analise-financeira/resumo:', e.message);
-    res.status(500).json({ erro: 'Erro ao montar o resumo financeiro.' });
-  }
-});
 
 const ORIGEM = {
-  competencia: 'Faturas emitidas no período (data de cadastro da fatura no HubSoft). Representa receita faturada, não dinheiro recebido.',
-  movimentacao: 'Faturas baixadas no período, pela data de crédito (ou pela data de pagamento quando o crédito ainda não foi informado). Valor = valor pago.',
-  previsao: 'Faturas ainda em aberto com vencimento no período. Previsão — não é recebimento confirmado.',
-  carteira: 'Todas as faturas com vencimento no período (mesmo critério do relatório Contas a Receber do painel).',
-  saidas: 'Contas a pagar do HubSoft: pagas pela data de pagamento; pendentes pelo vencimento. Banco/conta de origem e forma de pagamento não são informados pelo ERP.',
-  fonte: 'HubSoft — API de integração financeiro/fatura e financeiro/conta_pagar, copiadas para o banco local pela rotina de madrugada.',
+  faturamento: 'Faturas com vencimento no mês (mesmo critério do relatório Contas a Receber do painel do HubSoft). É receita faturada, não dinheiro recebido.',
+  movimentacao: 'Dinheiro que efetivamente entrou: faturas baixadas no mês, pela data de crédito (ou pela data de pagamento quando o crédito ainda não foi informado). Saídas: contas a pagar pagas, pela data de pagamento.',
+  previsao: 'Faturas ainda em aberto (a vencer ou vencidas) e contas a pagar pendentes. É previsão — não é recebimento nem pagamento confirmado.',
+  projecao: 'Estimativa do fechamento do mês: recebido até hoje + parte do que ainda vence, na mesma proporção dos últimos 3 meses encerrados. É projeção, não valor confirmado.',
+  fonte: 'HubSoft — API de integração financeiro/fatura e financeiro/conta_pagar, copiadas para o banco local pela rotina da madrugada. Sem dados pessoais de clientes.',
+  limites: 'O ERP não informa saldo de conta bancária nem banco/forma de pagamento das saídas; por isso o "resultado de caixa" é entradas menos saídas pagas, não um saldo.',
 };
 
-// ── GET /agrupado?por=mes|dia|banco|forma|empresa|cliente ───────────────────
-const DIMENSOES = {
-  mes: (col) => `SUBSTR(${col},1,7)`,
-  dia: (col) => `${col}`,
-  banco: () => `COALESCE(f.banco_nome, 'Não informado')`,
-  forma: () => `COALESCE(f.tipo_cobranca, 'Não informado')`,
-  empresa: () => `COALESCE(f.empresa_nome, 'Não informado')`,
-  cliente: () => `COALESCE(f.cliente_nome, 'Não informado') || ' [' || COALESCE(f.cliente_id::text,'-') || ']'`,
-};
+const CAMPOS = new Set(['qtd', 'faturado', 'recebido', 'a_receber', 'vencido', 'a_vencer', 'descontos', 'clientes', 'inadimplentes', 'valor', 'pago', 'pendente', 'juros']);
+function numeros(o) {
+  const r = {};
+  for (const k of Object.keys(o)) r[k] = CAMPOS.has(k) && o[k] !== null && o[k] !== '' ? Number(o[k]) : o[k];
+  return r;
+}
+const mesNum = (m) => Number(m);
 
-router.get('/agrupado', async (req, res) => {
-  try {
-    const { ini, fim, hoje } = periodo(req.query);
-    const tipoData = COL_DATA[req.query.tipo_data] ? req.query.tipo_data : 'vencimento';
-    const col = COL_DATA[tipoData];
-    const por = DIMENSOES[req.query.por] ? req.query.por : 'mes';
-    const { where, params } = filtrosFatura(req, req.query);
-    const sit = condSituacao(req.query.situacao, hoje);
-    if (sit) where.push(sit);
-    const dim = DIMENSOES[por](col);
-    const limite = por === 'cliente' ? 200 : 500;
-    const ordem = (por === 'mes' || por === 'dia') ? 'chave ASC' : 'faturado DESC';
-    const rows = await all(
-      `SELECT ${dim} AS chave, ${SELECT_TOTAIS(hoje)}
-       FROM fin_fatura f WHERE ${where.join(' AND ')} AND ${col} BETWEEN ? AND ?
-       GROUP BY 1 ORDER BY ${ordem} LIMIT ${limite}`, [...params, ini, fim]);
-    res.json({ periodo: { data_inicio: ini, data_fim: fim, tipo_data: tipoData }, por, linhas: rows.map(numeros) });
-  } catch (e) {
-    console.error('Erro /analise-financeira/agrupado:', e.message);
-    res.status(500).json({ erro: 'Erro ao agrupar os dados.' });
+async function montarPainel(req) {
+  const hoje = hojeSP();
+  const anoAtual = Number(hoje.slice(0, 4));
+  const ano = /^\d{4}$/.test(req.query.ano || '') ? Number(req.query.ano) : anoAtual;
+  const e = req.usuario.empresa_id;
+  const docF = req.query.empresa_doc || null;
+
+  // Filtros comuns (alias f / c). 'ano' vai sempre como texto de 4 dígitos.
+  const wf = ['f.empresa_id = ?', 'f.ativo = 1']; const pf = [e];
+  const wc = ['c.empresa_id = ?', 'c.ativo = 1']; const pc = [e];
+  if (docF) { wf.push('f.empresa_doc = ?'); pf.push(docF); wc.push('c.empresa_doc = ?'); pc.push(docF); }
+  const BF = wf.join(' AND '), BC = wc.join(' AND ');
+  const a = String(ano);
+
+  const aberto = `f.pagamento IS NULL`;
+  const vencidoF = `f.pagamento IS NULL AND f.vencimento < '${hoje}'`;
+  const agrup = (dim) => `SELECT ${dim} AS chave, COUNT(*) AS qtd, COALESCE(SUM(f.valor),0) AS faturado,
+      COALESCE(SUM(f.valor_pago) FILTER (WHERE f.pagamento IS NOT NULL),0) AS recebido,
+      COALESCE(SUM(f.valor) FILTER (WHERE ${aberto}),0) AS a_receber,
+      COALESCE(SUM(f.valor) FILTER (WHERE ${vencidoF}),0) AS vencido,
+      COALESCE(SUM(f.desconto),0) AS descontos
+    FROM fin_fatura f WHERE ${BF} AND SUBSTR(f.vencimento,1,4) = ? GROUP BY 1 ORDER BY faturado DESC LIMIT 12`;
+
+  const [fat, mov, saiPagas, saiPrev, banco, forma, tipoPessoa, empresas, categorias, anoClientes, cobFat, cobCp, totFat] = await Promise.all([
+    all(`SELECT SUBSTR(f.vencimento,6,2) AS m, COUNT(*) AS qtd, COALESCE(SUM(f.valor),0) AS faturado,
+           COALESCE(SUM(f.valor_pago) FILTER (WHERE f.pagamento IS NOT NULL),0) AS recebido,
+           COALESCE(SUM(f.valor) FILTER (WHERE ${aberto}),0) AS a_receber,
+           COALESCE(SUM(f.valor) FILTER (WHERE ${vencidoF}),0) AS vencido,
+           COALESCE(SUM(f.valor) FILTER (WHERE ${aberto} AND f.vencimento >= '${hoje}'),0) AS a_vencer,
+           COALESCE(SUM(f.desconto),0) AS descontos, COUNT(DISTINCT f.cliente_id) AS clientes,
+           COUNT(DISTINCT f.cliente_id) FILTER (WHERE ${vencidoF}) AS inadimplentes
+         FROM fin_fatura f WHERE ${BF} AND SUBSTR(f.vencimento,1,4) = ? GROUP BY 1`, [...pf, a]),
+    all(`SELECT SUBSTR(COALESCE(f.credito,f.pagamento),6,2) AS m, COALESCE(SUM(f.valor_pago),0) AS recebido, COUNT(*) AS qtd,
+           COALESCE(SUM(f.juros_pago),0) AS juros
+         FROM fin_fatura f WHERE ${BF} AND f.pagamento IS NOT NULL AND SUBSTR(COALESCE(f.credito,f.pagamento),1,4) = ? GROUP BY 1`, [...pf, a]),
+    all(`SELECT SUBSTR(c.pagamento,6,2) AS m, COALESCE(SUM(c.valor_pago),0) AS pago, COUNT(*) AS qtd
+         FROM fin_conta_pagar c WHERE ${BC} AND c.pagamento IS NOT NULL AND SUBSTR(c.pagamento,1,4) = ? GROUP BY 1`, [...pc, a]),
+    all(`SELECT SUBSTR(c.vencimento,6,2) AS m, COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)),0) AS pendente,
+           COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)) FILTER (WHERE c.vencimento < '${hoje}'),0) AS vencido
+         FROM fin_conta_pagar c WHERE ${BC} AND c.status <> 'pago' AND SUBSTR(c.vencimento,1,4) = ? GROUP BY 1`, [...pc, a]),
+    all(agrup(`COALESCE(f.banco_nome,'Não informado')`), [...pf, a]),
+    all(agrup(`COALESCE(f.tipo_cobranca,'Não informado')`), [...pf, a]),
+    all(agrup(`CASE f.tipo_pessoa WHEN 'pf' THEN 'Pessoa física' WHEN 'pj' THEN 'Pessoa jurídica' ELSE 'Não informado' END`), [...pf, a]),
+    all(agrup(`COALESCE(f.empresa_nome,'Não informado')`), [...pf, a]),
+    all(`SELECT COALESCE(pc->>'descricao','Sem categoria') AS chave, COALESCE(SUM((pc->>'valor')::numeric),0) AS valor,
+           COALESCE(SUM((pc->>'valor')::numeric) FILTER (WHERE c.status <> 'pago'),0) AS pendente
+         FROM fin_conta_pagar c
+         LEFT JOIN LATERAL jsonb_array_elements(CASE WHEN c.plano_conta IS NULL OR c.plano_conta='[]' THEN '[{}]'::jsonb ELSE c.plano_conta::jsonb END) pc ON TRUE
+         WHERE ${BC} AND SUBSTR(c.vencimento,1,4) = ? GROUP BY 1 ORDER BY valor DESC LIMIT 10`, [...pc, a]),
+    get(`SELECT COUNT(DISTINCT f.cliente_id) AS clientes, COUNT(DISTINCT f.cliente_id) FILTER (WHERE ${vencidoF}) AS inadimplentes
+         FROM fin_fatura f WHERE ${BF} AND SUBSTR(f.vencimento,1,4) = ?`, [...pf, a]),
+    all(`SELECT mes FROM fin_sync_mes WHERE empresa_id=? AND tipo='faturas' AND mes LIKE ?`, [e, `${a}-%`]),
+    all(`SELECT mes FROM fin_sync_mes WHERE empresa_id=? AND tipo='contas_pagar' AND mes LIKE ?`, [e, `${a}-%`]),
+    get(`SELECT COUNT(*) AS qtd FROM fin_fatura f WHERE ${BF}`, pf),
+  ]);
+
+  const idx = (rows, campo = 'm') => Object.fromEntries(rows.map((r) => [mesNum(r[campo]), numeros(r)]));
+  const iFat = idx(fat), iMov = idx(mov), iPag = idx(saiPagas), iPrev = idx(saiPrev);
+
+  const meses = [];
+  for (let m = 1; m <= 12; m++) {
+    const f = iFat[m] || {}, mv = iMov[m] || {}, sp = iPag[m] || {}, pr = iPrev[m] || {};
+    const entradas = n(mv.recebido), saidas = n(sp.pago);
+    meses.push({
+      mes: m,
+      faturado: n(f.faturado), qtd_faturas: n(f.qtd), recebido_vencimento: n(f.recebido), a_receber: n(f.a_receber),
+      vencido: n(f.vencido), a_vencer: n(f.a_vencer), descontos: n(f.descontos),
+      clientes: n(f.clientes), inadimplentes: n(f.inadimplentes),
+      entradas, saidas_pagas: saidas, resultado_caixa: entradas - saidas,
+      saidas_pendentes: n(pr.pendente), saidas_vencidas: n(pr.vencido),
+    });
   }
-});
+  let acc = 0;
+  for (const m of meses) {
+    // Acumulado só até o mês corrente (meses futuros não têm caixa realizado).
+    if (ano < anoAtual || (ano === anoAtual && m.mes <= Number(hoje.slice(5, 7)))) { acc += m.resultado_caixa; m.caixa_acumulado = acc; } else m.caixa_acumulado = null;
+  }
 
-// ── Lista de faturas (rastreabilidade) — usada na tela e no Excel ───────────
-function montarListaFaturas(req) {
-  const q = req.query;
-  const { ini, fim, hoje } = periodo(q);
-  const tipoData = COL_DATA[q.tipo_data] ? q.tipo_data : 'vencimento';
-  const col = COL_DATA[tipoData];
-  const { where, params } = filtrosFatura(req, q);
-  where.push(`${col} BETWEEN ? AND ?`); params.push(ini, fim);
-  if (q.mes && /^\d{4}-\d{2}$/.test(q.mes)) { where.push(`SUBSTR(${col},1,7) = ?`); params.push(q.mes); }
-  if (q.dia && reData.test(q.dia)) { where.push(`${col} = ?`); params.push(q.dia); }
-  const sit = condSituacao(q.situacao, hoje);
-  if (sit) where.push(sit);
-  if (q.com_desconto === '1') where.push('f.desconto > 0');
-  if (tipoData === 'pagamento') where.push('f.pagamento IS NOT NULL');
-  return { where: where.join(' AND '), params, ini, fim, hoje, tipoData };
+  const soma = (k) => meses.reduce((s, m) => s + n(m[k]), 0);
+  const totais = {
+    faturado: soma('faturado'), qtd_faturas: soma('qtd_faturas'), recebido_vencimento: soma('recebido_vencimento'),
+    a_receber: soma('a_receber'), vencido: soma('vencido'), a_vencer: soma('a_vencer'), descontos: soma('descontos'),
+    entradas: soma('entradas'), saidas_pagas: soma('saidas_pagas'), resultado_caixa: soma('resultado_caixa'),
+    saidas_pendentes: soma('saidas_pendentes'), saidas_vencidas: soma('saidas_vencidas'),
+    clientes: n(anoClientes?.clientes), inadimplentes: n(anoClientes?.inadimplentes),
+  };
+  totais.ticket_medio = totais.clientes ? totais.faturado / totais.clientes : 0;
+  totais.taxa_recebimento = totais.faturado ? totais.recebido_vencimento / totais.faturado : 0;
+  totais.taxa_inadimplencia = totais.faturado ? totais.vencido / totais.faturado : 0;
+
+  // Projeção do fechamento do mês corrente (só quando o ano é o atual).
+  let projecao = null;
+  if (ano === anoAtual) {
+    const mAtual = Number(hoje.slice(5, 7));
+    const cur = meses[mAtual - 1];
+    const anteriores = meses.slice(0, mAtual - 1).filter((m) => m.faturado > 0).slice(-3);
+    const taxa = anteriores.length ? anteriores.reduce((s, m) => s + m.recebido_vencimento / m.faturado, 0) / anteriores.length : null;
+    const pagoMes = cur.recebido_vencimento;
+    projecao = {
+      mes: mAtual, faturado: cur.faturado, recebido_ate_hoje: pagoMes, a_vencer: cur.a_vencer, vencido: cur.vencido,
+      taxa_historica: taxa,
+      fechamento_estimado: taxa == null ? null : Math.max(pagoMes, cur.faturado * taxa),
+      fechamento_maximo: pagoMes + cur.a_vencer,
+      meses_base: anteriores.map((m) => m.mes),
+    };
+  }
+
+  const cobertura = {
+    faturas: cobFat.map((r) => Number(r.mes.slice(5, 7))).sort((x, y) => x - y),
+    contas_pagar: cobCp.map((r) => Number(r.mes.slice(5, 7))).sort((x, y) => x - y),
+  };
+
+  return {
+    ano, hoje, meses, totais, projecao, cobertura, tem_dados: n(totFat?.qtd) > 0,
+    por_banco: banco.map(numeros), por_forma: forma.map(numeros), por_tipo_pessoa: tipoPessoa.map(numeros),
+    por_empresa: empresas.map(numeros), despesas_categoria: categorias.map(numeros),
+    origem: ORIGEM,
+  };
 }
 
-const SELECT_LISTA = (hoje) => `
-  f.id_fatura, f.nosso_numero, f.cliente_id, f.cliente_codigo, f.cliente_nome, f.cliente_doc,
-  f.emissao, f.vencimento, f.pagamento, f.credito, f.valor, f.valor_pago, f.juros_pago, f.desconto,
-  CASE WHEN f.desconto > 0 AND f.valor + f.desconto > 0 THEN ROUND(f.desconto / (f.valor + f.desconto) * 100, 2) END AS desconto_pct,
-  f.tipo_cobranca, f.banco_nome, f.conta, f.empresa_nome, f.empresa_doc, f.link,
-  CASE WHEN f.pagamento IS NOT NULL THEN 'Paga'
-       WHEN f.vencimento < '${hoje}' THEN 'Vencida' ELSE 'A vencer' END AS situacao,
-  CASE WHEN f.pagamento IS NULL AND f.vencimento < '${hoje}' THEN ('${hoje}'::date - f.vencimento::date) END AS dias_atraso`;
-
-router.get('/faturas', async (req, res) => {
+router.get('/painel', async (req, res) => {
   try {
-    const { where, params, hoje } = montarListaFaturas(req);
-    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 100, 1), 500);
-    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const [tot, rows] = await Promise.all([
-      get(`SELECT ${SELECT_TOTAIS(hoje)} FROM fin_fatura f WHERE ${where}`, params),
-      all(`SELECT ${SELECT_LISTA(hoje)} FROM fin_fatura f WHERE ${where}
-           ORDER BY f.vencimento ASC, f.id_fatura ASC LIMIT ${limite} OFFSET ${offset}`, params),
-    ]);
-    res.json({ total: numeros(tot), limite, offset, faturas: rows.map(numeros) });
+    res.json(await montarPainel(req));
   } catch (e) {
-    console.error('Erro /analise-financeira/faturas:', e.message);
-    res.status(500).json({ erro: 'Erro ao listar faturas.' });
+    console.error('Erro /analise-financeira/painel:', e.message);
+    res.status(500).json({ erro: 'Erro ao montar o painel financeiro.' });
   }
 });
 
-// ── GET /exportar — Excel com as faturas que compõem o recorte ──────────────
+// Excel só com números agregados (sem cliente) para conferência e fechamento mensal.
 router.get('/exportar', async (req, res) => {
   try {
-    const { where, params, hoje, ini, fim, tipoData } = montarListaFaturas(req);
-    const rows = await all(
-      `SELECT ${SELECT_LISTA(hoje)} FROM fin_fatura f WHERE ${where}
-       ORDER BY f.vencimento ASC, f.id_fatura ASC LIMIT 100000`, params);
-    const dados = rows.map((r) => ({
-      'Fatura': r.id_fatura, 'Nosso número': r.nosso_numero, 'Cliente': r.cliente_nome, 'Cód. cliente': r.cliente_codigo,
-      'CPF/CNPJ': r.cliente_doc, 'Empresa': r.empresa_nome, 'Emissão': r.emissao, 'Vencimento': r.vencimento,
-      'Pagamento': r.pagamento, 'Crédito': r.credito, 'Valor': n(r.valor), 'Valor pago': r.valor_pago == null ? null : n(r.valor_pago),
-      'Juros pagos': r.juros_pago == null ? null : n(r.juros_pago), 'Desconto': n(r.desconto), 'Desconto %': r.desconto_pct == null ? null : n(r.desconto_pct),
-      'Forma de cobrança': r.tipo_cobranca, 'Banco': r.banco_nome, 'Conta': r.conta, 'Situação': r.situacao, 'Dias de atraso': r.dias_atraso,
-    }));
+    const p = await montarPainel(req);
+    const NOMES = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez'];
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dados), 'Faturas');
-    const info = [
-      ['Origem', ORIGEM.fonte],
-      ['Período', `${ini} a ${fim} (por ${tipoData})`],
-      ['Gerado em', new Date(Date.now() - 3 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)],
-      ['Registros', dados.length], [],
-      ['Competência', ORIGEM.competencia], ['Movimentação', ORIGEM.movimentacao],
-      ['Previsão', ORIGEM.previsao], ['Carteira', ORIGEM.carteira],
-    ];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(info), 'Origem');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(p.meses.map((m) => ({
+      'Mês': `${NOMES[m.mes - 1]}/${p.ano}`, 'Faturado (vencimento)': m.faturado, 'Faturas': m.qtd_faturas,
+      'Recebido das faturas do mês': m.recebido_vencimento, 'Em aberto': m.a_receber, 'Vencido': m.vencido, 'A vencer': m.a_vencer,
+      'Descontos': m.descontos, 'Clientes faturados': m.clientes, 'Clientes inadimplentes': m.inadimplentes,
+      'Entradas (caixa)': m.entradas, 'Saídas pagas': m.saidas_pagas, 'Resultado de caixa': m.resultado_caixa,
+      'Saídas pendentes': m.saidas_pendentes, 'Saídas vencidas': m.saidas_vencidas,
+    }))), 'Meses');
+    const aba = (nome, linhas) => XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(linhas.map((l) => ({
+      'Item': l.chave, 'Faturas': l.qtd, 'Faturado': l.faturado, 'Recebido': l.recebido, 'Em aberto': l.a_receber, 'Vencido': l.vencido, 'Descontos': l.descontos,
+    }))), nome);
+    aba('Bancos', p.por_banco); aba('Formas de pagamento', p.por_forma); aba('PF e PJ', p.por_tipo_pessoa);
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(p.despesas_categoria.map((l) => ({ 'Categoria': l.chave, 'Valor': l.valor, 'Pendente': l.pendente }))), 'Despesas');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet([
+      ['Ano', p.ano], ['Gerado em', new Date(Date.now() - 3 * 3600 * 1000).toISOString().replace('T', ' ').slice(0, 19)], ['Fonte', ORIGEM.fonte], [],
+      ['Faturamento', ORIGEM.faturamento], ['Movimentação', ORIGEM.movimentacao], ['Previsão', ORIGEM.previsao], ['Projeção', ORIGEM.projecao], ['Limites', ORIGEM.limites],
+    ]), 'Origem');
     const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="faturas_${ini}_${fim}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="analise_financeira_${p.ano}.xlsx"`);
     res.send(buf);
   } catch (e) {
     console.error('Erro /analise-financeira/exportar:', e.message);
@@ -269,94 +204,25 @@ router.get('/exportar', async (req, res) => {
   }
 });
 
-// ── Saídas: contas a pagar ──────────────────────────────────────────────────
-// GET /pagar/agrupado?por=mes|fornecedor|categoria|status  (por vencimento, ou pagamento se tipo_data=pagamento)
-router.get('/pagar/agrupado', async (req, res) => {
-  try {
-    const { ini, fim, hoje } = periodo(req.query);
-    const col = req.query.tipo_data === 'pagamento' ? 'c.pagamento' : 'c.vencimento';
-    const w = ['c.empresa_id = ?', 'c.ativo = 1', `${col} BETWEEN ? AND ?`];
-    const p = [req.usuario.empresa_id, ini, fim];
-    if (req.query.empresa_doc) { w.push('c.empresa_doc = ?'); p.push(req.query.empresa_doc); }
-    const por = ['mes', 'fornecedor', 'categoria', 'status'].includes(req.query.por) ? req.query.por : 'mes';
-    const campos = `COUNT(*) AS qtd, COALESCE(SUM(c.valor),0) AS valor,
-      COALESCE(SUM(c.valor_pago),0) AS pago,
-      COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)) FILTER (WHERE c.status <> 'pago'),0) AS pendente,
-      COALESCE(SUM(c.valor - COALESCE(c.valor_pago,0)) FILTER (WHERE c.status <> 'pago' AND c.vencimento < '${hoje}'),0) AS vencido`;
-    let sql;
-    if (por === 'categoria') {
-      // plano_conta vem rateado por percentual: cada conta entra em cada categoria pela parte dela.
-      sql = `SELECT COALESCE(pc->>'descricao','Sem categoria') AS chave, COUNT(*) AS qtd,
-               COALESCE(SUM((pc->>'valor')::numeric),0) AS valor,
-               COALESCE(SUM(c.valor_pago * COALESCE((pc->>'percentual')::numeric,0)/100),0) AS pago,
-               COALESCE(SUM((pc->>'valor')::numeric) FILTER (WHERE c.status <> 'pago'),0) AS pendente,
-               COALESCE(SUM((pc->>'valor')::numeric) FILTER (WHERE c.status <> 'pago' AND c.vencimento < '${hoje}'),0) AS vencido
-             FROM fin_conta_pagar c
-             LEFT JOIN LATERAL jsonb_array_elements(CASE WHEN c.plano_conta IS NULL OR c.plano_conta='[]' THEN '[{}]'::jsonb ELSE c.plano_conta::jsonb END) pc ON TRUE
-             WHERE ${w.join(' AND ')} GROUP BY 1 ORDER BY valor DESC LIMIT 300`;
-    } else {
-      const dim = { mes: `SUBSTR(${col},1,7)`, fornecedor: `COALESCE(c.fornecedor_nome,'Não informado')`, status: 'c.status' }[por];
-      sql = `SELECT ${dim} AS chave, ${campos} FROM fin_conta_pagar c WHERE ${w.join(' AND ')} GROUP BY 1
-             ORDER BY ${por === 'mes' ? 'chave ASC' : 'valor DESC'} LIMIT 300`;
-    }
-    const rows = await all(sql, p);
-    res.json({ periodo: { data_inicio: ini, data_fim: fim }, por, linhas: rows.map(numeros) });
-  } catch (e) {
-    console.error('Erro /analise-financeira/pagar/agrupado:', e.message);
-    res.status(500).json({ erro: 'Erro ao agrupar contas a pagar.' });
-  }
-});
-
-router.get('/pagar/lista', async (req, res) => {
-  try {
-    const { ini, fim, hoje } = periodo(req.query);
-    const col = req.query.tipo_data === 'pagamento' ? 'c.pagamento' : 'c.vencimento';
-    const w = ['c.empresa_id = ?', 'c.ativo = 1', `${col} BETWEEN ? AND ?`];
-    const p = [req.usuario.empresa_id, ini, fim];
-    if (req.query.empresa_doc) { w.push('c.empresa_doc = ?'); p.push(req.query.empresa_doc); }
-    if (req.query.status === 'pendente') w.push(`c.status <> 'pago'`);
-    if (req.query.status === 'vencida') w.push(`c.status <> 'pago' AND c.vencimento < '${hoje}'`);
-    if (req.query.status === 'paga') w.push(`c.status = 'pago'`);
-    const limite = Math.min(Math.max(parseInt(req.query.limite, 10) || 100, 1), 500);
-    const offset = Math.max(parseInt(req.query.offset, 10) || 0, 0);
-    const rows = await all(
-      `SELECT c.id_conta_pagar, c.descricao, c.status, c.vencimento, c.pagamento, c.valor, c.valor_pago, c.acrescimo, c.desconto,
-              c.fornecedor_nome, c.empresa_nome, c.plano_conta
-       FROM fin_conta_pagar c WHERE ${w.join(' AND ')} ORDER BY c.vencimento ASC, c.id_conta_pagar ASC LIMIT ${limite} OFFSET ${offset}`, p);
-    res.json({ limite, offset, contas: rows.map((r) => ({ ...numeros(r), plano_conta: safeJson(r.plano_conta) })) });
-  } catch (e) {
-    console.error('Erro /analise-financeira/pagar/lista:', e.message);
-    res.status(500).json({ erro: 'Erro ao listar contas a pagar.' });
-  }
-});
-
-function safeJson(s) { try { return JSON.parse(s || '[]'); } catch { return []; } }
-
-// ── Opções dos filtros (empresas, bancos, formas) vindas dos dados locais ───
 router.get('/opcoes', async (req, res) => {
   try {
-    const e = req.usuario.empresa_id;
-    const [empresas, bancos, formas] = await Promise.all([
-      all(`SELECT DISTINCT empresa_doc AS doc, empresa_nome AS nome FROM fin_fatura WHERE empresa_id=? AND empresa_doc IS NOT NULL ORDER BY 2`, [e]),
-      all(`SELECT DISTINCT banco_nome AS nome FROM fin_fatura WHERE empresa_id=? AND banco_nome IS NOT NULL ORDER BY 1`, [e]),
-      all(`SELECT DISTINCT tipo_cobranca AS nome FROM fin_fatura WHERE empresa_id=? AND tipo_cobranca IS NOT NULL ORDER BY 1`, [e]),
-    ]);
-    res.json({ empresas, bancos: bancos.map((b) => b.nome), formas: formas.map((f) => f.nome) });
+    const empresas = await all(`SELECT DISTINCT empresa_doc AS doc, empresa_nome AS nome FROM fin_fatura WHERE empresa_id=? AND empresa_doc IS NOT NULL ORDER BY 2`, [req.usuario.empresa_id]);
+    res.json({ empresas });
   } catch (err) {
     res.status(500).json({ erro: 'Erro ao carregar opções.' });
   }
 });
 
-// ── Sincronização (manual) ──────────────────────────────────────────────────
+// ── Estado da sincronização e agendamento (sempre na madrugada) ─────────────
 router.get('/sincronizacao', async (req, res) => {
   try {
     const e = req.usuario.empresa_id;
     const [status, f, c] = await Promise.all([
       statusSincronizacao(e),
-      get(`SELECT COUNT(*) AS qtd, MIN(vencimento) AS de, MAX(vencimento) AS ate, MAX(sync_em) AS ultima FROM fin_fatura WHERE empresa_id=? AND ativo=1`, [e]),
-      get(`SELECT COUNT(*) AS qtd, MIN(vencimento) AS de, MAX(vencimento) AS ate, MAX(sync_em) AS ultima FROM fin_conta_pagar WHERE empresa_id=? AND ativo=1`, [e]),
+      get(`SELECT COUNT(*) AS qtd, MAX(sync_em) AS ultima FROM fin_fatura WHERE empresa_id=? AND ativo=1`, [e]),
+      get(`SELECT COUNT(*) AS qtd, MAX(sync_em) AS ultima FROM fin_conta_pagar WHERE empresa_id=? AND ativo=1`, [e]),
     ]);
-    res.json({ status, faturas: numeros(f), contas_pagar: numeros(c) });
+    res.json({ status, faturas: { qtd: n(f.qtd), ultima: f.ultima }, contas_pagar: { qtd: n(c.qtd), ultima: c.ultima } });
   } catch (err) {
     res.status(500).json({ erro: 'Erro ao consultar a sincronização.' });
   }
@@ -372,17 +238,18 @@ router.post('/sincronizar', express.json(), async (req, res) => {
       } catch { ownPerms = null; }
       const perms = await buscarPermsEfetivas(req.usuario.id, req.usuario.empresa_id, ownPerms);
       if (!temPermissaoServer(perms, 'erp.analise-financeira', 'editar')) {
-        return res.status(403).json({ erro: 'Sem permissão para sincronizar com o ERP.' });
+        return res.status(403).json({ erro: 'Sem permissão para agendar a sincronização.' });
       }
     }
     const { tipo, data_inicio, data_fim } = req.body || {};
     const r = await agendarSincronizacao(req.usuario.empresa_id, tipo, data_inicio, data_fim);
     if (r.erro) return res.status(400).json(r);
-    res.json({ ok: true, mensagem: 'Agendado: o HubSoft só é consultado de madrugada, no horário da rotina financeira. Os dados aparecem aqui na manhã seguinte.' });
+    res.json({ ok: true, mensagem: 'Agendado: o HubSoft só é consultado de madrugada, no horário da rotina financeira.' });
   } catch (e) {
     console.error('Erro /analise-financeira/sincronizar:', e.message);
-    res.status(500).json({ erro: 'Erro ao iniciar a sincronização.' });
+    res.status(500).json({ erro: 'Erro ao agendar a sincronização.' });
   }
 });
 
+router.montarPainel = montarPainel; // exposto para teste direto das consultas
 module.exports = router;
