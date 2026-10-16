@@ -209,7 +209,7 @@ router.get('/proximo-codigo', async (req, res) => {
 // Listar POPs
 router.get('/', async (req, res) => {
   try {
-    const { status, departamento_id, categoria_id } = req.query;
+    const { status, departamento_id, categoria_id, busca } = req.query;
     let sql = `
       SELECT p.*, d.nome as departamento_nome, u.nome as criado_por_nome,
              c.nome as categoria_nome, c.cor as categoria_cor
@@ -224,6 +224,8 @@ router.get('/', async (req, res) => {
     if (status) { sql += ` AND p.status = $${idx++}`; params.push(status); }
     if (departamento_id) { sql += ` AND p.departamento_id = $${idx++}`; params.push(departamento_id); }
     if (categoria_id) { sql += ` AND p.categoria_id = $${idx++}`; params.push(categoria_id); }
+    // Usada pela busca global (BuscaGlobal.jsx) — mesmo $N nas 3 colunas, só 1 valor.
+    if (busca) { sql += ` AND (p.titulo ILIKE $${idx} OR p.codigo ILIKE $${idx} OR p.descricao ILIKE $${idx})`; params.push(`%${busca}%`); idx++; }
     sql += ' ORDER BY p.updated_at DESC';
     const rows = await all(sql, params);
     res.json(rows.filter(p => podeVerPop(p, req.usuario)));
