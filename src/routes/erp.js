@@ -1137,7 +1137,17 @@ router.get('/fiscal', async (req, res) => {
 
     // Cache pronto: retorna na hora (não consulta ERP)
     if (cache && cache.status === 'pronto') {
-      return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...(JSON.parse(cache.dados || '{}')) });
+      const dados = JSON.parse(cache.dados || '{}');
+      // Nome/cidade de cada empresa vêm de fiscal_empresas (casando pelo CNPJ),
+      // sem depender do nome que ficou gravado no cache.
+      const cadastro = await db.all('SELECT cnpj, nome, cidade FROM fiscal_empresas ORDER BY ordem');
+      dados.empresas_cadastradas = cadastro;
+      const porCnpj = new Map(cadastro.map(e => [e.cnpj, e]));
+      for (const e of dados.por_empresa || []) {
+        const c = porCnpj.get(String(e.cnpj || '').replace(/\D/g, ''));
+        if (c) { e.empresa = c.nome; e.cidade = c.cidade; }
+      }
+      return res.json({ status: 'pronto', gerado_em: cache.updated_at, ...dados });
     }
 
     // Cache com erro: avisa em vez de ficar preso em "processando" pra sempre
@@ -1160,6 +1170,91 @@ router.get('/fiscal', async (req, res) => {
     console.error('Erro /erp/fiscal:', e.message);
     res.status(500).json({ erro: 'Erro ao buscar dados fiscais: ' + e.message });
   }
+});
+
+// ── ANÁLISE FISCAL — FILIAIS (NF-e 55, comodato) ────────────────────────────
+// Lê só do banco local (fiscal_notas/fiscal_itens). A sincronização com o ERP é
+// manual (POST /fiscal/filiais/sync), em segundo plano e uma por vez.
+const fiscalFiliais = require('../services/fiscalFiliais');
+let _syncFiliais = { rodando: false, inicio: null, fim: null, periodo: null, resultado: null, erro: null };
+
+function periodoQuery(req) {
+  const hoje = new Date();
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return {
+    dataInicio: req.query.data_inicio || iso(new Date(hoje.getFullYear(), hoje.getMonth(), 1)),
+    dataFim: req.query.data_fim || iso(hoje),
+  };
+}
+const FILTRO_FILIAIS = `n.modelo='55' AND n.cnpj LIKE '08407644%' AND n.cnpj <> '${fiscalFiliais.MATRIZ}' AND SUBSTRING(n.data_emissao,1,10) BETWEEN $1 AND $2`;
+
+// Resumo por filial → categoria → natureza/status
+router.get('/fiscal/filiais', async (req, res) => {
+  try {
+    const { dataInicio, dataFim } = periodoQuery(req);
+    const linhas = await db.all(
+      `SELECT n.cnpj, e.nome, e.cidade, n.categoria, n.natureza, n.tipo_operacao, n.status,
+              COUNT(*) AS notas, COALESCE(SUM(n.valor),0) AS valor,
+              COUNT(*) FILTER (WHERE n.alerta IS NOT NULL) AS com_alerta
+       FROM fiscal_notas n LEFT JOIN fiscal_empresas e ON e.cnpj = n.cnpj
+       WHERE ${FILTRO_FILIAIS}
+       GROUP BY n.cnpj, e.nome, e.cidade, n.categoria, n.natureza, n.tipo_operacao, n.status
+       ORDER BY e.nome, n.categoria, n.natureza`,
+      [dataInicio, dataFim]
+    );
+    const ult = await db.get(`SELECT MAX(sincronizado_em) AS ultima FROM fiscal_notas n WHERE ${FILTRO_FILIAIS}`, [dataInicio, dataFim]);
+    res.json({
+      periodo: { data_inicio: dataInicio, data_fim: dataFim },
+      ultima_sincronizacao: ult?.ultima || null,
+      sync: _syncFiliais,
+      linhas: linhas.map(l => ({ ...l, notas: Number(l.notas), valor: Number(l.valor), com_alerta: Number(l.com_alerta) })),
+    });
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Lista de notas (conferência) — filtros opcionais: cnpj, categoria, status, alerta=1
+router.get('/fiscal/filiais/notas', async (req, res) => {
+  try {
+    const { dataInicio, dataFim } = periodoQuery(req);
+    const params = [dataInicio, dataFim];
+    let extra = '';
+    for (const [campo, col] of [['cnpj', 'n.cnpj'], ['categoria', 'n.categoria'], ['status', 'n.status']]) {
+      if (req.query[campo]) { params.push(req.query[campo]); extra += ` AND ${col} = $${params.length}`; }
+    }
+    if (req.query.alerta === '1') extra += ' AND n.alerta IS NOT NULL';
+    const notas = await db.all(
+      `SELECT n.id, n.cnpj, e.nome AS empresa, n.numero, n.serie, n.chave, n.data_emissao, n.natureza,
+              n.tipo_operacao, n.status, n.valor, n.cfops, n.categoria, n.alerta,
+              (SELECT COUNT(*) FROM fiscal_itens i WHERE i.nota_id = n.id) AS qtd_itens
+       FROM fiscal_notas n LEFT JOIN fiscal_empresas e ON e.cnpj = n.cnpj
+       WHERE ${FILTRO_FILIAIS}${extra}
+       ORDER BY n.data_emissao DESC, n.numero DESC LIMIT 1000`,
+      params
+    );
+    res.json(notas.map(n => ({ ...n, valor: Number(n.valor), qtd_itens: Number(n.qtd_itens) })));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Itens de uma nota (com o bloco fiscal original de cada item)
+router.get('/fiscal/filiais/nota', async (req, res) => {
+  try {
+    const itens = await db.all('SELECT * FROM fiscal_itens WHERE nota_id = $1 ORDER BY id', [req.query.id]);
+    res.json(itens.map(i => ({ ...i, quantidade: Number(i.quantidade), valor_unitario: Number(i.valor_unitario), valor: Number(i.valor), tributacao: i.tributacao ? JSON.parse(i.tributacao) : null })));
+  } catch (e) { res.status(500).json({ erro: e.message }); }
+});
+
+// Dispara a sincronização (manual). Uma por vez; responde na hora.
+router.post('/fiscal/filiais/sync', async (req, res) => {
+  if (_syncFiliais.rodando) return res.status(409).json({ erro: 'Já existe uma sincronização em andamento.', sync: _syncFiliais });
+  const { dataInicio, dataFim } = { dataInicio: req.body?.data_inicio, dataFim: req.body?.data_fim };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataInicio || '') || !/^\d{4}-\d{2}-\d{2}$/.test(dataFim || '')) {
+    return res.status(400).json({ erro: 'Informe data_inicio e data_fim (AAAA-MM-DD).' });
+  }
+  _syncFiliais = { rodando: true, inicio: new Date().toISOString(), fim: null, periodo: { data_inicio: dataInicio, data_fim: dataFim }, resultado: null, erro: null };
+  fiscalFiliais.sincronizarFiliais(dataInicio, dataFim)
+    .then(r => { _syncFiliais = { ..._syncFiliais, rodando: false, fim: new Date().toISOString(), resultado: r }; })
+    .catch(e => { _syncFiliais = { ..._syncFiliais, rodando: false, fim: new Date().toISOString(), erro: e.message }; });
+  res.json({ iniciado: true, sync: _syncFiliais });
 });
 
 // ── GET /api/erp/financeiro — faturas por vencimento + totais ──
