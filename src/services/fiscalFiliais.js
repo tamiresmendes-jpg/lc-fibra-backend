@@ -9,21 +9,40 @@ const CFOPS_COMODATO = ['5908', '5909', '6908', '6909', '1908', '1909', '2908', 
 const num = (v) => Number(v) || 0;
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
+// Venda de mercadoria de terceiros (5102/6102) = venda de e-book, só na matriz.
+const CFOPS_VENDA = ['5102', '6102'];
+
 // Categoria da nota (NF-e 55) e alerta quando natureza e CFOP não combinam.
 function classificar(natureza, tipo, cfops) {
   const nat = String(natureza || '').toUpperCase();
   const naturezaComodato = nat.includes('COMODATO');
+  const naturezaVenda = nat.includes('VENDA');
   const cfopComodato = cfops.some(c => CFOPS_COMODATO.includes(c));
+  const cfopVenda = cfops.some(c => CFOPS_VENDA.includes(c));
   let categoria = 'Outras naturezas';
-  if (naturezaComodato) categoria = tipo === 'Entrada' ? 'Comodato — retorno' : 'Comodato — saída';
-  else if (cfopComodato) categoria = tipo === 'Entrada' ? 'Comodato — retorno' : 'Comodato — saída';
+  if (naturezaComodato || (!naturezaVenda && cfopComodato)) categoria = tipo === 'Entrada' ? 'Comodato — retorno' : 'Comodato — saída';
+  else if (naturezaVenda || cfopVenda) categoria = 'Venda — e-book';
   let alerta = null;
-  if (naturezaComodato !== cfopComodato) {
+  if (cfopComodato && cfopVenda) {
+    alerta = `Nota mista: itens de venda e de comodato na mesma nota (${cfops.join('/')})`;
+  } else if (naturezaComodato !== cfopComodato && !(naturezaVenda && cfopVenda)) {
     alerta = naturezaComodato
       ? 'Natureza de comodato, mas CFOP de outra operação'
       : `Natureza "${natureza}" com CFOP de comodato (${cfops.join('/')})`;
   }
   return { categoria, alerta };
+}
+
+// Categoria de uma nota como vem da API (CFOPs lidos dos itens).
+function classificarNota(n) {
+  const produtos = Array.isArray(n.produtos) ? n.produtos : [];
+  const cfops = [...new Set(produtos.map(p => String(p.cfop || '')).filter(Boolean))];
+  return classificar(n.natureza_operacao, n.tipo_nota?.descricao || null, cfops);
+}
+
+// Filiais (CNPJ raiz da matriz, exceto a própria) — ficam em fiscal_empresas.
+function listarFiliais() {
+  return db.all(`SELECT cnpj, nome, cidade FROM fiscal_empresas WHERE cnpj LIKE '08407644%' AND cnpj <> $1 ORDER BY ordem`, [MATRIZ]);
 }
 
 async function gravarNota(cnpj, n) {
@@ -80,4 +99,4 @@ async function sincronizarFiliais(dataInicio, dataFim, cnpjs) {
   return resultado;
 }
 
-module.exports = { sincronizarFiliais, MATRIZ };
+module.exports = { sincronizarFiliais, classificarNota, listarFiliais, MATRIZ };

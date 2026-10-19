@@ -995,7 +995,207 @@ function notaVazia() {
   };
 }
 
+const tiposVazios = () => ({ nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() });
+
+// Soma uma NF-e 55 no acumulador e na quebra por natureza da operação
+// (Comodato — saída / Comodato — retorno / Venda — e-book / Outras).
+function somarNfe55(acc, n) {
+  const valor = num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
+  const cancelada = String(n.status || '').includes('cancel');
+  acc.total++;
+  if (cancelada) acc.cancelada++;
+  acc.valor_total += valor;
+  somaImpostos(acc, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
+  const { categoria } = fiscalFiliais.classificarNota(n);
+  const nat = (acc.naturezas = acc.naturezas || {});
+  const c = nat[categoria] || (nat[categoria] = { total: 0, cancelada: 0, valor_total: 0, tipo: n.tipo_nota?.descricao || null });
+  c.total++;
+  if (cancelada) c.cancelada++;
+  c.valor_total += valor;
+}
+
+// Nome do serviço sem a velocidade do plano ("INTERNET 1000MBPS SCM" →
+// "INTERNET SCM"), pra agrupar por serviço e não virar uma linha por plano.
+function nomeServicoBase(desc) {
+  const s = String(desc || '').toUpperCase()
+    // descrição que vem com o período/valor da cobrança ("EXITLAG L 05/09/2026 ATÉ … L R$ 10.00")
+    .replace(/\s+(L\s+)?\d{2}\/\d{2}\/\d{4}.*$/, '')
+    .replace(/\b\d+([.,]\d+)?\s*(MBPS|MEGAS?|MB|GBPS|GIGAS?|GB|KBPS)\b/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  return s || 'SEM DESCRIÇÃO';
+}
+// Nome final do serviço: aplica os nomes equivalentes (ALIAS_SERVICO).
+function nomeServico(desc) {
+  const base = nomeServicoBase(desc);
+  return ALIAS_SERVICO[base] || base;
+}
+// Descrições antigas/erradas que contam como outro serviço (definido pela
+// usuária em 17/10/26: itens de SCM que saíam com descrição de modelo 21).
+const ALIAS_SERVICO = {
+  'SERVIÇO DE COMUNICAÇÃO MULTIMÍDIA': 'INTERNET EMPRESARIAL SCM',
+  'NF MODELO 21 - NOTA FISCAL DE SERVIÇO DE COMUNICAÇÃO': 'INTERNET EMPRESARIAL SCM',
+  'EXITLAG': 'SERVIÇO DE OTIMIZAÇÃO DE CONEXÃO EXITLAG',
+  'LC + LIVROS': 'LC+ LIVROS - CONTEÚDO DE LEITURA DIGITAL E-BOOKS SVA',
+};
+const MAX_SERVICOS = 80; // acima disso, junta em "OUTROS SERVIÇOS" (protege o tamanho do cache)
+
+// A NFCOM soma itens que, na prática, pertencem a outros documentos (SCM da
+// própria NFCOM, NFSe, Fatura de Serviços modelo 0 e NF-e 55). O documento de
+// cada serviço vem do cadastro do HubSoft (tipo_documento_fiscal da composição,
+// já salvo em erp_pacotes_cache pela rotina das 4h30 — sem consulta extra); o
+// que não estiver lá cai nas regras por nome/cClass abaixo.
+let _docFiscalPorServico = new Map();
+async function carregarDocFiscalServicos() {
+  const mapa = new Map();
+  try {
+    for (const r of await db.all('SELECT dados FROM erp_pacotes_cache WHERE dados IS NOT NULL')) {
+      const d = JSON.parse(r.dados);
+      const lista = Array.isArray(d) ? d : (d.pacotes || Object.values(d).find(Array.isArray) || []);
+      for (const p of lista) for (const c of (p.composicao || [])) {
+        const doc = c.tipo_documento_fiscal?.descricao;
+        if (doc) mapa.set(nomeServico(c.descricao_nota_fiscal || c.descricao), doc);
+      }
+    }
+  } catch (e) { console.error('[fiscal] cadastro de documento fiscal dos serviços indisponível:', e.message); }
+  _docFiscalPorServico = mapa;
+}
+// Quem manda é o TIPO DE NOTA do cadastro (pedido da usuária, 17/10/26) — a
+// descrição impressa na nota pode estar errada (ex.: itens de SCM com descrição
+// "NF Modelo 21"). Nome/cClass só entram quando o serviço não está no cadastro.
+function grupoItemNfcom(it, nome) {
+  const doc = _docFiscalPorServico.get(nome) || '';
+  if (doc) {
+    if (/NFS-?E|SERVI[ÇC]O ELETR/i.test(doc)) return 'NFSe (serviços)';
+    if (/FATURA/i.test(doc)) return 'Fatura de Serviços (Modelo 0)';
+    if (/NF-?E\b|PRODUTO/i.test(doc)) return 'NF-e 55 (produto)';
+    if (/NFCOM/i.test(doc)) return 'SCM (NFCOM)';
+  }
+  // Sem cadastro: lista confirmada pela usuária — NFSe = IP dedicado, ExitLag,
+  // Telemedicina Mediquo e serviço técnico presencial (O.S. e ativação);
+  // Fatura/débito modelo 0 = Watch TV, roteador Mesh e HBO Max; Livros = NF-e 55.
+  if (/LIVRO|E-?BOOK|LEITURA/.test(nome)) return 'NF-e 55 (produto)';
+  if (/IP DEDICADO|TELEMEDICINA|MEDIQUO|EXITLAG|SERVI[ÇC]O T[ÉE]CNICO PRESENCIAL/.test(nome)) return 'NFSe (serviços)';
+  if (/WATCH TV|HBO|MESH|ROTEADOR/.test(nome)) return 'Fatura de Serviços (Modelo 0)';
+  const cclass = String(it.codigo_classificacao_nfcom || '');
+  if (cclass.startsWith('01') || cclass.startsWith('04') || /\bSCM\b|INTERNET|COMUNICA[ÇC][ÃA]O/.test(nome)) return 'SCM (NFCOM)';
+  return 'Não identificado';
+}
+
+// Registra a alíquota cobrada de um imposto no serviço: guarda as alíquotas
+// distintas (com quantos itens usaram cada uma), pra mostrar "19%" ou, se o
+// cadastro variar, "19% / 0%".
+function anotarAliquota(s, imposto, valor) {
+  if (valor === null || valor === undefined || valor === '') return;
+  const chave = String(Number(valor));
+  if (chave === 'NaN') return;
+  const al = (s.aliquotas = s.aliquotas || {});
+  const m = (al[imposto] = al[imposto] || {});
+  if (m[chave] !== undefined || Object.keys(m).length < 10) m[chave] = (m[chave] || 0) + 1;
+}
+
+// Soma uma NFCOM no acumulador e na quebra por serviço (itens da nota).
+function somarNfcom(acc, n) {
+  acc.total++;
+  if (n.status === 'cancelada') acc.cancelada++;
+  acc.valor_total += num(n.valor_nota);
+  somaImpostos(acc, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', fust: 'valor_fust', funttel: 'valor_funttel' });
+  const servs = (acc.servicos = acc.servicos || {});
+  for (const it of (Array.isArray(n.nfcom_item) ? n.nfcom_item : [])) {
+    const base = nomeServicoBase(it.descricao_descricao);
+    let nome = ALIAS_SERVICO[base] || base;
+    if (!servs[nome] && Object.keys(servs).length >= MAX_SERVICOS) nome = 'OUTROS SERVIÇOS';
+    const s = servs[nome] || (servs[nome] = {
+      grupo: grupoItemNfcom(it, nome), itens: 0, valor_total: 0, icms: 0, pis: 0, cofins: 0, fust: 0, funttel: 0,
+      cclass: it.codigo_classificacao_nfcom || null, cfop: it.cfop || null,
+    });
+    s.itens++;
+    s.valor_total += num(it.valor_total_item);
+    anotarAliquota(s, 'icms', it.nfcom_item_icms?.percentual_aliquota_icms);
+    anotarAliquota(s, 'pis', it.nfcom_item_pis?.percentual_aliquota_pis);
+    anotarAliquota(s, 'cofins', it.nfcom_item_cofins?.percentual_aliquota_cofins);
+    anotarAliquota(s, 'fust', it.nfcom_item_fust?.percentual_aliquota_fust);
+    anotarAliquota(s, 'funttel', it.nfcom_item_funttel?.percentual_aliquota_funttel);
+    s.icms += num(it.nfcom_item_icms?.valor_icms);
+    s.pis += num(it.nfcom_item_pis?.valor_pis);
+    s.cofins += num(it.nfcom_item_cofins?.valor_cofins);
+    s.fust += num(it.nfcom_item_fust?.valor_fust);
+    s.funttel += num(it.nfcom_item_funttel?.valor_funttel);
+  }
+}
+
+// Soma uma NFSe no acumulador e na quebra por serviço (itens[] da nota). Os
+// impostos da NFSe vêm só no total da nota — com mais de um serviço, são
+// rateados pelo valor de cada item.
+const IMPOSTOS_NFSE = { iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', inss: 'valor_inss', irrf: 'valor_irrf' };
+function somarNfse(acc, n) {
+  acc.total++;
+  if (n.status === 'cancelado') acc.cancelada++;
+  acc.valor_total += num(n.valor);
+  somaImpostos(acc, n, IMPOSTOS_NFSE);
+  const itens = Array.isArray(n.itens) && n.itens.length ? n.itens : [{ descricao: n.descricao_servico, valor: n.valor }];
+  const somaItens = itens.reduce((a, i) => a + num(i.valor), 0);
+  const servs = (acc.servicos = acc.servicos || {});
+  for (const it of itens) {
+    const base = nomeServicoBase(it.descricao || n.descricao_servico);
+    let nome = ALIAS_SERVICO[base] || base;
+    if (!servs[nome] && Object.keys(servs).length >= MAX_SERVICOS) nome = 'OUTROS SERVIÇOS';
+    const s = servs[nome] || (servs[nome] = { itens: 0, valor_total: 0, iss: 0, pis: 0, cofins: 0, csll: 0, inss: 0, irrf: 0, codigo_servico: n.codigo_lista_servico || null });
+    const parte = somaItens > 0 ? num(it.valor) / somaItens : 1 / itens.length;
+    s.itens++;
+    s.valor_total += num(it.valor);
+    for (const [campo, chave] of Object.entries(IMPOSTOS_NFSE)) {
+      s[campo] += num(n[chave]) * parte;
+      anotarAliquota(s, campo, n[`aliquota_${campo}`]);
+    }
+  }
+}
+
+// Soma uma Fatura de Serviços / nota telecom (modelo 0, 21, 22) no acumulador e
+// na quebra por serviço — cada item traz os próprios impostos e alíquotas.
+const IMPOSTOS_TELECOM = { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', irrf: 'valor_irrf', fust: 'valor_fust', funttel: 'valor_funttel' };
+function somarTelecom(acc, n) {
+  acc.total++;
+  // "situacao": 'N' = normal, 'C' = cancelada (campo usado neste endpoint,
+  // diferente do "status" usado em NFSe/NFCOM).
+  if (n.situacao === 'C' || String(n.status || '').includes('cancel')) acc.cancelada++;
+  acc.valor_total += num(n.valor_nota ?? n.valor);
+  somaImpostos(acc, n, IMPOSTOS_TELECOM);
+  const servs = (acc.servicos = acc.servicos || {});
+  for (const it of (Array.isArray(n.itens) ? n.itens : [])) {
+    let nome = nomeServico(it.descricao);
+    if (!servs[nome] && Object.keys(servs).length >= MAX_SERVICOS) nome = 'OUTROS SERVIÇOS';
+    const s = servs[nome] || (servs[nome] = { itens: 0, valor_total: 0, icms: 0, pis: 0, cofins: 0, csll: 0, irrf: 0, fust: 0, funttel: 0, cclass: it.codigo_classificacao || null });
+    s.itens++;
+    s.valor_total += num(it.valor);
+    for (const [campo, chave] of Object.entries(IMPOSTOS_TELECOM)) {
+      s[campo] += num(it[chave]);
+      anotarAliquota(s, campo, it[`aliquota_${campo}`]);
+    }
+  }
+}
+
+// NF-e 55 das filiais (ficam em fiscal_empresas, não em `empresas`), uma por
+// vez e com pausa entre elas. `opcoes` repassa conc/deveCancelar ao paginador.
+async function calcularNfe55Filiais(dataInicio, dataFim, opcoes = {}) {
+  const filiais = await fiscalFiliais.listarFiliais();
+  const lista = [];
+  for (let i = 0; i < filiais.length; i++) {
+    const f = filiais[i];
+    const tipos = tiposVazios();
+    let erro = null;
+    try {
+      await hubsoft.varrerNfe55({ documento: f.cnpj, dataInicio, dataFim, ...opcoes }, async (lote) => {
+        for (const n of lote) somarNfe55(tipos.nfe55, n);
+      });
+    } catch (e) { erro = e.message; }
+    lista.push({ empresa: f.nome, cnpj: f.cnpj, filial: true, tipos, erro });
+    if (i < filiais.length - 1) await new Promise(r => setTimeout(r, 3000));
+  }
+  return lista;
+}
+
 async function calcularFiscal(dataInicio, dataFim) {
+  await carregarDocFiscalServicos();
   const empresas = await db.all('SELECT id, nome, cnpj FROM empresas');
   const porEmpresa = [];
   const geral = { nfse: notaVazia(), nfcom: notaVazia(), telecom0: notaVazia(), telecom21: notaVazia(), telecom22: notaVazia(), nfe55: notaVazia() };
@@ -1015,23 +1215,13 @@ async function calcularFiscal(dataInicio, dataFim) {
     // e já derrubou o processo por falta de memória).
     try {
       await hubsoft.varrerNfse({ documento, dataInicio, dataFim }, async (lote) => {
-        for (const n of lote) {
-          tipos.nfse.total++;
-          if (n.status === 'cancelado') tipos.nfse.cancelada++;
-          tipos.nfse.valor_total += num(n.valor);
-          somaImpostos(tipos.nfse, n, { iss: 'valor_iss', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', inss: 'valor_inss', irrf: 'valor_irrf' });
-        }
+        for (const n of lote) somarNfse(tipos.nfse, n);
       });
     } catch (e) { erroEmpresa = e.message; }
 
     try {
       await hubsoft.varrerNfcom({ documento, dataInicio, dataFim }, async (lote) => {
-        for (const n of lote) {
-          tipos.nfcom.total++;
-          if (n.status === 'cancelada') tipos.nfcom.cancelada++;
-          tipos.nfcom.valor_total += num(n.valor_nota);
-          somaImpostos(tipos.nfcom, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', fust: 'valor_fust', funttel: 'valor_funttel' });
-        }
+        for (const n of lote) somarNfcom(tipos.nfcom, n);
       });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
 
@@ -1040,26 +1230,14 @@ async function calcularFiscal(dataInicio, dataFim) {
     for (const [chave, modelo] of [['telecom0', '0'], ['telecom21', '21'], ['telecom22', '22']]) {
       try {
         await hubsoft.varrerNotaTelecom({ documento, dataInicio, dataFim, modelo }, async (lote) => {
-          for (const n of lote) {
-            tipos[chave].total++;
-            // "situacao": 'N' = normal, 'C' = cancelada (campo usado neste endpoint,
-            // diferente do "status" usado em NFSe/NFCOM).
-            if (n.situacao === 'C' || String(n.status || '').includes('cancel')) tipos[chave].cancelada++;
-            tipos[chave].valor_total += num(n.valor_nota ?? n.valor);
-            somaImpostos(tipos[chave], n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins', csll: 'valor_csll', irrf: 'valor_irrf', fust: 'valor_fust', funttel: 'valor_funttel' });
-          }
+          for (const n of lote) somarTelecom(tipos[chave], n);
         });
       } catch (e) { erroEmpresa = erroEmpresa || e.message; }
     }
 
     try {
       await hubsoft.varrerNfe55({ documento, dataInicio, dataFim }, async (lote) => {
-        for (const n of lote) {
-          tipos.nfe55.total++;
-          if (String(n.status || '').includes('cancel')) tipos.nfe55.cancelada++;
-          tipos.nfe55.valor_total += num(n.valor_nota_fiscal ?? n.valor_nota ?? n.valor);
-          somaImpostos(tipos.nfe55, n, { icms: 'valor_icms', pis: 'valor_pis', cofins: 'valor_cofins' });
-        }
+        for (const n of lote) somarNfe55(tipos.nfe55, n);
       });
     } catch (e) { erroEmpresa = erroEmpresa || e.message; }
 
@@ -1068,6 +1246,12 @@ async function calcularFiscal(dataInicio, dataFim) {
     }
 
     porEmpresa.push({ empresa: emp.nome, cnpj: emp.cnpj, tipos, erro: erroEmpresa });
+  }
+
+  // Filiais: só NF-e 55, entram no total da NF-e 55 geral.
+  for (const f of await calcularNfe55Filiais(dataInicio, dataFim)) {
+    for (const campo of Object.keys(geral.nfe55)) geral.nfe55[campo] += f.tipos.nfe55[campo];
+    porEmpresa.push(f);
   }
 
   const totalGeral = notaVazia();
@@ -1093,6 +1277,148 @@ async function calcularFiscal(dataInicio, dataFim) {
 
   return { periodo: { data_inicio: dataInicio, data_fim: dataFim }, total_geral: totalGeral, por_tipo: geral, por_empresa: porEmpresaComDados };
 }
+
+// Recalcula SÓ UM modelo de nota (nfe55 ou nfcom) de um período já salvo no
+// cache e troca apenas essa parte — os outros modelos ficam como estão. Usado de
+// forma pontual (job atualizarModeloCache.js), em ritmo lento: 1 página por vez
+// e 3s entre páginas, pra não pesar no HubSoft. Se qualquer consulta falhar, não grava.
+// Soma `b` em `a`: campos numéricos e os detalhamentos (naturezas/servicos),
+// mantendo os campos de texto (tipo, grupo, cclass…) do primeiro que apareceu.
+function mesclarAcumulador(a, b) {
+  for (const [k, v] of Object.entries(b)) {
+    if (typeof v === 'number') a[k] = (a[k] || 0) + v;
+    else if (v && typeof v === 'object') {
+      const dest = (a[k] = a[k] || {});
+      for (const [nome, item] of Object.entries(v)) {
+        if (!dest[nome]) dest[nome] = { ...item };
+        else for (const [c, x] of Object.entries(item)) {
+          if (typeof x === 'number') dest[nome][c] = (dest[nome][c] || 0) + x;
+          else if (Array.isArray(x)) dest[nome][c] = [...(dest[nome][c] || []), ...x].slice(0, 50);
+          else if (x && typeof x === 'object') { // aliquotas: { imposto: { '19': qtd } }
+            const al = (dest[nome][c] = dest[nome][c] || {});
+            for (const [imp, cont] of Object.entries(x)) {
+              const m = (al[imp] = al[imp] || {});
+              for (const [aliq, q] of Object.entries(cont)) m[aliq] = (m[aliq] || 0) + q;
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+const MODELOS_RECALCULO = {
+  nfe55: { varrer: (o, cb) => hubsoft.varrerNfe55(o, cb), somar: somarNfe55, filiais: true },
+  nfcom: { varrer: (o, cb) => hubsoft.varrerNfcom(o, cb), somar: somarNfcom, filiais: false },
+  nfse: { varrer: (o, cb) => hubsoft.varrerNfse(o, cb), somar: somarNfse, filiais: false },
+  telecom0: { varrer: (o, cb) => hubsoft.varrerNotaTelecom({ ...o, modelo: '0' }, cb), somar: somarTelecom, filiais: false },
+};
+
+// Reclassifica os grupos da NFCOM (SCM/NFSe/Fatura/NF-e 55) já
+// salvos no cache, SEM consultar o ERP — usa o nome e o cClass guardados.
+async function reagruparNfcomNoCache(dataInicio, dataFim) {
+  await carregarDocFiscalServicos();
+  const caches = await db.all("SELECT id, dados FROM erp_fiscal_cache WHERE data_inicio=$1 AND data_fim=$2 AND status='pronto'", [dataInicio, dataFim]);
+  for (const c of caches) {
+    const d = JSON.parse(c.dados || '{}');
+    for (const e of d.por_empresa || []) {
+      // Junta as linhas de nomes equivalentes (ALIAS_SERVICO) antes de reagrupar
+      for (const modelo of ['nfcom', 'nfse', 'telecom0']) {
+        if (!e.tipos?.[modelo]?.servicos) continue;
+        const juntos = {};
+        for (const [nome, s] of Object.entries(e.tipos[modelo].servicos)) {
+          const alvo = nomeServico(nome); // limpa datas/velocidade e aplica ALIAS_SERVICO
+          delete s.clientes;
+          delete s.divergentes; // a usuária não quer a lista — só somar na linha certa
+          mesclarAcumulador({ servicos: juntos }, { servicos: { [alvo]: s } });
+        }
+        e.tipos[modelo].servicos = juntos;
+      }
+      for (const [nome, s] of Object.entries(e.tipos?.nfcom?.servicos || {})) {
+        s.grupo = grupoItemNfcom({ codigo_classificacao_nfcom: s.cclass }, nome);
+      }
+    }
+    await db.run('UPDATE erp_fiscal_cache SET dados=$1 WHERE id=$2', [JSON.stringify(d), c.id]);
+  }
+  return { caches: caches.length };
+}
+async function atualizarModeloNoCache(modelo, dataInicio, dataFim) {
+  const cfg = MODELOS_RECALCULO[modelo];
+  if (!cfg) throw new Error(`Modelo não suportado: ${modelo} (use ${Object.keys(MODELOS_RECALCULO).join(', ')})`);
+  await carregarDocFiscalServicos();
+  const caches = await db.all("SELECT id, dados FROM erp_fiscal_cache WHERE data_inicio=$1 AND data_fim=$2 AND status='pronto'", [dataInicio, dataFim]);
+  if (!caches.length) throw new Error(`Nenhum cache pronto para ${dataInicio}..${dataFim}`);
+  // No máximo 5 consultas por minuto ao HubSoft (pedido da usuária): 12s entre
+  // páginas e entre dias, 1 página por vez.
+  const PAUSA = 12000;
+  const lento = { conc: 1, deveCancelar: async () => { await new Promise(r => setTimeout(r, PAUSA)); return false; } };
+
+  // Busca DIA A DIA (pedido da usuária): termina um dia, pausa, vai pro próximo.
+  // 429 num dia → espera 60s e tenta só aquele dia de novo (até 2 vezes).
+  const espera = (ms) => new Promise(r => setTimeout(r, ms));
+  const dias = [];
+  for (let d = new Date(`${dataInicio}T12:00:00Z`); d.toISOString().slice(0, 10) <= dataFim; d.setUTCDate(d.getUTCDate() + 1)) {
+    dias.push(d.toISOString().slice(0, 10));
+  }
+  const novos = new Map(); // cnpj -> acumulador do modelo
+  for (const emp of await db.all('SELECT nome, cnpj FROM empresas')) {
+    const documento = (emp.cnpj || '').replace(/\D/g, '');
+    if (documento.length !== 14) continue;
+    const acc = notaVazia();
+    for (const dia of dias) {
+      for (let tentativa = 1; ; tentativa++) {
+        const parcial = notaVazia();
+        try {
+          await cfg.varrer({ documento, dataInicio: dia, dataFim: dia, ...lento }, async (lote) => {
+            for (const n of lote) cfg.somar(parcial, n);
+          });
+        } catch (e) {
+          if (/429/.test(e.message) && tentativa <= 2) {
+            console.log(`[${modelo}-cache] ${emp.nome} ${dia}: 429, aguardando 60s (tentativa ${tentativa + 1})`);
+            await espera(60000);
+            continue;
+          }
+          throw new Error(`${emp.nome} ${dia}: ${e.message}`);
+        }
+        mesclarAcumulador(acc, parcial);
+        console.log(`[${modelo}-cache] ${emp.nome} ${dia}: ${parcial.total} notas`);
+        break;
+      }
+      await espera(PAUSA);
+    }
+    novos.set(documento, acc);
+    console.log(`[${modelo}-cache] ${emp.nome}: ${acc.total} notas no período`);
+  }
+  let filiais = null;
+  if (cfg.filiais) {
+    filiais = await calcularNfe55Filiais(dataInicio, dataFim, lento);
+    const falha = filiais.find(f => f.erro);
+    if (falha) throw new Error(`${falha.empresa}: ${falha.erro}`);
+    console.log(`[${modelo}-cache] filiais: ${filiais.reduce((a, f) => a + f.tipos.nfe55.total, 0)} notas`);
+  }
+
+  for (const c of caches) {
+    const d = JSON.parse(c.dados || '{}');
+    d.por_empresa = d.por_empresa || [];
+    if (filiais) d.por_empresa = d.por_empresa.filter(e => !e.filial);
+    for (const e of d.por_empresa) {
+      const acc = novos.get(String(e.cnpj || '').replace(/\D/g, ''));
+      if (acc && e.tipos && !e.filial) e.tipos[modelo] = acc;
+    }
+    if (filiais) d.por_empresa.push(...filiais.filter(f => f.tipos.nfe55.total > 0));
+    const geral = notaVazia();
+    for (const e of d.por_empresa) {
+      for (const campo of Object.keys(geral)) geral[campo] += num(e.tipos?.[modelo]?.[campo]);
+    }
+    d.por_tipo = { ...(d.por_tipo || {}), [modelo]: geral };
+    const total = notaVazia();
+    for (const t of Object.values(d.por_tipo)) for (const campo of Object.keys(total)) total[campo] += num(t[campo]);
+    d.total_geral = total;
+    await db.run('UPDATE erp_fiscal_cache SET dados=$1 WHERE id=$2', [JSON.stringify(d), c.id]);
+  }
+  return { caches: caches.length };
+}
+const atualizarNfe55NoCache = (dataInicio, dataFim) => atualizarModeloNoCache('nfe55', dataInicio, dataFim);
 
 // Sincroniza UM período específico da Análise Fiscal (usado pela rotina diária
 // e por sincronizações pontuais/parciais, ex.: só mês atual + anterior).
@@ -1243,19 +1569,8 @@ router.get('/fiscal/filiais/nota', async (req, res) => {
   } catch (e) { res.status(500).json({ erro: e.message }); }
 });
 
-// Dispara a sincronização (manual). Uma por vez; responde na hora.
-router.post('/fiscal/filiais/sync', async (req, res) => {
-  if (_syncFiliais.rodando) return res.status(409).json({ erro: 'Já existe uma sincronização em andamento.', sync: _syncFiliais });
-  const { dataInicio, dataFim } = { dataInicio: req.body?.data_inicio, dataFim: req.body?.data_fim };
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(dataInicio || '') || !/^\d{4}-\d{2}-\d{2}$/.test(dataFim || '')) {
-    return res.status(400).json({ erro: 'Informe data_inicio e data_fim (AAAA-MM-DD).' });
-  }
-  _syncFiliais = { rodando: true, inicio: new Date().toISOString(), fim: null, periodo: { data_inicio: dataInicio, data_fim: dataFim }, resultado: null, erro: null };
-  fiscalFiliais.sincronizarFiliais(dataInicio, dataFim)
-    .then(r => { _syncFiliais = { ..._syncFiliais, rodando: false, fim: new Date().toISOString(), resultado: r }; })
-    .catch(e => { _syncFiliais = { ..._syncFiliais, rodando: false, fim: new Date().toISOString(), erro: e.message }; });
-  res.json({ iniciado: true, sync: _syncFiliais });
-});
+// (Sincronização manual das filiais removida em 17/10/26: a NF-e 55 das filiais
+// agora entra na rotina das 4h15 — calcularFiscal — e nunca por clique.)
 
 // ── GET /api/erp/financeiro — faturas por vencimento + totais ──
 router.get('/financeiro', async (req, res) => {
@@ -2250,6 +2565,9 @@ module.exports = router;
 module.exports.sincronizarTodas = sincronizarTodas;
 module.exports.sincronizarAnalise = sincronizarAnalise;
 module.exports.sincronizarTodasFiscal = sincronizarTodasFiscal;
+module.exports.atualizarNfe55NoCache = atualizarNfe55NoCache;
+module.exports.atualizarModeloNoCache = atualizarModeloNoCache;
+module.exports.reagruparNfcomNoCache = reagruparNfcomNoCache;
 module.exports.sincronizarPacotes = sincronizarPacotes;
 module.exports.sincronizarTodasFinanceiro = sincronizarTodasFinanceiro;
 module.exports.sincronizarServicosNfse = sincronizarServicosNfse;

@@ -715,40 +715,40 @@ async function listarNfe55({ documento, dataInicio, dataFim, tipoData = 'data_em
 // ── Versões "streaming" das 4 acima — processam página a página via
 // `processarLote(itens)` em vez de acumular tudo em memória. Usar sempre que
 // só for preciso AGREGAR (somar valores/contar), nunca listar/exibir tudo.
-async function varrerNfse({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300, deveCancelar } = {}, processarLote) {
+async function varrerNfse({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300, conc = 3, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfse', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, status,
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.nfses || [], maxPaginas, deveCancelar }
+    processarLote, { extrair: d => d.nfses || [], maxPaginas, conc, deveCancelar }
   );
 }
-async function varrerNfcom({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todos', maxPaginas = 300, deveCancelar } = {}, processarLote) {
+async function varrerNfcom({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status = 'todos', maxPaginas = 300, conc = 3, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfcom', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, status,
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.nfcoms || [], maxPaginas, deveCancelar }
+    processarLote, { extrair: d => d.nfcoms || [], maxPaginas, conc, deveCancelar }
   );
 }
-async function varrerNotaTelecom({ documento, dataInicio, dataFim, modelo, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300, deveCancelar } = {}, processarLote) {
+async function varrerNotaTelecom({ documento, dataInicio, dataFim, modelo, tipoData = 'data_emissao', status = 'todas', maxPaginas = 300, conc = 3, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/telecom', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, modelo, status,
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.notas_fiscais || d.notas || [], maxPaginas, deveCancelar }
+    processarLote, { extrair: d => d.notas_fiscais || d.notas || [], maxPaginas, conc, deveCancelar }
   );
 }
-async function varrerNfe55({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status, maxPaginas = 300, deveCancelar } = {}, processarLote) {
+async function varrerNfe55({ documento, dataInicio, dataFim, tipoData = 'data_emissao', status, maxPaginas = 300, conc = 3, deveCancelar } = {}, processarLote) {
   return varrerTodasPaginas(
     (pagina) => apiGet('/api/v1/integracao/nota_fiscal/nfe', {
       documento: soDigitos(documento), tipo_data: tipoData, data_inicio: dataInicio, data_fim: dataFim, ...(status ? { status } : {}),
       pagina, itens_por_pagina: 500,
     }),
-    processarLote, { extrair: d => d.nfes || [], maxPaginas, deveCancelar }
+    processarLote, { extrair: d => d.nfes || [], maxPaginas, conc, deveCancelar }
   );
 }
 

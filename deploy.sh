@@ -32,7 +32,7 @@ rm -f "$PACOTE"
 
 echo "==> Extraindo no servidor por cima da pasta atual..."
 ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" \
-  "tar -xzf /tmp/kronos-backend-src.tar.gz -C $DESTINO && rm -f /tmp/kronos-backend-src.tar.gz"
+  "tar --no-same-owner -xzf /tmp/kronos-backend-src.tar.gz -C $DESTINO && rm -f /tmp/kronos-backend-src.tar.gz"
 
 echo "==> Validando sintaxe de TODOS os arquivos js no servidor (pos-copia)..."
 ssh -i "$CHAVE" -o StrictHostKeyChecking=no "$SERVIDOR" \
