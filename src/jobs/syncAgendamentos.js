@@ -21,6 +21,15 @@ function mesRef(delta) {
   const m = new Date(d.getFullYear(), d.getMonth() + delta, 1);
   return `${m.getFullYear()}-${String(m.getMonth() + 1).padStart(2, '0')}`;
 }
+// Fora do horário de trabalho (20h–7h55, Brasília) ninguém acompanha a agenda
+// em tempo real — para de consultar o HubSoft e libera o limite de 30 req/60s
+// pros syncs de madrugada. Volta sozinho às 7h55, antes do expediente.
+function foraDoExpediente() {
+  const hhmmss = new Date().toLocaleTimeString('en-GB', { timeZone: 'America/Sao_Paulo', hour12: false });
+  const [h, m] = hhmmss.split(':').map(Number);
+  const minutos = h * 60 + m;
+  return minutos >= 20 * 60 || minutos < 7 * 60 + 55;
+}
 function intervaloDoMes(ref) {
   const [ano, mes] = ref.split('-').map(Number);
   const ultimoDia = new Date(ano, mes, 0).getDate();
@@ -46,6 +55,7 @@ let _ciclo = 0;
 async function tick() {
   if (_rodando) { console.log('[syncAgendamentos] ciclo anterior ainda rodando, pulou esta vez'); return; }
   if (dentroJanelaSyncNoturno()) { console.log('[syncAgendamentos] dentro da janela de sync noturno, pulou este ciclo'); return; }
+  if (foraDoExpediente()) return; // 20h–7h55: pausado (sem log pra não encher o arquivo a cada 5 min)
   _rodando = true;
   try {
     await sincronizarMes(mesRef(0)); // mês atual — sempre, é o que precisa de tempo real
@@ -60,7 +70,7 @@ async function tick() {
 function iniciar() {
   setTimeout(tick, 30 * 1000); // primeira carga logo após subir
   setInterval(tick, 5 * 60 * 1000); // a cada 5 minutos
-  console.log('[syncAgendamentos] iniciado (mês atual a cada 5 min; anterior/próximo a cada 30 min)');
+  console.log('[syncAgendamentos] iniciado (mês atual a cada 5 min; anterior/próximo a cada 30 min; pausado 20h–7h55)');
 }
 
 module.exports = { iniciar, tick };
