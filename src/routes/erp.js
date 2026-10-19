@@ -1498,6 +1498,53 @@ router.get('/fiscal', async (req, res) => {
   }
 });
 
+// GET /api/erp/fiscal/anual?ano=2026 — acompanhamento mês a mês (valor das
+// notas e impostos por modelo). SÓ LÊ o cache salvo pela rotina da madrugada
+// (erp_fiscal_cache); nunca consulta o ERP. Para cada mês usa o período mais
+// completo salvo (dia 1 até o maior dia_fim dentro do mesmo mês).
+router.get('/fiscal/anual', async (req, res) => {
+  try {
+    const ano = /^\d{4}$/.test(String(req.query.ano || '')) ? String(req.query.ano) : String(new Date().getFullYear());
+    const linhas = await db.all(
+      `SELECT data_inicio, data_fim, dados, updated_at FROM erp_fiscal_cache
+       WHERE empresa_id = $1 AND status = 'pronto' AND SUBSTRING(data_inicio, 1, 4) = $2
+         AND SUBSTRING(data_inicio, 9, 2) = '01' AND SUBSTRING(data_inicio, 1, 7) = SUBSTRING(data_fim, 1, 7)
+       ORDER BY data_inicio, data_fim DESC`,
+      [req.usuario.empresa_id, ano]
+    );
+    const porMes = new Map(); // 'AAAA-MM' -> linha com o maior data_fim
+    for (const l of linhas) {
+      const mes = l.data_inicio.slice(0, 7);
+      if (!porMes.has(mes)) porMes.set(mes, l);
+    }
+    const MODELOS = ['nfcom', 'nfe55', 'nfse', 'telecom0', 'telecom21', 'telecom22'];
+    const IMPOSTOS = ['icms', 'iss', 'pis', 'cofins', 'csll', 'irrf', 'inss', 'fust', 'funttel'];
+    const meses = [];
+    for (let m = 1; m <= 12; m++) {
+      const mes = `${ano}-${String(m).padStart(2, '0')}`;
+      const l = porMes.get(mes);
+      const item = { mes, tem_dados: !!l, data_fim: l?.data_fim || null, atualizado_em: l?.updated_at || null };
+      if (l) {
+        const d = JSON.parse(l.dados || '{}');
+        const pt = d.por_tipo || {};
+        item.notas = MODELOS.reduce((a, k) => a + num(pt[k]?.total), 0);
+        item.valor = MODELOS.reduce((a, k) => a + num(pt[k]?.valor_total), 0);
+        for (const k of MODELOS) item[`valor_${k}`] = num(pt[k]?.valor_total);
+        for (const k of MODELOS) item[`notas_${k}`] = num(pt[k]?.total);
+        for (const k of IMPOSTOS) item[k] = MODELOS.reduce((a, t) => a + num(pt[t]?.[k]), 0);
+        item.impostos = IMPOSTOS.reduce((a, k) => a + item[k], 0);
+        // NF-e 55 das filiais só entra no cache a partir de out/2026
+        item.filiais_incluidas = (d.por_empresa || []).some(e => e.filial);
+      }
+      meses.push(item);
+    }
+    res.json({ ano: Number(ano), meses });
+  } catch (e) {
+    console.error('Erro /erp/fiscal/anual:', e.message);
+    res.status(500).json({ erro: 'Erro ao montar o acompanhamento anual: ' + e.message });
+  }
+});
+
 // ── ANÁLISE FISCAL — FILIAIS (NF-e 55, comodato) ────────────────────────────
 // Lê só do banco local (fiscal_notas/fiscal_itens). A sincronização com o ERP é
 // manual (POST /fiscal/filiais/sync), em segundo plano e uma por vez.
